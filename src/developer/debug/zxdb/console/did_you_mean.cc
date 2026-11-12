@@ -4,6 +4,7 @@
 
 #include "src/developer/debug/zxdb/console/did_you_mean.h"
 
+#include <algorithm>
 #include <vector>
 
 namespace zxdb {

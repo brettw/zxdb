@@ -1,0 +1,18 @@
+[zxdb] set console-mode = shell
+[zxdb] status
+  Connected to
+[zxdb] break StandaloneCompute
+Created Breakpoint 1
+[zxdb] run @CMAKE_CURRENT_BINARY_DIR@/local_inferior
+🛑 on bp 1 StandaloneCompute
+[zxdb] print value
+35
+[zxdb] frame
+StandaloneCompute
+[zxdb] next
+local_inferior.cc:4
+[zxdb] print result
+42
+[zxdb] continue
+Process 1 exited with code 0.
+[zxdb] quit

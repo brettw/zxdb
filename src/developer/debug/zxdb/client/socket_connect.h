@@ -5,6 +5,8 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_CLIENT_SOCKET_CONNECT_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_CLIENT_SOCKET_CONNECT_H_
 
+#include <stdint.h>
+
 #include <string>
 
 #include <fbl/unique_fd.h>

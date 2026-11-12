@@ -4,6 +4,8 @@
 
 #include "src/developer/debug/zxdb/client/socket_connect.h"
 
+#include <string.h>
+
 #include <fcntl.h>
 #include <sys/socket.h>
 

@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <vector>
 
 #include "src/developer/debug/zxdb/common/err.h"
@@ -201,7 +202,9 @@ class JoinCallbacks : public JoinCallbacksBase {
 
   MainCallbackType cb_;
 
-  std::vector<Storage> params_;
+  // Completed callbacks may hold objects here before all slots have been added.
+  // Keep their addresses stable rather than relocating their raw storage.
+  std::deque<Storage> params_;
 };
 
 // Specialization for when there are no callback parameters.

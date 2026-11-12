@@ -6,6 +6,7 @@
 
 #include <lib/syslog/cpp/macros.h>
 
+#include "llvm/Config/llvm-config.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstPrinter.h"
@@ -82,16 +83,22 @@ Err ArchInfo::Init(debug::Arch arch, uint64_t page_size) {
   triple_ = std::make_unique<llvm::Triple>(triple_name_);
   FX_DCHECK(triple_);
 
+#if LLVM_VERSION_MAJOR == 19
+  const auto& llvm_triple = triple_->getTriple();
+#else
+  const auto& llvm_triple = *triple_;
+#endif
+
   std::string err_msg;
-  target_ = llvm::TargetRegistry::lookupTarget(*triple_, err_msg);
+  target_ = llvm::TargetRegistry::lookupTarget(llvm_triple, err_msg);
   if (!target_)
     return Err("Error initializing LLVM: " + err_msg);
 
   instr_info_.reset(target_->createMCInstrInfo());
-  register_info_.reset(target_->createMCRegInfo(*triple_));
-  subtarget_info_.reset(target_->createMCSubtargetInfo(*triple_, processor_name_, features_));
+  register_info_.reset(target_->createMCRegInfo(llvm_triple));
+  subtarget_info_.reset(target_->createMCSubtargetInfo(llvm_triple, processor_name_, features_));
   target_options_ = std::make_unique<llvm::MCTargetOptions>();
-  asm_info_.reset(target_->createMCAsmInfo(*register_info_, *triple_, *target_options_));
+  asm_info_.reset(target_->createMCAsmInfo(*register_info_, llvm_triple, *target_options_));
 
   if (!instr_info_ || !register_info_ || !subtarget_info_ || !asm_info_)
     return Err("Error initializing LLVM.");

@@ -9,6 +9,7 @@
 #include <limits>
 #include <ostream>
 
+#include "llvm/Config/llvm-config.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
@@ -133,8 +134,13 @@ Disassembler::~Disassembler() = default;
 Err Disassembler::Init(const ArchInfo* arch) {
   arch_ = arch;
 
+#if LLVM_VERSION_MAJOR == 19
+  context_ = std::make_unique<llvm::MCContext>(*arch_->triple(), arch_->asm_info(),
+                                               arch_->register_info(), arch_->subtarget_info());
+#else
   context_ = std::make_unique<llvm::MCContext>(*arch_->triple(), *arch_->asm_info(),
                                                *arch_->register_info(), *arch_->subtarget_info());
+#endif
   disasm_.reset(arch_->target()->createMCDisassembler(*arch_->subtarget_info(), *context_));
   if (!disasm_)
     return Err("Couldn't create LLVM disassembler.");

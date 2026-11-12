@@ -144,6 +144,13 @@ Callers and implementations must preserve these invariants:
 
 ## Verification
 
+In the standalone repository, configure with `cmake -S . -B build -G Ninja`,
+build with `cmake --build build -j 4`, and run
+`ctest --test-dir build --output-on-failure`. The integrated Linux x86-64
+executable is `build/zxdb`; start it with `--local`. See the root `README.md`
+for packages, options, and optional test fixtures.
+
+
 Run these commands to build and test `debug_agent`:
 
 - Build: `fx build //src/developer/debug/debug_agent`

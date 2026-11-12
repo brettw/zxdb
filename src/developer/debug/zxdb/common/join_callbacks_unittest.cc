@@ -4,6 +4,8 @@
 
 #include "src/developer/debug/zxdb/common/join_callbacks.h"
 
+#include <string>
+
 #include <gtest/gtest.h>
 
 namespace zxdb {
@@ -172,6 +174,19 @@ TEST(JoinCallbacks, NoParam) {
   cb1();
 
   EXPECT_EQ(1, called);
+}
+
+TEST(JoinCallbacks, AddAfterSynchronousStringResult) {
+  auto join = fxl::MakeRefCounted<JoinCallbacks<std::string>>();
+  join->AddCallback()("first");
+  join->AddCallback()("second");
+
+  bool called = false;
+  join->Ready([&called](std::vector<std::string> results) {
+    called = true;
+    EXPECT_EQ((std::vector<std::string>{"first", "second"}), results);
+  });
+  EXPECT_TRUE(called);
 }
 
 }  // namespace zxdb

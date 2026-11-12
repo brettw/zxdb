@@ -59,7 +59,7 @@ std::time_t GetFileModificationTime(const std::string& path) {
   if (ec)
     return 0;
 
-  return std::chrono::duration_cast<std::chrono::seconds>(last_write.time_since_epoch()).count();
+  return std::chrono::system_clock::to_time_t(std::chrono::file_clock::to_sys(last_write));
 }
 
 bool PathStartsWith(const std::filesystem::path& path, const std::filesystem::path& base) {

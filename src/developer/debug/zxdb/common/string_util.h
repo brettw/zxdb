@@ -5,6 +5,8 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_COMMON_STRING_UTIL_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_COMMON_STRING_UTIL_H_
 
+#include <stdint.h>
+
 #include <string_view>
 
 #include "src/developer/debug/zxdb/common/int128_t.h"

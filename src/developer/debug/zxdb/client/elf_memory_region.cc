@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include <zstd/zstd.h>
+#include <zstd.h>
 
 #include "lib/syslog/cpp/macros.h"
 #include "src/developer/debug/shared/largest_less_or_equal.h"

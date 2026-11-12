@@ -5,6 +5,8 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_CONSOLE_COMMANDS_VERB_MEM_ANALYZE_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_CONSOLE_COMMANDS_VERB_MEM_ANALYZE_H_
 
+#include <stdint.h>
+
 #include <optional>
 
 namespace zxdb {

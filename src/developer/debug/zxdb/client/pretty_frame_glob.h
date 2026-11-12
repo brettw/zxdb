@@ -5,6 +5,8 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_CLIENT_PRETTY_FRAME_GLOB_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_CLIENT_PRETTY_FRAME_GLOB_H_
 
+#include <stdint.h>
+
 #include <optional>
 #include <string>
 

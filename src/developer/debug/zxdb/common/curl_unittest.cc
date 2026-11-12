@@ -164,7 +164,7 @@ void WaitForCondVar(debug::MessageLoop* loop, size_t& remaining_threads) {
 }  // namespace
 
 TEST(Curl, MultiThreadedPerform) {
-  constexpr std::string message = "Hello world!";
+  const std::string message = "Hello world!";
   SimpleHttpServer server(message);
   server.Serve();
 

@@ -4,6 +4,8 @@
 
 #include "src/developer/debug/zxdb/common/string_util.h"
 
+#include <limits>
+
 #include <inttypes.h>
 
 #include <iomanip>

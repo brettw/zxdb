@@ -1,0 +1,39 @@
+# Source selection follows the upstream host build.
+add_library(debug_agent STATIC
+  align.cc
+  automation_handler.cc
+  automation_instruction_executor.cc
+  breakpoint.cc
+  component_manager.cc
+  debug_agent.cc
+  debugged_job.cc
+  debugged_process.cc
+  debugged_thread.cc
+  elf_utils.cc
+  filter.cc
+  general_registers.cc
+  hardware_breakpoint.cc
+  job_handle.cc
+  module_list.cc
+  process_breakpoint.cc
+  remote_api_adapter.cc
+  software_breakpoint.cc
+  system_interface.cc
+  unwind.cc
+  watchpoint.cc
+  aligned_chunk.cc
+  linux_binary_launcher.cc
+  linux_component_manager.cc
+  linux_exception_handle.cc
+  linux_job_handle.cc
+  linux_process_handle.cc
+  linux_system_interface.cc
+  linux_task.cc
+  linux_thread_handle.cc
+  linux_utils.cc
+  posix/file_descriptor_shuffle.cc
+  arch_x64.cc
+  debug_registers_x64.cc
+  linux_arch_x64.cc
+)
+target_link_libraries(debug_agent PUBLIC debug_ipc elflib unwinder containers gtest_headers)

@@ -5,6 +5,8 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_ADDRESS_RANGE_MAP_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_ADDRESS_RANGE_MAP_H_
 
+#include <stdint.h>
+
 #include <iostream>
 #include <vector>
 

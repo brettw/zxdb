@@ -5,6 +5,8 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_CONSOLE_STRING_FORMATTERS_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_CONSOLE_STRING_FORMATTERS_H_
 
+#include <stdint.h>
+
 #include <span>
 
 #include <string>

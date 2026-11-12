@@ -1,56 +1,123 @@
 # Standalone zxdb
 
-This repository extracts the Fuchsia debugger into a standalone project.
-The first supported target is the Linux `shared` library and its host tests.
+This repository builds the Fuchsia debugger as a standalone Linux x86-64
+executable with an integrated local debug agent. It includes the console,
+Debug Adapter Protocol (DAP) server, ELF/DWARF symbols, expression evaluation,
+symbol downloads, and minidump reading.
 
-## Build on Linux
+## System packages
 
-Use CMake 3.24 or newer, Ninja, Clang with C++20 standard library headers,
-RE2 development files, and GoogleTest development files for tests.
-On Debian or Ubuntu, install these with:
+The build uses CMake 3.24 or newer, Ninja, Clang, a C++23 standard library,
+LLVM development files, RE2, curl, zstd, RapidJSON, double-conversion, and zlib.
+GoogleTest and GoogleMock are used by the host tests. Production headers also
+use GoogleTest's `gtest_prod.h`.
+
+On Debian 13, install all required packages with:
 
 ```sh
-sudo apt-get install clang g++ cmake ninja-build libre2-dev libgtest-dev
+sudo apt-get update
+sudo apt-get install clang g++ cmake ninja-build llvm-19-dev \
+  libre2-dev libcurl4-openssl-dev libzstd-dev rapidjson-dev \
+  libdouble-conversion-dev zlib1g-dev libgtest-dev libgmock-dev
 ```
+
+The port is tested with Clang 19, LLVM 19, and libstdc++ 14. Older distribution
+releases may need newer compiler and standard library packages. LLVM and zxdb
+must use compatible C++ standard libraries.
+
+## Build and run
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
+cmake --build build -j 4
 ctest --test-dir build --output-on-failure
+./build/zxdb --local
 ```
 
-CMake selects Clang by default. The upstream host syslog implementation uses
-Clang builtins. An explicit compiler can be selected with
-`-DCMAKE_CXX_COMPILER=clang++`. Use a fresh build directory when changing
-compilers.
+CMake selects Clang by default because upstream host syslog uses Clang
+builtins. To choose an LLVM installation, pass
+`-DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm`. Use a fresh build directory when
+changing compilers.
 
-Build just the library with `cmake --build build --target debug_shared`.
-Configure with `-DBUILD_TESTING=OFF` to omit GoogleTest and test targets.
-CMake consumers can link to `debug::shared`; its dependencies and public
-include directories are propagated by the target.
+Inside the console, launch a local program with an absolute path:
 
-## Imported dependencies
+```text
+break main
+run /absolute/path/to/program
+frame
+print some_variable
+next
+continue
+quit
+```
+
+Compile the program with debug information (`-g`) for source-level debugging.
+Use `--symbol-path=/path/to/binary` if its symbols cannot be found automatically.
+Linux ptrace permissions apply to local launches and attachments.
+
+The DAP server can use the integrated agent too:
+
+```sh
+./build/zxdb --local --enable-debug-adapter --debug-adapter-port=15678
+```
+
+The upstream analytics implementation is retained. To disable analytics for a
+run without changing saved preferences, set `FUCHSIA_ANALYTICS_DISABLED=1`.
+Tests use this environment setting.
+
+Build just the executable with `cmake --build build --target zxdb -j 4`.
+Configure with `-DBUILD_TESTING=OFF` to omit test executables and fixtures.
+Install the executable with `cmake --install build --prefix /your/install/path`.
+System shared libraries remain runtime dependencies.
+
+## Tests
+
+The build includes shared, IPC, debugger frontend, DAP, and Linux agent host
+unit tests. CMake builds the C++ symbol fixture and copies checked-in ELF,
+split-DWARF, symbol-index, and minidump fixtures into the build directory.
+
+The `local_debugging` integration test uses the built-in script runner to
+launch a local inferior, stop at a breakpoint, inspect variables, step, and
+resume to process exit. It requires permission to trace child processes. Run
+it separately with:
+
+```sh
+ctest --test-dir build -R '^local_debugging$' --output-on-failure
+```
+
+Two upstream tests require separately distributed CIPD fixtures that are not
+in this repository. They are excluded from test discovery unless supplied:
+
+- `ModuleSymbols.ResolveLineInputLocation_Await`: configure with
+  `-DZXDB_RUST_TEST_BINARY=/path/to/rust_symbol_test`.
+- `MinidumpTest.Backtrace`: configure with
+  `-DZXDB_SAMPLE_CORE_DIR=/path/to/sample_core` (containing `core/core.dmp`
+  and its companion symbol files).
+
+## Imported dependencies and source changes
 
 Fuchsia support libraries live in separate directories under `src/lib/`.
 Each library has an `UPSTREAM.md` with its original path and revision, and a
-copy of the upstream license. Only the needed library subsets are imported;
-their C++ source files retain their upstream contents.
+copy of its license. Only needed subsets are imported. Third-party cppdap,
+Crashpad, and mini_chromium subsets live under `third_party/`, with their own
+licenses and provenance.
 
 The debugger remains at `src/developer/debug/`, matching its original include
-paths. CMake creates build-directory symlinks for SDK-style `lib/syslog/...`
-and `lib/utf-utils/...` includes. Builds use only this repository and installed
-system dependencies, without reading the original Fuchsia checkout or
-fetching dependencies from the network.
+paths. CMake creates build-directory symlinks for SDK-style syslog and UTF
+includes, and for source-root RapidJSON includes. Builds use only this
+repository and installed packages; they do not read a neighboring Fuchsia
+checkout or fetch dependencies from the network.
 
-The `debug_shared` source list follows the Linux `shared` target in the
-upstream `BUILD.bazel`. The `debug::shared` target also preserves the upstream
-`alwayslink` behavior for shared and logging with whole-archive linking.
-Host syslog replaces the Fuchsia logging backend by
-source selection. Zircon imports provide host-compatible types and macros;
-the build does not link Zircon system calls or FIDL runtimes. The upstream
-containers dependency is omitted because these sources do not use it.
+CMake source lists follow the upstream Linux GN/Bazel selections. The
+`debug::shared` target preserves `alwayslink` for shared and logging with
+whole-archive linking. Fuchsia-only launchers, FIDL runtimes, packaging, and
+`ffx` integration are outside this host build.
 
-The debugger source changes needed for this build are missing standard-header
-includes in `file_line_function.h`, `register_value.h`, `serialization.h`, and
-`mock_memory.cc`. These make declarations available with the host standard
-library without relying on indirect includes.
+Source adaptations include missing standard-header includes, canonical
+library include paths, LLVM API compatibility, and host library compatibility
+for range formatting and RapidJSON keys. Tests also exposed two runtime
+portability issues: filesystem timestamps now use the system clock epoch,
+and callback result storage retains stable addresses during synchronous
+completion. A regression test covers the callback case. LLVM 19's ScopedPrinter header needs
+the DWARF reader and its test helper compiled as C++20; the remaining build
+uses C++23. Upstream GN and Bazel files are unchanged.

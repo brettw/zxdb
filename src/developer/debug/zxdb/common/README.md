@@ -61,6 +61,13 @@ Public headers expose these foundational types and utilities:
 
 ## Invariants
 
+- `JoinCallbacks<T>` keeps completed result objects at stable addresses while
+  further callbacks are registered. Results may arrive synchronously during
+  setup, before `Ready()`.
+- `GetFileModificationTime()` returns seconds in the system clock epoch. The
+  filesystem clock epoch can differ between standard library implementations.
+
+
 Callers and implementations must preserve these invariants:
 
 - `zxdb::AddressRanges` stores ranges in canonical form: sorted by start
