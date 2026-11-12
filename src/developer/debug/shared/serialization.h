@@ -5,6 +5,8 @@
 #ifndef SRC_DEVELOPER_DEBUG_SHARED_SERIALIZATION_H_
 #define SRC_DEVELOPER_DEBUG_SHARED_SERIALIZATION_H_
 
+#include <stdint.h>
+
 #include <optional>
 #include <string>
 #include <type_traits>

@@ -83,6 +83,10 @@ These logging primitives produce the following global and I/O side effects:
 
 ## Verification
 
+In the standalone repository, `cmake --build build` builds logging with the
+shared library. Run `ctest --test-dir build --output-on-failure` for the host
+shared tests. See the root `README.md` for configuration and prerequisites.
+
 Run this command to build `shared/logging`:
 
 - Build: `fx build //src/developer/debug/shared/logging`

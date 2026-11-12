@@ -4,6 +4,8 @@
 
 #include "src/developer/debug/shared/mock_memory.h"
 
+#include <string.h>
+
 #include "src/developer/debug/shared/largest_less_or_equal.h"
 
 namespace debug {

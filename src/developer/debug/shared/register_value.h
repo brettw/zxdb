@@ -6,6 +6,7 @@
 #define SRC_DEVELOPER_DEBUG_SHARED_REGISTER_VALUE_H_
 
 #include <inttypes.h>
+#include <string.h>
 
 #include <vector>
 

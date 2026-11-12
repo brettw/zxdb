@@ -103,6 +103,18 @@ These utilities produce the following OS, thread, and I/O side effects:
 
 ## Verification
 
+In the standalone repository, build the Linux library and run its host tests:
+
+```sh
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+The CMake target `debug::shared` propagates the required support libraries and
+include paths. The Linux source selection matches `BUILD.bazel`. See the root
+`README.md` for prerequisites and imported dependency details.
+
 Run these commands to build and test `shared`:
 
 - Build: `fx build //src/developer/debug/shared`

@@ -5,6 +5,8 @@
 #ifndef SRC_DEVELOPER_DEBUG_SHARED_LOGGING_FILE_LINE_FUNCTION_H_
 #define SRC_DEVELOPER_DEBUG_SHARED_LOGGING_FILE_LINE_FUNCTION_H_
 
+#include <stdint.h>
+
 #include <string>
 
 namespace debug {
