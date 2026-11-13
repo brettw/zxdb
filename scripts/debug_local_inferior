@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec "$repo_root/build/zxdb" --local \
+  --execute="break main" \
+  --symbol-path="$repo_root/build/tests/local_inferior" \
+  "$repo_root/build/tests/local_inferior"
