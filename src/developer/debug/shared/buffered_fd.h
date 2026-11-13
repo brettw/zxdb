@@ -30,6 +30,9 @@ class BufferedFD final : public BufferedStream {
   bool Stop() final;
   bool IsValid() final { return fd_.is_valid(); }
 
+  // Drain currently available input, including bytes queued before a process exit.
+  void DrainRead();
+
  private:
   // BufferedStream protected implementation.
   void ResetInternal() final;

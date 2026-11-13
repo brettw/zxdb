@@ -56,7 +56,7 @@ debug::Status SoftwareBreakpoint::Update() {
   }
 
   if (sw_bp_count == 0 && installed_) {
-    Uninstall();
+    return Uninstall();
   } else if (sw_bp_count > 0 && !installed_) {
     return Install();
   }
@@ -90,7 +90,8 @@ debug::Status SoftwareBreakpoint::Install() {
 
 debug::Status SoftwareBreakpoint::Uninstall() {
   auto status = UninstallFromMemorySpace(process_->process_handle());
-  installed_ = false;
+  if (status.ok())
+    installed_ = false;
   return status;
 }
 
@@ -109,8 +110,14 @@ debug::Status SoftwareBreakpoint::UninstallFromMemorySpace(ProcessHandle& proces
   size_t actual = 0;
   debug::Status status =
       process_handle.ReadMemory(address(), &current_contents, arch::kBreakInstructionSize, &actual);
-  if (status.has_error() || actual != arch::kBreakInstructionSize)
-    return debug::Status();  // Probably unmapped, safe to ignore.
+  if (status.has_error() || actual != arch::kBreakInstructionSize) {
+    // Only an absent mapping permits forgetting saved bytes. An access failure
+    // in a live mapping must prevent a successful detach or step-over.
+    auto mapped = process_handle.IsAddressMapped(address());
+    if (mapped && !*mapped)
+      return debug::Status();
+    return status.has_error() ? status : debug::Status("Short breakpoint memory read.");
+  }
 
   if (current_contents != arch::kBreakInstruction) {
     LOGS(Warn) << "Debug break instruction unexpectedly replaced at 0x" << std::hex << address();
@@ -120,7 +127,7 @@ debug::Status SoftwareBreakpoint::UninstallFromMemorySpace(ProcessHandle& proces
   status =
       process_handle.WriteMemory(address(), &previous_data_, arch::kBreakInstructionSize, &actual);
   if (status.has_error() || actual != arch::kBreakInstructionSize) {
-    LOGS(Warn) << "Unable to remove breakpoint at 0x" << std::hex << address();
+    return status.has_error() ? status : debug::Status("Short breakpoint memory write.");
   }
 
   return debug::Status();
@@ -145,12 +152,20 @@ void SoftwareBreakpoint::FixupMemoryBlock(debug_ipc::MemoryBlock* block) {
 
 void SoftwareBreakpoint::ExecuteStepOver(DebuggedThread* thread) {
   DEBUG_LOG(Breakpoint) << LogPreamble(this) << "Thread " << thread->koid() << " is stepping over.";
+  if (!SuspendAllOtherThreads(thread->koid())) {
+    thread->ClientSuspend(true);
+    LOGS(Error) << "Cannot step over breakpoint: a peer did not stop.";
+    process_->OnBreakpointFinishedSteppingOver();
+    return;
+  }
+  if (auto status = Uninstall(thread); status.has_error()) {
+    thread->ClientSuspend(true);
+    LOGS(Error) << "Cannot step over breakpoint: " << status.message();
+    process_->OnBreakpointFinishedSteppingOver();
+    return;
+  }
   currently_stepping_over_thread_ = thread->GetWeakPtr();
   thread->set_stepping_over_breakpoint(true);
-
-  SuspendAllOtherThreads(thread->koid());
-
-  Uninstall(thread);
 
   // This thread now has to continue running.
   thread->InternalResumeException();
@@ -172,7 +187,12 @@ void SoftwareBreakpoint::EndStepOver(DebuggedThread* thread) {
   //                implementation simplicity. If performance becomes an issue, we could create a
   //                notification that the process calls when the complete step queue has been done
   //                that tells the breakpoints to reinstall themselves.
-  Update();
+  if (auto status = Update(); status.has_error()) {
+    // Keep the peer tokens until restoration succeeds. No thread may run past
+    // an instruction whose breakpoint the frontend still considers installed.
+    process_->ClientSuspendAllThreads();
+    LOGS(Error) << "Cannot restore breakpoint after step: " << status.message();
+  }
 
   // Tell the process we're done stepping over.
   process_->OnBreakpointFinishedSteppingOver();
@@ -208,12 +228,9 @@ void SoftwareBreakpoint::StepOverCleanup(DebuggedThread* thread) {
     // second), meaning that we can safely remove the first one.
     suspend_tokens_.erase(cur_it);
   }
-
-  // Remote the thread from the exception.
-  thread->InternalResumeException();
 }
 
-void SoftwareBreakpoint::SuspendAllOtherThreads(zx_koid_t stepping_over_koid) {
+bool SoftwareBreakpoint::SuspendAllOtherThreads(zx_koid_t stepping_over_koid) {
   std::vector<DebuggedThread*> suspended_threads;
   for (DebuggedThread* thread : process_->GetThreads()) {
     // We do not suspend the stepping over thread.
@@ -230,14 +247,22 @@ void SoftwareBreakpoint::SuspendAllOtherThreads(zx_koid_t stepping_over_koid) {
     // If this is a re-entrant breakpoint (two threads in a row are stepping over the same
     // breakpoint), we could have more than one token for each thread.
     suspend_tokens_.insert({thread->koid(), thread->InternalSuspend(false)});
+    suspended_threads.push_back(thread);
   }
 
   // We wait on all the suspend signals to trigger.
   for (DebuggedThread* thread : suspended_threads) {
     bool suspended =
         thread->thread_handle().WaitForSuspension(DebuggedThread::DefaultSuspendDeadline());
-    FX_DCHECK(suspended) << "Thread " << thread->koid();
+    if (!suspended)
+      return false;
   }
+  return true;
+}
+
+void SoftwareBreakpoint::SuspendNewThread(DebuggedThread* thread) {
+  if (currently_stepping_over_thread_)
+    suspend_tokens_.insert({thread->koid(), thread->InternalSuspend(true)});
 }
 
 std::vector<zx_koid_t> SoftwareBreakpoint::CurrentlySuspendedThreads() const {

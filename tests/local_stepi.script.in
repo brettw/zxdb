@@ -1,0 +1,14 @@
+[zxdb] set console-mode = shell
+[zxdb] status
+Connected to
+[zxdb] break StepFirst
+Created Breakpoint
+[zxdb] run @CMAKE_CURRENT_BINARY_DIR@/linux_lifecycle_inferior stepi
+on bp 1
+[zxdb] stepi
+StepFirst
+[zxdb] print $reg(rip) == step_first_address + 1
+true
+[zxdb] continue
+Process 1 exited with code 7.
+[zxdb] quit

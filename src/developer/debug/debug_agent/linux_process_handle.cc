@@ -59,10 +59,15 @@ debug::Status PtraceWriteWrapper(pid_t pid, uintptr_t word_address, uintptr_t da
 }  // namespace
 
 LinuxProcessHandle::LinuxProcessHandle(fxl::RefPtr<LinuxTask> task) : task_(std::move(task)) {
+  tasks_[task_->pid()] = task_;
   task_->SetObserver(this);
 }
 
-LinuxProcessHandle::~LinuxProcessHandle() { task_->SetObserver(nullptr); }
+LinuxProcessHandle::~LinuxProcessHandle() {
+  Detach();
+  for (auto& [pid, task] : tasks_)
+    task->SetObserver(nullptr);
+}
 
 std::string LinuxProcessHandle::GetName() const {
   // Use only the module name. This process name will be used as the module name for the main
@@ -75,15 +80,16 @@ std::string LinuxProcessHandle::GetName() const {
 std::vector<std::unique_ptr<ThreadHandle>> LinuxProcessHandle::GetChildThreads() const {
   std::vector<std::unique_ptr<ThreadHandle>> result;
 
-  // Child child threads are all stored in the "task" subdirectory of the process.
-  for (int child_pid : linux::GetDirectoryPids(fxl::StringPrintf("/proc/%d/task", task_->pid()))) {
-    if (child_pid == task_->pid()) {
-      // Duplicate of the main PID. Take care to return the same task object to keep the object's
-      // state in sync.
-      result.push_back(std::make_unique<LinuxThreadHandle>(task_));
-    } else {
-      result.push_back(
-          std::make_unique<LinuxThreadHandle>(fxl::MakeRefCounted<LinuxTask>(child_pid)));
+  if (observer_) {
+    for (const auto& [pid, task] : tasks_) {
+      if (!task->is_exiting())
+        result.push_back(std::make_unique<LinuxThreadHandle>(task));
+    }
+  } else {
+    for (int pid : linux::GetDirectoryPids(fxl::StringPrintf("/proc/%d/task", task_->pid()))) {
+      auto found = tasks_.find(pid);
+      result.push_back(std::make_unique<LinuxThreadHandle>(
+          found == tasks_.end() ? fxl::MakeRefCounted<LinuxTask>(pid) : found->second));
     }
   }
 
@@ -91,20 +97,95 @@ std::vector<std::unique_ptr<ThreadHandle>> LinuxProcessHandle::GetChildThreads()
 }
 
 debug::Status LinuxProcessHandle::Kill() {
-  // TODO(brettw) this causes a Zombie. Somehow we don't get an FDReady call after this.
-  if (kill(task_->pid(), SIGKILL) == 0)
-    return debug::Status();
-  return debug::ErrnoStatus(errno);
+  if (kill(task_->pid(), SIGKILL) != 0)
+    return debug::ErrnoStatus(errno);
+  if (!observer_) {
+    // A failed fork setup has no frontend owner to consume terminal events.
+    int status;
+    pid_t result;
+    do {
+      result = waitpid(task_->pid(), &status, __WALL);
+      if (result < 0 && errno == EINTR)
+        continue;
+      if (result > 0 && WIFSTOPPED(status))
+        ptrace(PTRACE_CONT, task_->pid(), nullptr, nullptr);
+      else
+        break;
+    } while (true);
+    task_->Forget();
+  }
+  return debug::Status();
 }
 
 debug::Status LinuxProcessHandle::Attach(ProcessHandleObserver* observer, AttachConfig config) {
+  if (!config.claim_exception_channel)
+    return debug::Status("Linux requires a full ptrace attach; observation-only attach is unsupported.");
+  std::vector<std::unique_ptr<LinuxSuspendHandle>> stops;
+  // Freeze every attached task before enumerating again. Attached parents cannot
+  // create another thread, and a new kernel child remains in its initial stop.
+  for (;;) {
+    bool added = false;
+    auto pids = linux::GetDirectoryPids(fxl::StringPrintf("/proc/%d/task", task_->pid()));
+    if (pids.empty())
+      return debug::Status("Cannot enumerate process threads.");
+    for (int pid : pids) {
+      auto found = tasks_.find(pid);
+      if (found != tasks_.end() && found->second->is_attached() && found->second->is_suspended())
+        continue;
+      auto task = found == tasks_.end() ? fxl::MakeRefCounted<LinuxTask>(pid) : found->second;
+      auto status = task->Attach();
+      if (status.has_error()) {
+        if (linux::GetStatus(pid).empty())
+          continue;  // Thread exited during enumeration.
+        Detach();
+        return status;
+      }
+      tasks_[pid] = task;
+      task->SetObserver(this);
+      stops.push_back(std::make_unique<LinuxSuspendHandle>(task));
+      if (!task->is_suspended()) {
+        auto error = task->last_error();
+        Detach();
+        return error;
+      }
+      if (!linux::ReadGeneralRegisters(pid)) {
+        Detach();
+        return debug::Status("Cannot read native x86-64 registers; inferior ABI is unsupported or task exited.");
+      }
+      added = true;
+    }
+    if (!added)
+      break;
+  }
   observer_ = observer;
-  return task_->Attach();
+  return debug::Status();
 }
 
-bool LinuxProcessHandle::IsAttached() const { return task_->is_attached(); }
+bool LinuxProcessHandle::IsAttached() const {
+  return std::any_of(tasks_.begin(), tasks_.end(),
+                     [](const auto& entry) { return entry.second->is_attached(); });
+}
 
-void LinuxProcessHandle::Detach() { task_->Detach(); }
+debug::Status LinuxProcessHandle::Detach() {
+  for (auto& [pid, exception] : unsupported_children_) {
+    if (auto status = exception->task()->Detach(); status.has_error())
+      return status;
+    exception->task()->SetObserver(nullptr);
+  }
+  unsupported_children_.clear();
+  for (auto& [pid, child] : vfork_children_) {
+    if (auto status = child->Detach(); status.has_error())
+      return status;
+    child->SetObserver(nullptr);
+  }
+  vfork_children_.clear();
+  for (auto& [pid, task] : tasks_) {
+    auto status = task->Detach();
+    if (status.has_error())
+      return status;
+  }
+  return debug::Status();
+}
 
 uint64_t LinuxProcessHandle::GetLoaderBreakpointAddress() {
   return linux::GetLdSoBreakpointAddress(task_->pid());
@@ -130,12 +211,33 @@ std::vector<debug_ipc::AddressRegion> LinuxProcessHandle::GetAddressSpace(uint64
   return result;
 }
 
+std::optional<bool> LinuxProcessHandle::IsAddressMapped(uint64_t address) const {
+  auto maps = linux::GetMapsChecked(task_->pid());
+  if (maps.has_error())
+    return std::nullopt;
+  for (const auto& entry : maps.value()) {
+    if (entry.range.InRange(address))
+      return true;
+  }
+  return false;
+}
+
 std::optional<debug_ipc::AddressRegion> LinuxProcessHandle::GetSharedAddressSpace() const {
   // Not implemented.
   return std::nullopt;
 }
 
 std::vector<debug_ipc::Module> LinuxProcessHandle::GetModules() const {
+  std::vector<std::unique_ptr<LinuxSuspendHandle>> stops;
+  for (auto& [pid, task] : tasks_) {
+    if (!task->is_attached() || task->is_exiting())
+      continue;
+    stops.push_back(std::make_unique<LinuxSuspendHandle>(task));
+    if (!task->is_suspended()) {
+      LOGS(Error) << "Cannot stop task for module inspection: " << task->last_error().message();
+      return {};
+    }
+  }
   return GetElfModulesForProcess(*this, linux::GetLdSoDebugAddress(task_->pid()));
 }
 
@@ -159,11 +261,35 @@ debug::Status LinuxProcessHandle::ReadMemory(uintptr_t address, void* buffer, si
   remote_iov.iov_len = len;
 
   auto read_result = process_vm_readv(task_->pid(), &local_iov, 1, &remote_iov, 1, 0);
-  if (read_result < 0)
-    return debug::ErrnoStatus(errno);
+  int read_error = read_result < 0 ? errno : 0;
+  if (read_result > 0)
+    *actual = static_cast<size_t>(read_result);
+  if (*actual == len)
+    return debug::Status();
 
-  *actual = static_cast<size_t>(read_result);
-  return debug::Status();
+  // Ptrace can read mapped PROT_NONE memory and executable-only pages. Only
+  // attempt it for an owned task with a confirmed stop.
+  for (const auto& [pid, task] : tasks_) {
+    if (!task->is_attached() || task->is_exiting())
+      continue;
+    LinuxSuspendHandle stop(task);
+    if (!task->is_suspended())
+      continue;
+    auto bytes = static_cast<uint8_t*>(buffer);
+    while (*actual < len) {
+      uintptr_t current = address + *actual;
+      uintptr_t aligned = current & ~(kPtraceWordSize - 1);
+      uintptr_t word;
+      if (auto status = PtraceReadWrapper(pid, aligned, &word); status.has_error())
+        break;
+      size_t offset = current - aligned;
+      size_t count = std::min(len - *actual, kPtraceWordSize - offset);
+      memcpy(bytes + *actual, reinterpret_cast<const uint8_t*>(&word) + offset, count);
+      *actual += count;
+    }
+    break;
+  }
+  return *actual || !read_error ? debug::Status() : debug::ErrnoStatus(read_error);
 }
 
 debug::Status LinuxProcessHandle::WriteMemory(uintptr_t address, const void* buffer, size_t len,
@@ -172,12 +298,23 @@ debug::Status LinuxProcessHandle::WriteMemory(uintptr_t address, const void* buf
 
   // These ptrace functions require a stopped process which isn't guaranteed by our infrastructure.
   // Linux suspensions are synchronous so we don't need to wait for this to complete.
-  LinuxSuspendHandle suspension(task_);
+  std::vector<std::unique_ptr<LinuxSuspendHandle>> stops;
+  fxl::RefPtr<LinuxTask> memory_task;
+  for (auto& [pid, task] : tasks_) {
+    if (task->is_exiting())
+      continue;
+    stops.push_back(std::make_unique<LinuxSuspendHandle>(task));
+    if (!task->is_suspended())
+      return task->last_error();
+    memory_task = task;
+  }
+  if (!memory_task)
+    return debug::Status("No stopped thread available for memory write.");
 
   // Unlike for reading, we can't use process_vm_writev() because that won't let us write to
   // read-only memory which is needed for breakpoints. PTRACE_POKETEXT allows us to do this but the
   // API is much less convenient.
-  return WriteMemoryByWord(task_->pid(), address, buffer, len, &PtraceReadWrapper,
+  return WriteMemoryByWord(memory_task->pid(), address, buffer, len, &PtraceReadWrapper,
                            &PtraceWriteWrapper, actual);
 }
 
@@ -364,9 +501,54 @@ debug::Status LinuxProcessHandle::WriteMemoryByWord(pid_t pid, uintptr_t address
   return debug::Status();
 }
 
+void LinuxProcessHandle::OnUnsupportedClone(std::unique_ptr<LinuxExceptionHandle> exception) {
+  auto child = exception->task();
+  child->SetObserver(this);
+  unsupported_children_[child->pid()] = std::move(exception);
+}
+
+void LinuxProcessHandle::OnVforkStarting(std::unique_ptr<LinuxExceptionHandle> exception) {
+  auto child = exception->task();
+  vfork_children_[child->pid()] = child;
+  child->SetObserver(this);
+  if (auto status = observer_->OnVfork(true); status.has_error()) {
+    LOGS(Error) << "Cannot prepare shared vfork image: " << status.message();
+    kill(child->pid(), SIGKILL);
+  }
+}
+
+void LinuxProcessHandle::OnVforkFinished(fxl::RefPtr<LinuxTask> child, bool exec) {
+  auto status = observer_->OnVfork(false);
+  if (status.has_error())
+    LOGS(Error) << "Cannot restore parent after vfork: " << status.message();
+  vfork_children_.erase(child->pid());
+  if (exec)
+    observer_->OnProcessStarting(std::make_unique<LinuxProcessHandle>(child), false);
+  else
+    child->SetObserver(nullptr);
+}
+
+void LinuxProcessHandle::OnExec(LinuxTask* task, int former_tid) {
+  for (auto& [pid, old_task] : tasks_) {
+    if (old_task.get() != task) {
+      old_task->Forget();
+      old_task->SetObserver(nullptr);
+    }
+  }
+  tasks_.clear();
+  tasks_[task->pid()] = task_;
+  if (observer_)
+    observer_->OnExec();
+}
+
 void LinuxProcessHandle::OnExited(LinuxTask* task,
                                   std::unique_ptr<LinuxExceptionHandle> exception) {
-  // This indicates thread termination, which can also be process termination for the main thread.
+  if (unsupported_children_.erase(task->pid()))
+    return;
+  tasks_.erase(task->pid());
+  if (!observer_)
+    return;
+  // Linux delays the leader's final wait status until all threads have exited.
   if (task->pid() == task_->pid()) {
     // Thread is the main thread of this process.
     observer_->OnProcessTerminated();
@@ -385,6 +567,7 @@ void LinuxProcessHandle::OnProcessStarting(std::unique_ptr<LinuxExceptionHandle>
 void LinuxProcessHandle::OnThreadStarting(std::unique_ptr<LinuxExceptionHandle> exception) {
   // Register outselves as the watcher for the new task. All thread notifications are routed through
   // the process.
+  tasks_[exception->task()->pid()] = exception->task();
   exception->task()->SetObserver(this);
   observer_->OnThreadStarting(std::move(exception));
 }

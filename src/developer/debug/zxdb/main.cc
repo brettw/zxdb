@@ -10,6 +10,8 @@
 #include <unistd.h>
 
 #include <cstdlib>
+#include <chrono>
+#include <thread>
 #include <memory>
 
 #include "src/developer/debug/debug_agent/posix/eintr_wrapper.h"
@@ -168,15 +170,22 @@ int ConsoleMain(int argc, const char* argv[]) {
   std::optional<LocalAgentResult> local_agent;
   fit::deferred_callback cleanup_local_agent;
   if (options.local) {
-    local_agent = ForkLocalAgent(inherited_sigpipe_ignored);
+    local_agent = ForkLocalAgent(inherited_sigpipe_ignored, options.debug_mode);
     if (local_agent->status == LocalAgentResult::kSuccess) {
-      cleanup_local_agent = fit::defer_callback([pid = local_agent->agent_pid]() {
-        // The early returns in the code below will leave the forked agent running and the wait
-        // will hang, so kill it before waiting. This also catches mistakes if we forget to
-        // exit the agent via IPC once things are running normally.
-        if (kill(pid, SIGKILL) == 0) {
-          waitpid(pid, 0, 0);
+      cleanup_local_agent = fit::defer_callback([&local_agent]() {
+        // Closing the connection lets the agent restore breakpoints and detach.
+        local_agent->pipe.reset();
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        for (;;) {
+          int result = waitpid(local_agent->agent_pid, nullptr, WNOHANG);
+          if (result > 0 || (result < 0 && errno == ECHILD))
+            return;
+          if (std::chrono::steady_clock::now() >= deadline)
+            break;
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+        kill(local_agent->agent_pid, SIGKILL);
+        HANDLE_EINTR(waitpid(local_agent->agent_pid, nullptr, 0));
       });
     } else {
       return local_agent->exit_code;

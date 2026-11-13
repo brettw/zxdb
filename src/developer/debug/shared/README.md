@@ -87,6 +87,8 @@ Callers and implementations must preserve these invariants:
   `stream().IsAvailable(1)` and drain buffered bytes via the read callback
   first. Draining before calling the error callback prevents dropping trailing
   messages sent right before socket closure.
+- `BufferedFD::DrainRead` collects available input before process teardown so
+  output queued at exit is delivered before the exit notification.
 - To stop a `MessageLoop` watch, call `loop.StopWatching(watch_handle)`
   explicitly instead of reassigning `watch_handle = WatchHandle()`.
 

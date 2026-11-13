@@ -19,6 +19,7 @@
 
 #include "src/developer/debug/debug_agent/thread_handle.h"
 #include "src/developer/debug/shared/address_range.h"
+#include "src/developer/debug/shared/result.h"
 
 namespace debug_agent {
 namespace linux {
@@ -47,6 +48,8 @@ struct MapEntry {
 // Parse/read the given Linux maps file.
 std::vector<MapEntry> ParseMaps(const std::string& contents);
 std::vector<MapEntry> GetMaps(int pid);
+debug::Result<std::vector<MapEntry>, debug::Status> ParseMapsChecked(const std::string& contents);
+debug::Result<std::vector<MapEntry>, debug::Status> GetMapsChecked(int pid);
 
 // Entries from /proc/.../stat we care about. This is not all of them and more can be added here if
 // needed.

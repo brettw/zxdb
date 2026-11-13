@@ -5,6 +5,9 @@
 #include "src/developer/debug/debug_agent/elf_utils.h"
 
 #include <gtest/gtest.h>
+#include <link.h>
+#undef PT_LOAD  // The fixtures use elflib::PT_LOAD.
+#include "src/developer/debug/debug_agent/mock_process_handle.h"
 
 #if defined(__Fuchsia__)
 #include "src/developer/debug/debug_agent/zircon_process_handle.h"
@@ -136,6 +139,7 @@ TEST(ElfUtils, DifferentLoadBiases) {
   });
   EXPECT_EQ((std::vector<uint64_t>{0x400000, 0x800000}), probes);
   ASSERT_EQ(2u, modules.size());
+  EXPECT_EQ(0u, modules[0].base);
   EXPECT_EQ(0x800000u, modules[1].base);
 }
 
@@ -236,5 +240,34 @@ TEST(ElfUtils, MergeMmapedModulesWithHole) {
 }
 
 }  // namespace
+
+
+TEST(ElfUtils, RejectShortAndChangingLoaderReads) {
+  MockProcessHandle process(1234);
+  int callbacks = 0;
+  auto visit = [&](uint64_t, uint64_t) { ++callbacks; return true; };
+  process.mock_memory().AddMemory(0x1000, {0});
+  EXPECT_TRUE(WalkElfModules(process, 0x1000, visit).has_error());
+  r_debug header{};
+  header.r_state = r_debug::RT_ADD;
+  auto bytes = reinterpret_cast<const uint8_t*>(&header);
+  process.mock_memory().AddMemory(0x1000, {bytes, bytes + sizeof(header)});
+  EXPECT_TRUE(WalkElfModules(process, 0x1000, visit).has_error());
+  header.r_state = r_debug::RT_CONSISTENT;
+  header.r_map = reinterpret_cast<link_map*>(0x2000);
+  process.mock_memory().AddMemory(0x1000, {bytes, bytes + sizeof(header)});
+  process.mock_memory().AddMemory(0x2000, {0});
+  EXPECT_TRUE(WalkElfModules(process, 0x1000, visit).has_error());
+  link_map entry{};
+  entry.l_next = reinterpret_cast<link_map*>(0x2000);
+  auto map_bytes = reinterpret_cast<const uint8_t*>(&entry);
+  process.mock_memory().AddMemory(0x2000, {map_bytes, map_bytes + sizeof(entry)});
+  EXPECT_TRUE(WalkElfModules(process, 0x1000, visit).has_error());
+  EXPECT_EQ(0, callbacks);
+  entry.l_next = nullptr;
+  process.mock_memory().AddMemory(0x2000, {map_bytes, map_bytes + sizeof(entry)});
+  EXPECT_TRUE(WalkElfModules(process, 0x1000, visit).ok());
+  EXPECT_EQ(1, callbacks);
+}
 
 }  // namespace debug_agent

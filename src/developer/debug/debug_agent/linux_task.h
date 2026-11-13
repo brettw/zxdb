@@ -8,6 +8,7 @@
 #include <sys/wait.h>
 
 #include <optional>
+#include <map>
 
 #include "src/developer/debug/shared/message_loop.h"
 #include "src/developer/debug/shared/status.h"
@@ -41,7 +42,12 @@ class LinuxTask final : public fxl::RefCountedThreadSafe<LinuxTask> {
   // be called multiple times without side effects.
   bool is_attached() const { return is_attached_; }
   debug::Status Attach();
-  void Detach();
+  debug::Status Detach();
+  debug::Status ResumeIfReady() { return suspend_count_ == 0 ? Resume() : debug::Status(); }
+  bool single_step() const { return single_step_; }
+  bool is_exiting() const { return exiting_; }
+  const debug::Status& last_error() const { return last_error_; }
+  void set_resume_signal(int signal) { resume_signal_ = signal; }
 
   // Sets the observer. Callers will also want to call Attach first to get events.
   // Null means no observer.
@@ -54,7 +60,15 @@ class LinuxTask final : public fxl::RefCountedThreadSafe<LinuxTask> {
 
   void set_single_step(bool ss) { single_step_ = ss; }
 
-  bool is_suspended() const { return suspend_count_ > 0; }
+  bool is_suspended() const { return stopped_ && !terminated_; }
+  // Invalidate an identity that disappeared during exec without ptrace side effects.
+  void Forget() {
+    is_attached_ = false;
+    stopped_ = false;
+    terminated_ = true;
+    ++generation_;
+    process_watch_handle_.StopWatching();
+  }
   int exit_code() const { return exit_code_; }
 
  private:
@@ -99,6 +113,10 @@ class LinuxTask final : public fxl::RefCountedThreadSafe<LinuxTask> {
   void OnSignaled(const SignalRecord& record);
   void OnStopped(const SignalRecord& record);
   void OnContinued();
+  void CompleteVfork(bool exec);
+  void OnChild(const SignalRecord& record);
+  void CollectChild(int pid, int status);
+  debug::Status Resume();
 
   // Constucts a SignalRecord with the given information and any relevant side-channel information
   // from ptrace. This should only be called when handling a ptrace event.
@@ -122,6 +140,21 @@ class LinuxTask final : public fxl::RefCountedThreadSafe<LinuxTask> {
   // Increment/DecrementSuspendCount().
   int suspend_count_ = 0;
 
+  // Tokens express intent; stopped_ records a collected kernel stop.
+  bool unsupported_abi_ = false;
+  bool shared_vm_clone_ = false;
+  bool unsupported_shared_clone_ = false;
+  bool initial_stop_pending_ = false;
+  bool stopped_ = false;
+  bool seized_ = false;
+  bool terminated_ = false;
+  bool stop_pending_ = false;
+  bool group_stopped_ = false;
+  uint64_t generation_ = 0;
+  int resume_signal_ = 0;
+  debug::Status last_error_;
+  std::map<int, fxl::RefPtr<LinuxTask>> pending_children_;
+  fxl::WeakPtr<LinuxTask> vfork_parent_;
   bool single_step_ = false;
 
   bool exiting_ = false;

@@ -45,10 +45,10 @@ Top-level host entry points in `//src/developer/debug/zxdb` include:
 - `zxdb::ConsoleMain(int argc, const char* argv[])` (`main.cc`): Host entry
   point that parses CLI flags, initializes `MessageLoopPoll` and `Session`, and
   runs the console or DAP server.
-- `zxdb::ForkLocalAgent(bool inherited_sigpipe_ignored)` and `zxdb::LocalAgentResult` (`local_agent.h`,
+- `zxdb::ForkLocalAgent(bool inherited_sigpipe_ignored, bool debug_mode)` and `zxdb::LocalAgentResult` (`local_agent.h`,
   `local_agent.cc`): Forks a local Linux `debug_agent` over a
   `debug::BufferedBidiPipe` for `--local` on Linux x64 hosts.
-- `zxdb::RunLocalAgent(read_pipe, write_pipe, inherited_sigpipe_ignored)`
+- `zxdb::RunLocalAgent(read_pipe, write_pipe, inherited_sigpipe_ignored, debug_mode)`
   (`local_agent.cc`): Runs the child `debug_agent::DebugAgent` backed by
   `debug_agent::LinuxSystemInterface` on a `debug::MessageLoopPoll`.
 
@@ -70,8 +70,10 @@ Callers and entry points must preserve these invariants:
 - When running interactively (without `enable_debug_adapter`) on a TTY
   `STDIN_FILENO`, the process must own the foreground process group
   (`tcgetpgrp(STDIN_FILENO) == getpgrp()`) or exit with `EXIT_FAILURE`.
-- When `ForkLocalAgent()` succeeds, the parent process kills and reaps
-  `agent_pid` via `waitpid()` on exit (`fit::defer`).
+- When `ForkLocalAgent()` succeeds, the parent closes the connection and waits
+  for agent cleanup on exit. It kills and reaps a stuck agent after five seconds.
+  Both communication pipes use CLOEXEC, and all failure paths release owned FDs.
+- `--debug-mode` enables frontend and local-agent logs.
 
 ## Side Effects
 

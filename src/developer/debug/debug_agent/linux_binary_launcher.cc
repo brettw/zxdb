@@ -5,6 +5,7 @@
 #include "src/developer/debug/debug_agent/linux_binary_launcher.h"
 
 #include <fcntl.h>
+#include <lib/fit/defer.h>
 #include <sys/ptrace.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -13,6 +14,7 @@
 
 #include "src/developer/debug/shared/message_loop_linux.h"
 #include "src/developer/debug/debug_agent/linux_process_handle.h"
+#include "src/developer/debug/debug_agent/linux_utils.h"
 #include "src/developer/debug/debug_agent/linux_task.h"
 #include "src/developer/debug/debug_agent/linux_utils.h"
 #include "src/developer/debug/debug_agent/posix/dir_reader_linux.h"
@@ -107,6 +109,19 @@ void CloseSuperfluousFds(const posix::InjectiveMultimap& saved_mapping) {
 
 }  // namespace
 
+LinuxBinaryLauncher::~LinuxBinaryLauncher() {
+  if (!holding_initial_suspend_)
+    return;
+  kill(pid_, SIGKILL);
+  int status;
+  while (HANDLE_EINTR(waitpid(pid_, &status, __WALL)) == pid_ && WIFSTOPPED(status))
+    ptrace(PTRACE_CONT, pid_, nullptr, nullptr);
+  task_->terminated_ = true;
+  task_->stopped_ = false;
+  task_->is_attached_ = false;
+  task_->DecrementSuspendCount();
+}
+
 debug::Status LinuxBinaryLauncher::Setup(const std::vector<std::string>& argv) {
   if (argv.empty())
     return debug::Status("No program specified");
@@ -122,6 +137,15 @@ debug::Status LinuxBinaryLauncher::Setup(const std::vector<std::string>& argv) {
     close(stdout_pipe[1]);
     return debug::Status("Could not create pipe for stderr.");
   }
+
+  int gate[2];
+  if (pipe2(gate, O_CLOEXEC) == -1) {
+    int error = errno;
+    for (int fd : {stdout_pipe[0], stdout_pipe[1], stderr_pipe[0], stderr_pipe[1]})
+      close(fd);
+    return debug::ErrnoStatus(error, "Could not create launch gate.");
+  }
+  fbl::unique_fd gate_read(gate[0]), gate_write(gate[1]);
 
   // For redirecting stdin, stdout, and stderr. This needs to be allocated before forking to avoid
   // allocating in the child. We need two copies because one will be destructively modified.
@@ -150,6 +174,11 @@ debug::Status LinuxBinaryLauncher::Setup(const std::vector<std::string>& argv) {
     return debug::ErrnoStatus(error, "Could not fork inferior.");
   }
   if (pid_ == 0) {
+    close(gate[1]);
+    char ready;
+    if (HANDLE_EINTR(read(gate[0], &ready, 1)) != 1)
+      _exit(127);
+    close(gate[0]);
     // DANGER: fork() rule: in the child, if you don't end up doing exec*(), you call _exit()
     // instead of exit(). This is because _exit() does not call any previously-registered (in the
     // parent) exit handlers, which might do things like block waiting for threads that don't even
@@ -183,9 +212,6 @@ debug::Status LinuxBinaryLauncher::Setup(const std::vector<std::string>& argv) {
 
     CloseSuperfluousFds(fd_shuffle2);
 
-    if (ptrace(PTRACE_TRACEME, 0, nullptr, nullptr) == -1)
-      _exit(127);
-
     if (sigprocmask(SIG_SETMASK, &target_mask, nullptr) == -1 ||
         sigaction(SIGPIPE, &pipe_action, nullptr) == -1)
       _exit(127);
@@ -212,32 +238,41 @@ debug::Status LinuxBinaryLauncher::Setup(const std::vector<std::string>& argv) {
     stdio_handles_.err = OwnedStdioHandle(stderr_pipe[0]);
   }
 
-  // The execv will issue a trap just after setting up the new process. To ensure the new process is
-  // set up by the time we return, block on that signal.
+  task_ = fxl::MakeRefCounted<LinuxTask>(pid_);
+  bool ready = false;
+  auto cleanup = fit::defer([&] {
+    if (ready)
+      return;
+    kill(pid_, SIGKILL);
+    int status;
+    while (HANDLE_EINTR(waitpid(pid_, &status, __WALL)) == pid_ && WIFSTOPPED(status))
+      ptrace(PTRACE_CONT, pid_, nullptr, nullptr);
+    task_->Forget();
+  });
+  // Seize before opening the child gate. Launch and attach now use interrupt
+  // stops, so a debugger pause never injects a delayed SIGSTOP into the target.
+  if (auto status = task_->Attach(); status.has_error())
+    return status;
+  gate_read.reset();
+  char byte = 0;
+  if (HANDLE_EINTR(write(gate_write.get(), &byte, 1)) != 1)
+    return debug::ErrnoStatus(errno, "Could not release launch gate.");
+  gate_write.reset();
+
   int status = 0;
-  if (HANDLE_EINTR(waitpid(pid_, &status, 0)) < 0)
+  if (HANDLE_EINTR(waitpid(pid_, &status, __WALL)) < 0)
     return debug::ErrnoStatus(errno, "Can't create process.");
-
-  if (WIFEXITED(status)) {
-    // If it exits before we got a stop signal, that means exec failed and the process exited.
-    return debug::Status(fxl::StringPrintf("Can't launch '%s'.", argv[0].c_str()));
-  }
-
-  if (!WIFSTOPPED(status) || WSTOPSIG(status) != SIGTRAP) {
-    DEBUG_LOG(Process) << "Unexpected first signal from the child.";
-    if (!WIFSIGNALED(status)) {
-      kill(pid_, SIGKILL);
-      HANDLE_EINTR(waitpid(pid_, &status, __WALL));
-    }
-    return debug::Status("Unexpected signal " + std::to_string(status));
-  }
-
-  task_ = fxl::MakeRefCounted<LinuxTask>(pid_, true);
+  if (!WIFSTOPPED(status) || (status >> 16) != PTRACE_EVENT_EXEC)
+    return debug::Status(fxl::StringPrintf("Can't launch '%s': no exec stop.", argv[0].c_str()));
+  if (!linux::ReadGeneralRegisters(pid_))
+    return debug::Status("Inferior does not provide native x86-64 registers.");
+  ready = true;
 
   // The process is now stopped. We need to track this suspension such that later parts of the
   // initialization can use SuspendHandles without resuming the process when those go out-of-scope.
   //
   // As a result, we manually take a suspend reference count to account for the current stop.
+  task_->stopped_ = true;
   task_->suspend_count_++;
   holding_initial_suspend_ = true;
 
@@ -257,7 +292,7 @@ debug::Status LinuxBinaryLauncher::Start() {
   FX_DCHECK(holding_initial_suspend_);
   holding_initial_suspend_ = false;
   task_->DecrementSuspendCount();
-  return debug::Status();
+  return task_->last_error();
 }
 
 }  // namespace debug_agent

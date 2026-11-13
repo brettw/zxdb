@@ -71,8 +71,14 @@ debug_ipc::ExceptionType DecodeExceptionType(int signal, int sig_code) {
           return debug_ipc::ExceptionType::kHardwareBreakpoint;
       }
       return debug_ipc::ExceptionType::kGeneral;
+    case SIGSEGV:
+      return debug_ipc::ExceptionType::kPageFault;
+    case SIGILL:
+      return debug_ipc::ExceptionType::kUndefinedInstruction;
+    case SIGBUS:
+      return debug_ipc::ExceptionType::kUnalignedAccess;
     default:
-      return debug_ipc::ExceptionType::kUnknown;
+      return debug_ipc::ExceptionType::kGeneral;
   }
 }
 

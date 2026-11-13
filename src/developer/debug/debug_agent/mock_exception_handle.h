@@ -10,7 +10,7 @@
 #include <functional>
 #include <utility>
 
-#include "sdk/lib/syslog/cpp/macros.h"
+#include <lib/syslog/cpp/macros.h>
 #include "src/developer/debug/debug_agent/exception_handle.h"
 #include "src/developer/debug/debug_agent/mock_process_handle.h"
 #include "src/developer/debug/debug_agent/mock_thread_handle.h"

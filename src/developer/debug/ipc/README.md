@@ -83,6 +83,8 @@ Callers and protocol definitions must preserve these invariants:
   kCurrentProtocolVersion]`. Version-gated fields serialize conditionally (`if
   (ver >= ...)`), and messages with `kSupportedSinceVersion` return an empty
   byte vector on older versions.
+- Version 79 appends Linux signal metadata to `ExceptionRecord` and an exec
+  reset flag to `NotifyModules`. Version 78 and older keep their existing layout.
 - The first 4 bytes of every serialized message store the total byte size
   (including `MsgHeader`), which `MessageWriter::MessageComplete()` writes on
   completion.

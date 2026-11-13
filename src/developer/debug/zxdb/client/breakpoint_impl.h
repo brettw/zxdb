@@ -67,6 +67,7 @@ class BreakpointImpl : public Breakpoint,
   void WillDestroyTarget(Target* target) override;
 
   // ProcessObserver.
+  void DidExec(Process* process) override;
   void DidCreateProcess(Process* process, uint64_t timestamp) override;
   void WillDestroyProcess(Process* process, ProcessObserver::DestroyReason reason, int exit_code,
                           uint64_t timestamp) override;

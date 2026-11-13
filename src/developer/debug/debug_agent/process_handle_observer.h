@@ -6,6 +6,7 @@
 #define SRC_DEVELOPER_DEBUG_DEBUG_AGENT_PROCESS_HANDLE_OBSERVER_H_
 
 #include <memory>
+#include "src/developer/debug/shared/status.h"
 
 namespace debug_agent {
 
@@ -15,6 +16,8 @@ class ExceptionHandle;
 // ZirconExceptionWatcher but adapted to use the abstract ExceptionHandle types.
 class ProcessHandleObserver {
  public:
+  virtual debug::Status OnVfork(bool starting) = 0;
+  virtual void OnExec() = 0;
   virtual void OnProcessTerminated() = 0;
   virtual void OnThreadStarting(std::unique_ptr<ExceptionHandle> exception) = 0;
   virtual void OnThreadExiting(std::unique_ptr<ExceptionHandle> exception) = 0;
@@ -22,7 +25,7 @@ class ProcessHandleObserver {
 
   // Linux only (Fuchsia process launches are detected on jobs). This is called on the process
   // executing the fork and is passed the newly forked process.
-  virtual void OnProcessStarting(std::unique_ptr<ProcessHandle> new_process_handle) = 0;
+  virtual void OnProcessStarting(std::unique_ptr<ProcessHandle> new_process_handle, bool inherited_breakpoints = true) = 0;
 };
 
 }  // namespace debug_agent

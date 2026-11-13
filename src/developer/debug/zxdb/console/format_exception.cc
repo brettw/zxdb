@@ -241,6 +241,15 @@ OutputBuffer FormatException(const ConsoleContext* context, const Thread* thread
 }
 
 std::string ExceptionRecordToString(debug::Arch arch, const debug_ipc::ExceptionRecord& record) {
+  if (record.linux_signal) {
+    std::string result = "Linux signal " + std::to_string(record.linux_signal) +
+                         " (si_code " + std::to_string(record.linux_code) + ")";
+    if (record.linux_code > 0)
+      result += " at " + to_hex_string(record.linux_address);
+    else if (record.linux_sender_pid)
+      result += " from PID " + std::to_string(record.linux_sender_pid);
+    return result;
+  }
   if (!record.valid)
     return "No exception information";
 

@@ -99,6 +99,17 @@ Callers and implementations must preserve these invariants:
   by the user before the frontend starts. Auxv ABI validation uses AT_PHENT and
   does not require read permission on the executable.
   Hardware breakpoint/watchpoint slot counts are zero until supported.
+- Linux task suspend tokens express intent. Only a collected ptrace stop
+  authorizes registers, memory writes, or detach. The agent keeps per-TID wait
+  ownership through final reaping, and invalidates deferred events on observer
+  replacement or detach. Launch and attach both use SEIZE/INTERRUPT.
+- Linux exec invalidates sibling identities, saved trap bytes, step-over queues,
+  and module state. A versioned module-reset notification forces the frontend
+  to resolve breakpoints again even when the load addresses do not change.
+- Linux detach holds all threads stopped through trap restoration. Failed
+  restoration retains ownership and blocks resume. Shutdown waits for graceful
+  cleanup; unexpected tracer death uses EXITKILL. See the root README for
+  shared-address-space and signal policies.
 - A `DebuggedThread` runs only when neither `client_suspend_handle_` nor any
   internal `SuspendHandle` token exists.
 - `DebuggedProcess` serializes breakpoint step-overs through `step_over_queue_`
@@ -158,6 +169,13 @@ build with `cmake --build build -j 4`, and run
 `ctest --test-dir build --output-on-failure`. The integrated Linux x86-64
 executable is `build/zxdb`; start it with `--local`. See the root `README.md`
 for packages, options, and optional test fixtures.
+
+The `LinuxTaskTest` suite exercises real ptrace lifecycle events. `local_*`
+integration tests drive the frontend, including same-image exec, exact
+instruction stepping, fault recovery, and vfork breakpoint restoration.
+Shutdown tests use a separate subreaper to check trap bytes, TracerPid, and
+inferior exit after detach, quit, and frontend termination. Ptrace tests must
+run in an environment that allows tracing child processes.
 
 
 Run these commands to build and test `debug_agent`:

@@ -5,6 +5,7 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_DEBUG_ADAPTER_SERVER_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_DEBUG_ADAPTER_SERVER_H_
 
+#include <atomic>
 #include <thread>
 
 #include "src/developer/debug/shared/buffered_fd.h"
@@ -49,7 +50,7 @@ class DebugAdapterServer {
   debug::MessageLoop* main_loop_ = nullptr;
 
   std::unique_ptr<std::thread> background_thread_;
-  bool background_thread_exit_ = false;
+  std::atomic<bool> background_thread_exit_ = false;
   fbl::unique_fd exit_pipe_[2];
   std::unique_ptr<DebugAdapterContext> context_;
   std::unique_ptr<debug::BufferedFD> buffer_;
@@ -58,7 +59,7 @@ class DebugAdapterServer {
 
   // NOTE: Only this method is executed on the background thread. All other methods must be called
   // from main thread.
-  void ListenBackgroundThread();
+  void ListenBackgroundThread(fxl::WeakPtr<DebugAdapterServer> weak);
 
   // Launch background thread and wait for new connections.
   void ListenConnection();
@@ -71,6 +72,7 @@ class DebugAdapterServer {
   void OnDisconnect();
 
   void ResetClientConnection();
+  fxl::WeakPtrFactory<DebugAdapterServer> weak_factory_{this};
   FXL_DISALLOW_COPY_AND_ASSIGN(DebugAdapterServer);
 };
 

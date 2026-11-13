@@ -112,9 +112,8 @@ void DebuggedThread::OnException(std::unique_ptr<ExceptionHandle> exception_hand
   exception.exception = exception_handle_->GetRecord();
   exception.timestamp = GetNowTimestamp();
 
-  // TODO(https://fxbug.dev/42086129) clean up the single-step queue here (currently only handled in
-  // the HandleSingleStep() function to advance the single-step queue when the stepped-over
-  // instruction crashes rather than issues a single-step exception.
+  if (type != debug_ipc::ExceptionType::kSingleStep)
+    FinishStepOver();
 
   switch (type) {
     case debug_ipc::ExceptionType::kSingleStep:
@@ -163,7 +162,8 @@ void DebuggedThread::ResumeFromException() {
       if (regs && process_->FindSoftwareBreakpoint(regs->ip()) == nullptr &&
           IsBreakpointInstructionAtAddress(regs->ip())) {
         regs->set_ip(regs->ip() + arch::kBreakInstructionSize);
-        thread_handle_->SetGeneralRegisters(*regs);
+        if (!thread_handle_->SetGeneralRegisters(*regs))
+          return;
       }
     }
 
@@ -175,35 +175,7 @@ void DebuggedThread::ResumeFromException() {
 void DebuggedThread::HandleSingleStep(debug_ipc::NotifyException* exception,
                                       const GeneralRegisters& regs) {
   if (current_breakpoint_) {
-    // TODO(https://fxbug.dev/42086129) this single-step cleanup needs to be unconditionally
-    // executed for any exception on the thread (not just here in the "single step" handler) because
-    // the thread could crash on the instruction being stepped over and then the step over queue
-    // will never be cleaned up.
-
-    DEBUG_LOG(Thread) << ThreadPreamble(this) << "Ending single stepped over 0x" << std::hex
-                      << current_breakpoint_->address();
-    // Getting here means that the thread is done stepping over a breakpoint.
-    // Depending on whether others threads are stepping over the breakpoints, this thread might be
-    // suspended (waiting for other threads to step over).
-    // This means that we cannot resume from suspension here, as the breakpoint is owning the
-    // thread "run-lifetime".
-    //
-    // We can, though, resume from the exception, as effectively we already handled the single-step
-    // exception, so there is no more need to keep the thread in an excepted state. The suspend
-    // handle will take care of keeping the thread stopped.
-    //
-    // NOTE: It's important to resume the exception *after* telling the breakpoint we are done going
-    //       over it. This is because in the case that there are no other threads queued (the normal
-    //       case), it produces a window between resuming the exception and suspending the thread
-    //       to reinstall the breakpointer, which could make the thread miss the exception. By
-    //       keeping the exception until *after* the breakpoint has been told to step over, we
-    //       ensure that any installs have already occurred and thus the thread won't miss any
-    //       breakpoints.
-    current_breakpoint_->EndStepOver(this);
-    current_breakpoint_ = nullptr;
-
-    InternalResumeException();
-    return;
+    FinishStepOver();
   }
 
   if (!debug_ipc::ResumeRequest::MakesStep(run_mode_)) {
@@ -381,6 +353,8 @@ void DebuggedThread::ClientResume(const debug_ipc::ResumeRequest& request) {
     SetSingleStepForRunMode();
     client_suspend_handle_.reset();
   }
+  if (auto status = thread_handle_->ResumeIfReady(); status.has_error())
+    LOGS(Error) << "Thread remains stopped: " << status.message();
 }
 
 void DebuggedThread::InternalResumeException() {
@@ -524,10 +498,12 @@ std::vector<debug::RegisterValue> DebuggedThread::WriteRegisters(
     }
   }
 
-  if (rip_change)
-    current_breakpoint_ = nullptr;
-
   std::vector<debug::RegisterValue> written = thread_handle_->WriteRegisters(regs);
+  if (rip_change && std::any_of(written.begin(), written.end(),
+      [rip_id, &ip](const auto& value) {
+        return value.id == rip_id && value.GetValue() == ip->GetValue();
+      }))
+    current_breakpoint_ = nullptr;
 
   return written;
 }
@@ -539,6 +515,14 @@ void DebuggedThread::SendThreadNotification() const {
   notify.timestamp = GetNowTimestamp();
 
   debug_agent_->SendNotification(notify);
+}
+
+void DebuggedThread::FinishStepOver() {
+  if (!stepping_over_breakpoint_ || !current_breakpoint_)
+    return;
+  auto breakpoint = current_breakpoint_;
+  current_breakpoint_ = nullptr;
+  breakpoint->EndStepOver(this);
 }
 
 void DebuggedThread::WillDeleteProcessBreakpoint(ProcessBreakpoint* bp) {
@@ -560,7 +544,8 @@ DebuggedThread::OnStop DebuggedThread::UpdateForSoftwareBreakpoint(
   //     this address.
   if (breakpoint_address != regs.ip()) {
     regs.set_ip(breakpoint_address);
-    thread_handle_->SetGeneralRegisters(regs);
+    if (!thread_handle_->SetGeneralRegisters(regs))
+      return OnStop::kNotify;
   }
 
   if (SoftwareBreakpoint* found_bp = process_->FindSoftwareBreakpoint(breakpoint_address)) {

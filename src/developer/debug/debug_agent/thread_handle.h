@@ -83,11 +83,14 @@ class ThreadHandle {
   // an exception). False if timeout or error.
   virtual bool WaitForSuspension(TickTimePoint deadline) const = 0;
 
+  // Retry a failed kernel resume once no suspend or exception token prohibits it.
+  virtual debug::Status ResumeIfReady() { return debug::Status(); }
+
   // Registers -------------------------------------------------------------------------------------
 
   // Reads and writes the general thread registers.
   virtual std::optional<GeneralRegisters> GetGeneralRegisters() const = 0;
-  virtual void SetGeneralRegisters(const GeneralRegisters& regs) = 0;
+  virtual bool SetGeneralRegisters(const GeneralRegisters& regs) = 0;
 
   // Reads and writes the debug thread registers.
   virtual std::optional<DebugRegisters> GetDebugRegisters() const = 0;

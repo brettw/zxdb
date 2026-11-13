@@ -63,8 +63,9 @@ class MockThreadHandle final : public ThreadHandle {
   debug_ipc::ThreadRecord GetThreadRecord(zx_koid_t process_koid) const override;
   std::unique_ptr<SuspendHandle> Suspend() override;
   bool WaitForSuspension(TickTimePoint deadline) const override;
+  void set_suspend_succeeds(bool value) { suspend_succeeds_ = value; }
   std::optional<GeneralRegisters> GetGeneralRegisters() const override;
-  void SetGeneralRegisters(const GeneralRegisters& regs) override;
+  bool SetGeneralRegisters(const GeneralRegisters& regs) override;
   std::optional<DebugRegisters> GetDebugRegisters() const override;
   bool SetDebugRegisters(const DebugRegisters& regs) override;
   void SetSingleStep(bool single_step) override;
@@ -82,6 +83,7 @@ class MockThreadHandle final : public ThreadHandle {
   // Always null, for returning only from the getters above.
   // TODO(brettw) Remove this when the ThreadHandle no longer exposes a zx::thread getter.
   static NativeThreadHandle null_handle_;
+  bool suspend_succeeds_ = true;
 
   zx_koid_t thread_koid_;
   std::string name_;

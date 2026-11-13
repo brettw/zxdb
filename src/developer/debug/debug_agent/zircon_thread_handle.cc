@@ -150,9 +150,9 @@ std::optional<GeneralRegisters> ZirconThreadHandle::GetGeneralRegisters() const 
   return std::nullopt;
 }
 
-void ZirconThreadHandle::SetGeneralRegisters(const GeneralRegisters& regs) {
-  thread_.write_state(ZX_THREAD_STATE_GENERAL_REGS, &regs.GetNativeRegisters(),
-                      sizeof(zx_thread_state_general_regs_t));
+bool ZirconThreadHandle::SetGeneralRegisters(const GeneralRegisters& regs) {
+  return thread_.write_state(ZX_THREAD_STATE_GENERAL_REGS, &regs.GetNativeRegisters(),
+                      sizeof(zx_thread_state_general_regs_t)) == ZX_OK;
 }
 
 std::optional<DebugRegisters> ZirconThreadHandle::GetDebugRegisters() const {

@@ -52,7 +52,7 @@ debug::Status MockProcessHandle::Attach(ProcessHandleObserver* observer, AttachC
   return debug::Status();
 }
 
-void MockProcessHandle::Detach() { is_attached_ = false; }
+debug::Status MockProcessHandle::Detach() { is_attached_ = false; return debug::Status(); }
 
 uint64_t MockProcessHandle::GetLoaderBreakpointAddress() {
   // Not currently implemented in this mock.
@@ -105,6 +105,7 @@ debug::Status MockProcessHandle::WriteMemory(uintptr_t address, const void* buff
   mock_memory_.AddMemory(address, std::vector<uint8_t>(src, src + len));
 
   memory_writes_.emplace_back(address, std::vector<uint8_t>(src, &src[len]));
+  *actual = len;
   return debug::Status();
 }
 

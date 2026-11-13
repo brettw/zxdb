@@ -57,7 +57,10 @@ bool ProcessBreakpoint::UnregisterBreakpoint(Breakpoint* breakpoint) {
     breakpoints_.erase(found);
   }
   // Check if we need to install/uninstall a breakpoint.
-  Update();
+  if (auto status = Update(); status.has_error()) {
+    LOGS(Error) << "Cannot remove breakpoint: " << status.message();
+    return true;  // Retain the memory owner until restoration can succeed.
+  }
   return !breakpoints_.empty();
 }
 

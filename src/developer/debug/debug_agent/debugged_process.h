@@ -173,7 +173,7 @@ class DebuggedProcess : public ProcessHandleObserver {
   // probably resulting in a crash.
   //
   // 3. Unbind the exception port.
-  void DetachFromProcess();
+  debug::Status DetachFromProcess();
 
   // Queue of breakpoints that are currently being stepped over.
   //
@@ -208,11 +208,13 @@ class DebuggedProcess : public ProcessHandleObserver {
   // instances of platform specific exception objects when we can just use our own abstractions
   // here. This provides a simpler interface for testing the higher level objects without exposing
   // the API outside of tests.
+  debug::Status OnVfork(bool starting) override;
+  void OnExec() override;
   void OnProcessTerminated() override;
   void OnThreadStarting(std::unique_ptr<ExceptionHandle> exception) override;
   void OnThreadExiting(std::unique_ptr<ExceptionHandle> exception) override;
   void OnException(std::unique_ptr<ExceptionHandle> exception) override;
-  void OnProcessStarting(std::unique_ptr<ProcessHandle> new_process_handle) override;
+  void OnProcessStarting(std::unique_ptr<ProcessHandle> new_process_handle, bool inherited_breakpoints = true) override;
 
  private:
   void OnStdout(bool close);
@@ -245,6 +247,9 @@ class DebuggedProcess : public ProcessHandleObserver {
   // Indicates that new threads, if discovered, should be suspended.
   // New thread could be spawned even when all known threads are suspended.
   bool suspend_new_threads_ = false;
+  bool reset_modules_ = false;
+  std::vector<std::unique_ptr<SuspendHandle>> vfork_stops_;
+  std::vector<fxl::WeakPtr<ProcessBreakpoint>> vfork_breakpoints_;
 
   // Maps addresses to the ProcessBreakpoint at a location.
   std::map<uint64_t, std::unique_ptr<SoftwareBreakpoint>> software_breakpoints_;

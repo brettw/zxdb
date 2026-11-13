@@ -828,4 +828,102 @@ TEST(ProcessBreakpoint, HitCount) {
   ASSERT_EQ(0u, process_delegate.bps().size());
 }
 
+
+namespace {
+class FailingMemoryProcess : public MockProcessHandle {
+ public:
+  FailingMemoryProcess() : MockProcessHandle(1234) {}
+  debug::Status WriteMemory(uintptr_t address, const void* data, size_t len,
+                            size_t* actual) override {
+    if (fail_write) {
+      *actual = 0;
+      return debug::Status("Injected memory write failure");
+    }
+    return MockProcessHandle::WriteMemory(address, data, len, actual);
+  }
+  debug::Status ReadMemory(uintptr_t address, void* data, size_t len,
+                           size_t* actual) const override {
+    if (fail_read) {
+      *actual = 0;
+      return debug::Status("Injected memory read failure");
+    }
+    return MockProcessHandle::ReadMemory(address, data, len, actual);
+  }
+  std::optional<bool> IsAddressMapped(uint64_t) const override { return mapped; }
+  std::optional<bool> mapped = true;
+  bool fail_read = false;
+  bool fail_write = false;
+};
+
+
+}
+
+TEST(ProcessBreakpoint, FailedRestorationRetainsOwnership) {
+  TestProcessDelegate delegate;
+  Breakpoint definition(&delegate);
+  debug_ipc::BreakpointSettings settings;
+  settings.type = debug_ipc::BreakpointType::kSoftware;
+  definition.SetSettings(settings);
+  auto handle = std::make_unique<FailingMemoryProcess>();
+  auto memory = handle.get();
+  memory->mock_memory().AddMemory(kAddress, GetOriginalData());
+  MockProcess process(nullptr, DebuggedProcessCreateInfo(std::move(handle)));
+  SoftwareBreakpoint breakpoint(&definition, &process, kAddress);
+  ASSERT_TRUE(breakpoint.Init().ok());
+  memory->fail_write = true;
+  EXPECT_TRUE(breakpoint.RestoreMemory().has_error());
+  EXPECT_TRUE(breakpoint.Installed(0));
+  EXPECT_TRUE(MemoryContainsBreak(*memory, kAddress));
+  memory->fail_write = false;
+  memory->fail_read = true;
+  memory->mapped = std::nullopt;
+  EXPECT_TRUE(breakpoint.RestoreMemory().has_error());
+  EXPECT_TRUE(breakpoint.Installed(0));
+  memory->fail_read = false;
+  EXPECT_TRUE(breakpoint.RestoreMemory().ok());
+  EXPECT_FALSE(breakpoint.Installed(0));
+  EXPECT_TRUE(MemoryContainsOriginal(*memory, kAddress));
+}
+
+TEST(ProcessBreakpoint, FailedPeerStopLeavesTrapInstalled) {
+  TestProcessDelegate delegate;
+  Breakpoint definition(&delegate);
+  debug_ipc::BreakpointSettings settings;
+  settings.type = debug_ipc::BreakpointType::kSoftware;
+  definition.SetSettings(settings);
+  MockProcess process(nullptr, 1234, "process");
+  process.mock_process_handle().mock_memory().AddMemory(kAddress, GetOriginalData());
+  auto stepping = process.AddThread(1);
+  auto peer = process.AddThread(2);
+  peer->mock_thread_handle().set_suspend_succeeds(false);
+  SoftwareBreakpoint breakpoint(&definition, &process, kAddress);
+  ASSERT_TRUE(breakpoint.Init().ok());
+  breakpoint.BeginStepOver(stepping);
+  EXPECT_TRUE(breakpoint.Installed(0));
+  EXPECT_TRUE(MemoryContainsBreak(process.mock_process_handle(), kAddress));
+  EXPECT_FALSE(stepping->stepping_over_breakpoint());
+  EXPECT_TRUE(process.step_over_queue().empty());
+}
+
+TEST(ProcessBreakpoint, NewThreadWaitsUntilTrapRestored) {
+  TestProcessDelegate delegate;
+  Breakpoint definition(&delegate);
+  debug_ipc::BreakpointSettings settings;
+  settings.type = debug_ipc::BreakpointType::kSoftware;
+  definition.SetSettings(settings);
+  MockProcess process(nullptr, 1234, "process");
+  process.mock_process_handle().mock_memory().AddMemory(kAddress, GetOriginalData());
+  auto stepping = process.AddThread(1);
+  SoftwareBreakpoint breakpoint(&definition, &process, kAddress);
+  ASSERT_TRUE(breakpoint.Init().ok());
+  breakpoint.BeginStepOver(stepping);
+  auto created = process.AddThread(2);
+  breakpoint.SuspendNewThread(created);
+  EXPECT_FALSE(created->running());
+  EXPECT_FALSE(breakpoint.Installed(0));
+  breakpoint.EndStepOver(stepping);
+  EXPECT_TRUE(breakpoint.Installed(0));
+  EXPECT_TRUE(created->running());
+}
+
 }  // namespace debug_agent

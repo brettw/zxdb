@@ -18,13 +18,15 @@ namespace zxdb {
 
 DebugAdapterServer::DebugAdapterServer(Console* console, uint16_t port)
     : console_(console), port_(port) {
-  int fd[2] = {};
+  int fd[2] = {-1, -1};
   pipe(fd);
   exit_pipe_[0] = fbl::unique_fd(fd[0]);
   exit_pipe_[1] = fbl::unique_fd(fd[1]);
 }
 
 Err DebugAdapterServer::Init() {
+  if (!exit_pipe_[0].is_valid() || !exit_pipe_[1].is_valid())
+    return Err("Could not create debug adapter shutdown pipe.");
   main_loop_ = debug::MessageLoop::Current();
   server_socket_.reset(socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP));
   if (!server_socket_.is_valid()) {
@@ -57,23 +59,24 @@ Err DebugAdapterServer::Init() {
 void DebugAdapterServer::ListenConnection() {
   FX_DCHECK(!background_thread_.get());  // Duplicate ListenConnection() call.
 
-  // Create the background thread to listen to incoming connections.
-  background_thread_ = std::make_unique<std::thread>([this]() { ListenBackgroundThread(); });
+  // Console logging and observers belong to the main loop.
+  LOGS(Info) << "Waiting on port " << port_ << " for debug adapter connection.";
+  // The destructor joins this thread before destroying server state.
+  background_thread_ = std::make_unique<std::thread>(
+      [this, weak = weak_factory_.GetWeakPtr()]() { ListenBackgroundThread(weak); });
 }
 
-void DebugAdapterServer::ListenBackgroundThread() {
+void DebugAdapterServer::ListenBackgroundThread(fxl::WeakPtr<DebugAdapterServer> weak) {
   // Wait for one connection.
-  LOGS(Info) << "Waiting on port " << port_ << " for debug adapter connection.";
   fbl::unique_fd client;
   while (!Accept(client)) {
     if (background_thread_exit_) {
       return;
     }
   }
-  LOGS(Info) << "Debug Adapter connection established.";
-
-  main_loop_->PostTask(FROM_HERE, [this, client = std::move(client)]() mutable {
-    ConnectionResolvedMainThread(std::move(client));
+  main_loop_->PostTask(FROM_HERE, [weak, client = std::move(client)]() mutable {
+    if (weak)
+      weak->ConnectionResolvedMainThread(std::move(client));
   });
 }
 
@@ -105,18 +108,19 @@ bool DebugAdapterServer::Accept(fbl::unique_fd& client) {
   client =
       fbl::unique_fd(accept(server_socket_.get(), reinterpret_cast<sockaddr*>(&addr), &addrlen));
   if (!client.is_valid()) {
-    LOGS(Error) << "Accept failed.";
+    main_loop_->PostTask(FROM_HERE, [] { LOGS(Error) << "Accept failed."; });
     return false;
   }
 
   if (fcntl(client.get(), F_SETFL, O_NONBLOCK) < 0) {
-    LOGS(Error) << "Couldn't make port nonblocking.";
+    main_loop_->PostTask(FROM_HERE, [] { LOGS(Error) << "Couldn't make port nonblocking."; });
     return false;
   }
   return true;
 }
 
 void DebugAdapterServer::ConnectionResolvedMainThread(fbl::unique_fd client) {
+  LOGS(Info) << "Debug Adapter connection established.";
   background_thread_->join();
   background_thread_.reset();
 
@@ -137,9 +141,11 @@ void DebugAdapterServer::ConnectionResolvedMainThread(fbl::unique_fd client) {
 
   // Reset the client connection on error.
   buffer_->set_error_callback([this]() {
-    main_loop_->PostTask(FROM_HERE, [this]() {
-      LOGS(Info) << "Connection lost.";
-      OnDisconnect();
+    main_loop_->PostTask(FROM_HERE, [weak = weak_factory_.GetWeakPtr()]() {
+      if (weak) {
+        LOGS(Info) << "Connection lost.";
+        weak->OnDisconnect();
+      }
     });
   });
 }

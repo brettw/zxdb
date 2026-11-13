@@ -1,0 +1,9 @@
+[zxdb] set console-mode = shell
+[zxdb] status
+Connected to
+[zxdb] run @CMAKE_CURRENT_BINARY_DIR@/linux_lifecycle_inferior output
+## allow-out-of-order-output
+final stdout sentinel
+final stderr sentinel
+Process 1 exited with code 7.
+[zxdb] quit

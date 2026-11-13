@@ -62,7 +62,7 @@ class MockProcessHandle : public ProcessHandle {
   int64_t GetReturnCode() const override;
   debug::Status Attach(ProcessHandleObserver* observer, AttachConfig config) override;
   bool IsAttached() const override { return is_attached_; }
-  void Detach() override;
+  debug::Status Detach() override;
   uint64_t GetLoaderBreakpointAddress() override;
   std::vector<debug_ipc::AddressRegion> GetAddressSpace(uint64_t address) const override;
   std::optional<debug_ipc::AddressRegion> GetSharedAddressSpace() const override;

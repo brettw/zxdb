@@ -448,7 +448,12 @@ debug_ipc::ResumeRequest::How ProcessImpl::OnException(const StopInfo& info) {
   return how;
 }
 
-void ProcessImpl::OnModules(std::vector<debug_ipc::Module> modules) {
+void ProcessImpl::OnModules(std::vector<debug_ipc::Module> modules, bool reset) {
+  if (reset) {
+    for (auto& observer : session()->process_observers())
+      observer.DidExec(this);
+    symbols_.SetModules({}, false);
+  }
   FixupEmptyModuleNames(modules);
   symbols_.SetModules(modules, false);
 

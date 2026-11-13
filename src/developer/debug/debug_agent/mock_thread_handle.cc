@@ -94,14 +94,15 @@ std::unique_ptr<SuspendHandle> MockThreadHandle::Suspend() {
   return std::make_unique<MockSuspendHandle>(suspend_count_);
 }
 
-bool MockThreadHandle::WaitForSuspension(TickTimePoint deadline) const { return true; }
+bool MockThreadHandle::WaitForSuspension(TickTimePoint deadline) const { return suspend_succeeds_; }
 
 std::optional<GeneralRegisters> MockThreadHandle::GetGeneralRegisters() const {
   return general_registers_;
 }
 
-void MockThreadHandle::SetGeneralRegisters(const GeneralRegisters& regs) {
+bool MockThreadHandle::SetGeneralRegisters(const GeneralRegisters& regs) {
   general_registers_ = regs;
+  return true;
 }
 
 std::optional<DebugRegisters> MockThreadHandle::GetDebugRegisters() const {

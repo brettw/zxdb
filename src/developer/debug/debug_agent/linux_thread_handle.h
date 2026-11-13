@@ -31,10 +31,11 @@ class LinuxThreadHandle final : public ThreadHandle {
   std::unique_ptr<SuspendHandle> Suspend() override;
   bool WaitForSuspension(TickTimePoint deadline) const override;
   std::optional<GeneralRegisters> GetGeneralRegisters() const override;
-  void SetGeneralRegisters(const GeneralRegisters& regs) override;
+  bool SetGeneralRegisters(const GeneralRegisters& regs) override;
   std::optional<DebugRegisters> GetDebugRegisters() const override;
   bool SetDebugRegisters(const DebugRegisters& regs) override;
   void SetSingleStep(bool single_step) override;
+  debug::Status ResumeIfReady() override { return task_->ResumeIfReady(); }
   std::vector<debug::RegisterValue> ReadRegisters(
       const std::vector<debug::RegisterCategory>& cats_to_get) const override;
   std::vector<debug::RegisterValue> WriteRegisters(

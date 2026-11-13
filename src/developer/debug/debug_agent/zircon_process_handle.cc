@@ -137,7 +137,7 @@ debug::Status ZirconProcessHandle::Attach(ProcessHandleObserver* observer,
 
 bool ZirconProcessHandle::IsAttached() const { return process_watch_handle_.watching(); }
 
-void ZirconProcessHandle::Detach() {
+debug::Status ZirconProcessHandle::Detach() {
   observer_ = nullptr;
 
   // Unset ZX_PROP_PROCESS_BREAK_ON_LOAD.
@@ -147,6 +147,7 @@ void ZirconProcessHandle::Detach() {
 
   // Unbind from the exception port.
   process_watch_handle_.StopWatching();
+  return debug::Status();
 }
 
 uint64_t ZirconProcessHandle::GetLoaderBreakpointAddress() {

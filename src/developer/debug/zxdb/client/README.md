@@ -196,6 +196,8 @@ Callers and implementations must preserve these invariants:
   `System::GetBreakpoints`, `System::GetFilters`, `System::GetSymbolServers`,
   `Process::GetThreads`, and `Breakpoint::GetLocations`. Never cache those raw
   pointers across message loop turns. Use `fxl::WeakPtr` instead.
+- An exec module reset clears previous symbol modules before loading the new
+  list, so breakpoints are rebound even when addresses and build IDs match.
 - On thread exception stops, `debug_agent` sends only the top 1 to 2 stack
   frames. Call `Stack::SyncFrames` asynchronously for full backtraces, and never
   assume `Stack` is non-empty on an exception stop.
@@ -240,6 +242,10 @@ Callers and implementations must preserve these invariants:
 - Emits debugger usage telemetry events through `AnalyticsReporter`.
 
 ## Verification
+
+In the standalone repository, build with `cmake --build build -j 4` and run
+`ctest --test-dir build --output-on-failure`. The `local_exec_breakpoint`
+integration test checks breakpoint resolution across same-image exec.
 
 Run these commands to build and test `zxdb/client`:
 

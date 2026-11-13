@@ -45,10 +45,12 @@ debug::Status ReadNullTerminatedString(const ProcessHandle& process, zx_vaddr_t 
     }
 
     if (num_read < kBlockSize)
-      return debug::Status();  // Partial read: hit the mapped memory boundary.
+      return debug::Status("Unterminated loader string.");
+    if (vaddr > UINT64_MAX - kBlockSize)
+      return debug::Status("Loader string address overflow.");
     vaddr += kBlockSize;
   }
-  return debug::Status();
+  return debug::Status("Loader string exceeds size limit.");
 }
 
 // Returns the fetch function for use by ElfLib for the given process. The ProcessHandle must
@@ -56,6 +58,8 @@ debug::Status ReadNullTerminatedString(const ProcessHandle& process, zx_vaddr_t 
 std::function<bool(uint64_t, std::vector<uint8_t>*)> GetElfLibReader(const ProcessHandle& process,
                                                                      uint64_t load_address) {
   return [&process, load_address](uint64_t offset, std::vector<uint8_t>* buf) {
+    if (offset > UINT64_MAX - load_address)
+      return false;
     size_t num_read = 0;
     if (process.ReadMemory(load_address + offset, buf->data(), buf->size(), &num_read).has_error())
       return false;
@@ -67,37 +71,42 @@ std::function<bool(uint64_t, std::vector<uint8_t>*)> GetElfLibReader(const Proce
 
 debug::Status WalkElfModules(const ProcessHandle& process, uint64_t dl_debug_addr,
                              std::function<bool(uint64_t base_addr, uint64_t lmap)> cb) {
-  size_t num_read = 0;
-  uint64_t lmap = 0;
-  if (auto status = process.ReadMemory(dl_debug_addr + offsetof(r_debug, r_map), &lmap,
-                                       sizeof(lmap), &num_read);
-      status.has_error())
+  auto read_exact = [&process](uint64_t address, void* dest, size_t size) {
+    if (size > UINT64_MAX - address)
+      return debug::Status("Loader address overflow.");
+    size_t actual = 0;
+    auto status = process.ReadMemory(address, dest, size, &actual);
+    if (status.has_error())
+      return status;
+    return actual == size ? debug::Status() : debug::Status("Short loader memory read.");
+  };
+  r_debug header{};
+  if (auto status = read_exact(dl_debug_addr, &header, sizeof(header)); status.has_error())
     return status;
+  if (header.r_state != r_debug::RT_CONSISTENT)
+    return debug::Status("Loader module list is changing.");
 
-  size_t module_count = 0;
-
-  // Walk the linked list.
-  constexpr size_t kMaxObjects = 512;  // Sanity threshold.
-  while (lmap != 0) {
-    if (module_count++ >= kMaxObjects)
-      return debug::Status("Too many modules, memory likely corrupted.");
-
-    uint64_t base;
-    if (process.ReadMemory(lmap + offsetof(link_map, l_addr), &base, sizeof(base), &num_read)
-            .has_error())
-      break;
-
-    uint64_t next;
-    if (process.ReadMemory(lmap + offsetof(link_map, l_next), &next, sizeof(next), &num_read)
-            .has_error())
-      break;
-
-    if (!cb(base, lmap))
-      break;
-
-    lmap = next;
+  std::vector<std::pair<uint64_t, uint64_t>> modules;
+  std::set<uint64_t> visited;
+  uint64_t lmap = reinterpret_cast<uint64_t>(header.r_map);
+  while (lmap) {
+    if (!visited.insert(lmap).second || visited.size() > 512)
+      return debug::Status("Invalid loader module chain.");
+    link_map entry{};
+    if (auto status = read_exact(lmap, &entry, sizeof(entry)); status.has_error())
+      return status;
+    modules.emplace_back(entry.l_addr, lmap);
+    lmap = reinterpret_cast<uint64_t>(entry.l_next);
   }
-
+  r_debug after{};
+  if (auto status = read_exact(dl_debug_addr, &after, sizeof(after)); status.has_error())
+    return status;
+  if (after.r_state != r_debug::RT_CONSISTENT || after.r_map != header.r_map)
+    return debug::Status("Loader changed during module enumeration.");
+  for (const auto& [base, address] : modules) {
+    if (!cb(base, address))
+      break;
+  }
   return debug::Status();
 }
 
@@ -107,16 +116,16 @@ std::vector<debug_ipc::Module> GetElfModulesForProcess(const ProcessHandle& proc
 
   // Method 1: Use the dl_debug_addr, which should be the address of a |r_debug| struct.
   if (dl_debug_addr) {
-    WalkElfModules(process, dl_debug_addr, [&](uint64_t base, uint64_t lmap) {
+    auto status = WalkElfModules(process, dl_debug_addr, [&](uint64_t base, uint64_t lmap) {
       debug_ipc::Module module;
       module.base = base;
       module.debug_address = lmap;
 
-      uint64_t str_addr;
-      size_t num_read;
+      uint64_t str_addr = 0;
+      size_t num_read = 0;
       if (process
               .ReadMemory(lmap + offsetof(link_map, l_name), &str_addr, sizeof(str_addr), &num_read)
-              .has_error())
+              .has_error() || num_read != sizeof(str_addr))
         return false;
 
       if (ReadNullTerminatedString(process, str_addr, &module.name).has_error())
@@ -128,6 +137,8 @@ std::vector<debug_ipc::Module> GetElfModulesForProcess(const ProcessHandle& proc
       modules.push_back(std::move(module));
       return true;
     });
+    if (status.has_error())
+      modules.clear();
   }
 
   // Method 2: Read the memory map and probe the ELF magic. This is secondary because it cannot
@@ -254,7 +265,21 @@ void MergeMmapedModules(std::vector<debug_ipc::Module>& modules,
     // already found with "method 1" above. This must be AFTER the end_of_last_module is updated,
     // otherwise, anything inserted from "method 1" won't be counted as covering its address range
     // and the next item could be a duplicate.
-    if (!visited_modules.insert(current_region.base).second) {
+    if (vaddr_start == UINT64_MAX || vaddr_start > current_region.base)
+      continue;
+    const uint64_t load_bias = current_region.base - vaddr_start;
+    if (!visited_modules.insert(load_bias).second) {
+      // ET_EXEC has a zero load bias, so its ELF header cannot be read at
+      // link_map.l_addr. Fill in metadata from the actual mapped ELF header.
+      for (auto& module : modules) {
+        if (module.base == load_bias) {
+          if (module.build_id.empty())
+            module.build_id = opt_info->build_id;
+          if (module.name.empty())
+            module.name = current_region.name;
+          break;
+        }
+      }
       continue;
     }
 
@@ -264,7 +289,7 @@ void MergeMmapedModules(std::vector<debug_ipc::Module>& modules,
     }
 
     modules.push_back(debug_ipc::Module{.name = std::move(name),
-                                        .base = current_region.base,
+                                        .base = load_bias,
                                         .build_id = std::move(opt_info->build_id)});
   }
 }

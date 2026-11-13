@@ -49,6 +49,7 @@ class LinuxExceptionHandle : public ExceptionHandle {
   fxl::RefPtr<LinuxTask> task_;
   debug_ipc::ExceptionType type_;
   siginfo_t info_;
+  Resolution resolution_ = Resolution::kHandled;
 };
 
 }  // namespace debug_agent

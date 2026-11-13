@@ -32,8 +32,7 @@ TEST(LinuxUtils, ParseMaps) {
 562289024000-562289038000 rw-p 00000000 00:00 0 
 56228966d000-5622897d2000 rw-p 00000000 00:00 0                          [heap]
 7fdff47df000-7fdff4a5f000 r--s 00000000 fe:01 14559256                   /usr/share/zsh/functions/Completion/Unix.zwc
-7fdff4a6a000-7fdff4a6d000 r--p 00000000 fe:01 12720175                   /usr/lib/x86_64-linux-gnu/zsh/5.8/zsh/computil
-.so
+7fdff4a6a000-7fdff4a6d000 r--p 00000000 fe:01 12720175                   /usr/lib/x86_64-linux-gnu/zsh/5.8/zsh/computil.so
 )";
   result = ParseMaps(kTestInput);
   ASSERT_EQ(7u, result.size());
@@ -156,6 +155,18 @@ TEST(LinuxUtils, AuxvRejectsUnsupportedLayout) {
   auto native = ReadAuxv(getpid());
   ASSERT_NE(native.end(), native.find(AT_PHENT));
   EXPECT_EQ(sizeof(Elf64_Phdr), native.at(AT_PHENT));
+}
+
+TEST(LinuxUtils, MapReadValidity) {
+  EXPECT_TRUE(GetMapsChecked(-1).has_error());
+  EXPECT_TRUE(ParseMapsChecked("malformed").has_error());
+  EXPECT_TRUE(ParseMapsChecked("1000-2000 r--p 0 00:00 0\nmalformed").has_error());
+  auto empty = ParseMapsChecked("");
+  ASSERT_TRUE(empty.ok());
+  EXPECT_TRUE(empty.value().empty());
+  auto maps = GetMapsChecked(getpid());
+  ASSERT_TRUE(maps.ok());
+  EXPECT_FALSE(maps.value().empty());
 }
 
 TEST(LinuxUtils, LargeInodeAndMalformedMaps) {

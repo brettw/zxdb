@@ -71,7 +71,9 @@ Callers and implementations must preserve these invariants:
 - Call all methods on `DebugAdapterContext` and `DebugAdapterServer` (except
   `DebugAdapterServer::ListenBackgroundThread`) on the main `MessageLoop`
   thread.
-- `Console` must outlive `DebugAdapterServer`.
+- `Console` must outlive `DebugAdapterServer`. The listener posts connection
+  results and log messages to the main loop. Deferred callbacks hold weak server
+  references, and shutdown joins the listener before releasing its state.
 - `DebugAdapterContext` registers DAP handlers, session observers, and
   `AsyncBacktraceSubscription` only after sending `InitializeResponse`. It
   defers `InitializeResponse` until any pending `Session` connection finishes.
@@ -114,6 +116,10 @@ Callers and implementations must preserve these invariants:
   initialization.
 
 ## Verification
+
+For the standalone build, run `ctest --test-dir build --output-on-failure`.
+Server tests assert that console output stays on the main thread. Repeated
+`local_*` integration tests exercise startup and shutdown with the listener.
 
 Run these commands to build and test `zxdb/debug_adapter`:
 

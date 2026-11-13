@@ -84,7 +84,7 @@ class ProcessImpl : public Process, public ProcessSymbols::Notifications {
   void OnThreadExiting(const debug_ipc::ThreadRecord& record);
 
   // Notification that the list of loaded modules may have been updated.
-  void OnModules(std::vector<debug_ipc::Module> modules);
+  void OnModules(std::vector<debug_ipc::Module> modules, bool reset = false);
 
   // Returns true if the caller should show the output. False means silence.
   bool HandleIO(const debug_ipc::NotifyIO&);

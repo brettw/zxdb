@@ -121,3 +121,45 @@ and callback result storage retains stable addresses during synchronous
 completion. A regression test covers the callback case. LLVM 19's ScopedPrinter header needs
 the DWARF reader and its test helper compiled as C++20; the remaining build
 uses C++23. Upstream GN and Bazel files are unchanged.
+
+## Linux debugging behavior
+
+The local agent supports native x86-64 Linux programs. It seizes each thread
+before using ptrace, including all existing threads at attach. Launched programs
+wait behind a pipe until attachment is complete. Pause uses `PTRACE_INTERRUPT`;
+it does not inject SIGSTOP. Exit notifications follow final kernel reaping.
+
+Ordinary fork and clone-created processes are followed alongside their parent.
+A vfork child runs with the parent's software breakpoints temporarily removed
+and the parent threads stopped. The child becomes a separate debugged process
+at exec. Non-thread `CLONE_VM` processes are unsupported: both tasks remain
+stopped with an error, and detach restores the parent's instructions before
+releasing them. There is no configurable follow-parent/follow-child policy.
+
+SIGCHLD, SIGCONT, and SIGWINCH pass through automatically. Other delivered
+signals stop for inspection; use `continue --forward` to deliver the signal,
+or `continue` to suppress it. Linux signal numbers, codes, fault addresses,
+and sender PIDs are available in exception information. Group stops preserve
+job-control behavior until SIGCONT. General registers can be read and written;
+floating-point/vector registers and hardware breakpoints/watchpoints remain
+unsupported. Hardware slot counts are zero.
+
+Launch preserves the caller's working directory, environment, signal mask, and
+inherited SIGPIPE disposition. Supply an executable path; there is no PATH
+search. Stdin is `/dev/null`, stdout and stderr use pipes, and there is no
+inferior PTY or terminal job-control integration. Linux minidump export and
+Fuchsia component/limbo operations are unsupported. Existing-process filters
+can find processes; observing future unrelated processes is not implemented.
+These are platform support limits, not pending audit fixes.
+
+Normal quit closes the agent connection, restores software breakpoints, and
+detaches before reaping the agent. A failed restoration leaves the process
+stopped and reports an error. If teardown cannot restore a process, it kills
+that process instead of releasing patched instructions. Unexpected tracer death
+kills traced tasks through `PTRACE_O_EXITKILL`. Use `--debug-mode` for both
+frontend and local-agent logs.
+
+IPC version 79 adds Linux signal metadata and an exec module-reset flag. Older
+protocol versions retain their wire layouts; full Linux exec reset requires a
+version 79 frontend. Module lookup uses the inferior's mapped loader or root
+namespace and falls back to mapped ELF images when loader symbols are absent.

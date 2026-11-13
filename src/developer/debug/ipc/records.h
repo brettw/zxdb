@@ -144,10 +144,18 @@ struct ExceptionRecord {
 
   ExceptionStrategy strategy = ExceptionStrategy::kNone;
 
+  // Linux signal metadata is independent of the architecture exception union.
+  int32_t linux_signal = 0;
+  int32_t linux_code = 0;
+  uint64_t linux_address = 0;
+  int32_t linux_sender_pid = 0;
+
   void Serialize(Serializer& ser, uint32_t ver) {
     ser | valid;
     ser.SerializeBytes(&arch, sizeof(Arch));
     ser | strategy;
+    if (ver >= 79)
+      ser | linux_signal | linux_code | linux_address | linux_sender_pid;
   }
 };
 

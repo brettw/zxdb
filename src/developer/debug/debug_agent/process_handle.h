@@ -12,6 +12,7 @@
 #include <memory>
 #include <vector>
 
+#include "src/developer/debug/ipc/records.h"
 #include "src/developer/debug/shared/status.h"
 
 #if defined(__Fuchsia__)
@@ -115,7 +116,7 @@ class ProcessHandle {
 
   // Unregisters for process notifications. See Attach(). It is legal to call Detach() multiple
   // times or when not already attached.
-  virtual void Detach() = 0;
+  virtual debug::Status Detach() = 0;
 
   // Get the address of the dynamic loader's special breakpoint that notifies a module list change.
   // See "DEBUGGER INTERFACE IN DYNAMIC LOADER" above.
@@ -124,6 +125,12 @@ class ProcessHandle {
   // Returns the address space information. If the address is non-null, only the regions covering
   // that address will be returned. Otherwise all regions will be returned.
   virtual std::vector<debug_ipc::AddressRegion> GetAddressSpace(uint64_t address) const = 0;
+
+  // nullopt means the mapping could not be determined. Callers restoring trap
+  // bytes must not treat a failed inspection as proof that memory was unmapped.
+  virtual std::optional<bool> IsAddressMapped(uint64_t address) const {
+    return !GetAddressSpace(address).empty();
+  }
 
   // Returns the address region corresponding to the shared address space if this process has
   // multiple instances of ZX_INFO_MAPS_TYPE_ASPACE map types. This is only possible today via

@@ -19,15 +19,9 @@
 namespace zxdb {
 
 int RunLocalAgent(fbl::unique_fd read_pipe, fbl::unique_fd write_pipe,
-                  bool inherited_sigpipe_ignored) {
-  // Uncomment to enable debugging output for the local debug_agent. Currently there is not
-  // configurable from the command line, as the --debug mode option only applies to the frontend
-  // code.
-#if 0
-  printf("Running local agent on PID %d\n", getpid());
+                  bool inherited_sigpipe_ignored, bool debug_mode) {
   debug::SetLogCategories({debug::LogCategory::kAll});
-  debug::SetDebugLogging(true);
-#endif
+  debug::SetDebugLogging(debug_mode);
 
   debug::PlatformMessageLoop message_loop;
   std::string init_error_message;
@@ -54,21 +48,23 @@ int RunLocalAgent(fbl::unique_fd read_pipe, fbl::unique_fd write_pipe,
   return 0;
 }
 
-LocalAgentResult ForkLocalAgent(bool inherited_sigpipe_ignored) {
+LocalAgentResult ForkLocalAgent(bool inherited_sigpipe_ignored, bool debug_mode) {
   // Two pipes, one for each direction to communicate with the agent.
   const char kPipeError[] = "Can't create pipe to agent process.\n";
   int client_to_agent[2] = {0, 0};
-  if (pipe2(client_to_agent, O_NONBLOCK) == -1) {
+  if (pipe2(client_to_agent, O_NONBLOCK | O_CLOEXEC) == -1) {
     fprintf(stderr, kPipeError);
     return LocalAgentResult(LocalAgentResult::kFailed, 1);
   }
 
+  fbl::unique_fd client_read(client_to_agent[0]), client_write(client_to_agent[1]);
   int agent_to_client[2] = {0, 0};
-  if (pipe2(agent_to_client, O_NONBLOCK) == -1) {
+  if (pipe2(agent_to_client, O_NONBLOCK | O_CLOEXEC) == -1) {
     fprintf(stderr, kPipeError);
     return LocalAgentResult(LocalAgentResult::kFailed, 1);
   }
 
+  fbl::unique_fd agent_read(agent_to_client[0]), agent_write(agent_to_client[1]);
   pid_t child_pid = fork();
   if (child_pid == -1) {
     fprintf(stderr, "Can't fork agent process\n");
@@ -77,21 +73,21 @@ LocalAgentResult ForkLocalAgent(bool inherited_sigpipe_ignored) {
     // Run the debug agent.
 
     // Close the handles the frontend uses.
-    close(client_to_agent[1]);
-    close(agent_to_client[0]);
+    client_write.reset();
+    agent_read.reset();
     int exit_code =
-        RunLocalAgent(fbl::unique_fd(client_to_agent[0]), fbl::unique_fd(agent_to_client[1]),
-                      inherited_sigpipe_ignored);
+        RunLocalAgent(std::move(client_read), std::move(agent_write),
+                      inherited_sigpipe_ignored, debug_mode);
     return LocalAgentResult(LocalAgentResult::kInForked, exit_code);
   }
 
   // This is the zxdb frontend process. Close the handles the agent uses.
-  close(client_to_agent[0]);
-  close(agent_to_client[1]);
+  client_read.reset();
+  agent_write.reset();
 
   // The other end gets returned as the Bidi pipe.
-  auto bidi_pipe = std::make_unique<debug::BufferedBidiPipe>(fbl::unique_fd(agent_to_client[0]),
-                                                             fbl::unique_fd(client_to_agent[1]));
+  auto bidi_pipe = std::make_unique<debug::BufferedBidiPipe>(std::move(agent_read),
+                                                             std::move(client_write));
 
   return LocalAgentResult(child_pid, std::move(bidi_pipe));
 }

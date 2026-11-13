@@ -36,6 +36,12 @@ class SoftwareBreakpoint : public ProcessBreakpoint {
   void StepOverCleanup(DebuggedThread* thread) override;
   debug::Status UninstallFromMemorySpace(ProcessHandle& process) override;
 
+  // Exec replaced the image; never restore bytes into the new mappings.
+  debug::Status Reinstall() { return Update(); }
+  debug::Status RestoreMemory() { return Uninstall(); }
+  void ForgetMemory() { installed_ = false; suspend_tokens_.clear(); }
+  void SuspendNewThread(DebuggedThread* thread);
+
   const DebuggedThread* currently_stepping_over_thread() const {
     return currently_stepping_over_thread_.get();
   }
@@ -61,7 +67,7 @@ class SoftwareBreakpoint : public ProcessBreakpoint {
 
   // As stepping over are queued, only one thread should be left running at a time. This makes the
   // breakpoint get a suspend token for each other thread within the system.
-  void SuspendAllOtherThreads(zx_koid_t stepping_over_koid);
+  bool SuspendAllOtherThreads(zx_koid_t stepping_over_koid);
 
   // Set to true when the instruction has been replaced.
   bool installed_ = false;

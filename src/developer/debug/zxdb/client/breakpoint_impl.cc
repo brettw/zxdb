@@ -199,6 +199,20 @@ void BreakpointImpl::WillDestroyProcess(Process* process, ProcessObserver::Destr
     SyncBackend();
 }
 
+void BreakpointImpl::DidExec(Process* process) {
+  // The same PID and addresses may now name entirely different instructions.
+  // Remove old resolutions before DidLoadModuleSymbols resolves the new image.
+  auto found = procs_.find(process);
+  if (found == procs_.end())
+    return;
+  bool send_update = found->second.HasEnabledLocation();
+  procs_.erase(found);
+  if (AllLocationsAddresses())
+    settings_.enabled = false;
+  if (send_update)
+    SyncBackend();
+}
+
 void BreakpointImpl::DidLoadModuleSymbols(Process* process, LoadedModuleSymbols* module) {
   if (!CouldApplyToProcess(process))
     return;  // Irrelevant process.

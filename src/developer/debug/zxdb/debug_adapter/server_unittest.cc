@@ -48,6 +48,18 @@ constexpr uint16_t kServerPort = 15678;
 
 namespace zxdb {
 
+class ThreadCheckingConsole : public MockConsole {
+ public:
+  explicit ThreadCheckingConsole(Session* session)
+      : MockConsole(session), owner_(std::this_thread::get_id()) {}
+  void Write(const OutputBuffer& output, bool add_newline) override {
+    ASSERT_EQ(owner_, std::this_thread::get_id());
+    MockConsole::Write(output, add_newline);
+  }
+ private:
+  std::thread::id owner_;
+};
+
 class DebugAdapterServerTest : public TestWithLoop, public DebugAdapterServerObserver {
  public:
   DebugAdapterServerTest() : console_(&session_), server_(&console_, kServerPort) {
@@ -63,7 +75,7 @@ class DebugAdapterServerTest : public TestWithLoop, public DebugAdapterServerObs
 
  private:
   Session session_;
-  MockConsole console_;
+  ThreadCheckingConsole console_;
   DebugAdapterServer server_;
 };
 

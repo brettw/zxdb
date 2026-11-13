@@ -300,7 +300,11 @@ void DebugAgent::OnKill(const debug_ipc::KillRequest& request, debug_ipc::KillRe
     reply->status = debug::Status();
   }
 
-  RemoveDebuggedProcess(request.process_koid);
+#if !defined(__linux__)
+  if (reply->status.ok())
+    RemoveDebuggedProcess(request.process_koid);
+#endif
+  // Linux retains ownership until the final wait status has been reaped.
 }
 
 void DebugAgent::OnDetach(const debug_ipc::DetachRequest& request, debug_ipc::DetachReply* reply) {
@@ -315,8 +319,9 @@ void DebugAgent::OnDetach(const debug_ipc::DetachRequest& request, debug_ipc::De
 
   auto debug_process = GetDebuggedProcess(request.koid);
   if (debug_process) {
-    RemoveDebuggedProcess(request.koid);
-    reply->status = debug::Status();
+    reply->status = debug_process->DetachFromProcess();
+    if (reply->status.ok())
+      RemoveDebuggedProcess(request.koid);
     return;
   }
 
@@ -432,6 +437,8 @@ void DebugAgent::OnWriteRegisters(const debug_ipc::WriteRegistersRequest& reques
   if (thread) {
     reply->status = debug::Status();
     reply->registers = thread->WriteRegisters(request.registers);
+    if (!request.registers.empty() && reply->registers.empty())
+      reply->status = debug::Status("Register write failed or requested register is unsupported.");
   } else {
     reply->status = debug::Status("Can not find thread " + std::to_string(request.id.thread) +
                                   " to write registers.");
@@ -1059,6 +1066,15 @@ void DebugAgent::LaunchProcess(const debug_ipc::RunBinaryRequest& request,
   // Success, fill out the reply.
   reply->process_id = new_process->koid();
   reply->process_name = new_process->process_handle().GetName();
+#if defined(__linux__)
+  debug::MessageLoop::Current()->PostTask(FROM_HERE,
+      [weak = GetWeakPtr(), pid = reply->process_id]() {
+        if (weak) {
+          if (auto process = weak->GetDebuggedProcess(pid))
+            process->PopulateCurrentThreads();
+        }
+      });
+#endif
 }
 
 void DebugAgent::OnProcessChanged(ProcessChangedHow how,

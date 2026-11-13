@@ -5,9 +5,13 @@
 #include "src/developer/debug/debug_agent/linux_task.h"
 
 #include <fcntl.h>
+#include <chrono>
+#include <thread>
 #include <lib/syslog/cpp/macros.h>
 #include <signal.h>
 #include <sys/ptrace.h>
+#include <sys/syscall.h>
+#include <sched.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <zircon/errors.h>
@@ -26,7 +30,7 @@ namespace debug_agent {
 namespace {
 
 const long kPtraceOpts = PTRACE_O_TRACEEXIT | PTRACE_O_TRACECLONE | PTRACE_O_TRACEEXEC |
-                         PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK;
+                         PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | PTRACE_O_TRACEVFORKDONE | PTRACE_O_EXITKILL;
 
 // Checks if the given status code from waitpid() is the given ptrace event.
 bool IsPtraceEvent(int status, int ptrace_event_type) {
@@ -35,19 +39,11 @@ bool IsPtraceEvent(int status, int ptrace_event_type) {
 
 // Returns true for all messages that can be used with PTRACE_GETEVENTMSG.
 bool HasEventMessage(int status) {
-  return IsPtraceEvent(status, PTRACE_EVENT_CLONE) || IsPtraceEvent(status, PTRACE_EVENT_EXIT) ||
+  return IsPtraceEvent(status, PTRACE_EVENT_EXEC) || IsPtraceEvent(status, PTRACE_EVENT_CLONE) || IsPtraceEvent(status, PTRACE_EVENT_EXIT) ||
          IsPtraceEvent(status, PTRACE_EVENT_FORK) || IsPtraceEvent(status, PTRACE_EVENT_SECCOMP) ||
          IsPtraceEvent(status, PTRACE_EVENT_VFORK) ||
          IsPtraceEvent(status, PTRACE_EVENT_VFORK_DONE);
 }
-
-// Calls the tkill() syscall which has no library wrapper.
-//
-// Note: tgkill() is supposed to be better than tkill() to avoid shutdown races, but since we're
-// attached to the PID, it shouldn't be recycled which will prevent this race. Calling tgkill
-// requires that we know the main thread's ID which we don't currently know from the task. So
-// we use tkill().
-int tkill(int tid, int signo) { return syscall(__NR_tkill, tid, signo); }
 
 // Debugging aid for waitpid status values.
 std::string WaitpidStatusToString(int status) {
@@ -88,35 +84,48 @@ debug::Status LinuxTask::Attach() {
   DEBUG_LOG(Process) << "Attaching to " << pid_;
   if (ptrace(PTRACE_SEIZE, pid_, nullptr, (void*)kPtraceOpts) == -1) {
     DEBUG_LOG(Process) << "PTRACE_SEIZE failed for PID " << pid_ << " errno = " << errno;
-    return debug::ErrnoStatus(errno);
+    int error = errno;
+    // A worker created during attachment may already have been traced by a
+    // parent's CLONE option. Adopt it only when this tracer owns it.
+    if (error != EPERM || linux::GetStatus(pid_)["TracerPid"] != std::to_string(getpid()))
+      return debug::ErrnoStatus(error);
+    initial_stop_pending_ = true;
   }
 
   is_attached_ = true;
+  seized_ = true;
+  ++generation_;
   return debug::Status();
 }
 
-void LinuxTask::Detach() {
+debug::Status LinuxTask::Detach() {
   if (!is_attached_)
-    return;
+    return debug::Status();
 
-  // Linux processes can only be detached during a ptrace-stop so suspend.
   IncrementSuspendCount();
-  if (ptrace(PTRACE_DETACH, pid_, nullptr, nullptr) == -1) {
-    DEBUG_LOG(Process) << "PTRACE_DETACH failed for PID " << pid_ << " errno = " << errno;
+  if (!is_suspended()) {
+    DecrementSuspendCount();
+    return last_error_;
+  }
+  if (ptrace(PTRACE_DETACH, pid_, nullptr,
+             reinterpret_cast<void*>(static_cast<intptr_t>(resume_signal_))) == -1) {
+    last_error_ = debug::ErrnoStatus(errno, "Could not detach task.");
+    --suspend_count_;
+    return last_error_;
   }
   is_attached_ = false;
+  stopped_ = false;
+  unsupported_shared_clone_ = false;
+  unsupported_abi_ = false;
+  ++generation_;
+  process_watch_handle_.StopWatching();
   DecrementSuspendCount();
+  return debug::Status();
 }
 
 void LinuxTask::SetObserver(LinuxTaskObserver* observer) {
   if (observer && !observer_) {
     // Installing observer.
-    if (is_attached_) {
-      if (ptrace(PTRACE_SETOPTIONS, pid_, nullptr, (void*)kPtraceOpts) == -1) {
-        DEBUG_LOG(Process) << "PTRACE_SETOPTIONS failed for PID " << pid_ << " errno = " << errno;
-      }
-    }
-
     debug::MessageLoopLinux* loop = debug::MessageLoopLinux::Current();
     process_watch_handle_ =
         loop->WatchChildSignals(pid_, [this](int pid, int status) { OnPidReady(pid, status); });
@@ -124,12 +133,23 @@ void LinuxTask::SetObserver(LinuxTaskObserver* observer) {
     // Uninstalling observer.
     process_watch_handle_.StopWatching();
   }
+  if (observer_ != observer)
+    ++generation_;
   observer_ = observer;
 }
 
-void LinuxTask::OnPidReady(int pid, int status) { DispatchEvent(MakeSignalRecord(pid, status)); }
+void LinuxTask::OnPidReady(int pid, int status) {
+  // Notifications can delete the process and its last task reference.
+  auto keep_alive = fxl::RefPtr<LinuxTask>(this);
+  if (is_attached_ && observer_)
+    DispatchEvent(MakeSignalRecord(pid, status));
+}
 
 void LinuxTask::DispatchEvent(const SignalRecord& record) {
+  if (!is_attached_ || !observer_)
+    return;
+  if (WIFSTOPPED(record.status))
+    stopped_ = true;
   if (IsPtraceEvent(record.status, PTRACE_EVENT_EXEC)) {
     OnExec(record);
   } else if (IsPtraceEvent(record.status, PTRACE_EVENT_CLONE)) {
@@ -140,13 +160,25 @@ void LinuxTask::DispatchEvent(const SignalRecord& record) {
     OnVFork(record);
   } else if (IsPtraceEvent(record.status, PTRACE_EVENT_EXIT)) {
     OnExit(record);
-  } else if (WIFEXITED(record.status)) {
-    DEBUG_LOG(Thread) << WaitpidStatusToString(record.status);
-    // TODO(brettw) I'm not sure how this differs from PTRACE_EVENT_EXIT. It seems to get sent
-    // when we attach to a process and if we treat this as an exit and call OnExit() we'll detach
-    // early.
-  } else if (WIFSIGNALED(record.status)) {
-    OnSignaled(record);
+  } else if (IsPtraceEvent(record.status, PTRACE_EVENT_VFORK_DONE)) {
+    Resume();
+  } else if (WIFEXITED(record.status) || WIFSIGNALED(record.status)) {
+    terminated_ = true;
+    exiting_ = true;
+    stopped_ = false;
+    is_attached_ = false;
+    ++generation_;
+    process_watch_handle_.StopWatching();
+    exit_code_ = WIFEXITED(record.status) ? WEXITSTATUS(record.status)
+                                        : 128 + WTERMSIG(record.status);
+    ++suspend_count_;
+    if (vfork_parent_) {
+      --suspend_count_;
+      CompleteVfork(false);
+      return;
+    }
+    observer_->OnExited(this, std::make_unique<LinuxExceptionHandle>(
+        debug_ipc::ExceptionType::kThreadExiting, fxl::RefPtr<LinuxTask>(this)));
   } else if (WIFSTOPPED(record.status)) {
     OnStopped(record);
   } else if (WIFCONTINUED(record.status)) {
@@ -159,88 +191,127 @@ void LinuxTask::DispatchEvent(const SignalRecord& record) {
 }
 
 void LinuxTask::OnExec(const SignalRecord& record) {
-  DEBUG_LOG(Thread) << "LinuxTask::OnExec PID=" << record.pid;
-
-  suspend_count_++;
-  observer_->OnStopSignal(
-      this, std::make_unique<LinuxExceptionHandle>(fxl::RefPtr<LinuxTask>(this), siginfo_t()));
-}
-
-void LinuxTask::OnClone(const SignalRecord& record) {
-  // This is the Linux equivalent of "new thread." The new PID is stored in the event message.
-  if (record.event_msg) {
-    // Account for the implicit stop during processing, the suspend handle will own the suspension.
-    suspend_count_++;
-    LinuxSuspendHandle sus(fxl::RefPtr<LinuxTask>(this), LinuxSuspendHandle::AlreadySuspended());
-
-    int new_pid = static_cast<int>(*record.event_msg);
-    DEBUG_LOG(Thread) << "LinuxTask::OnClone new PID=" << new_pid;
-    FX_DCHECK(pid_ != new_pid);  // Expecting a different PID for the new thread.
-
-    auto new_task = fxl::MakeRefCounted<LinuxTask>(new_pid, true);
-    new_task->suspend_count_++;  // Account for the count the LinuxExceptionHandle will take.
-    observer_->OnThreadStarting(std::make_unique<LinuxExceptionHandle>(
-        debug_ipc::ExceptionType::kThreadStarting, std::move(new_task)));
-
-    // The current thread will also be suspended. The suspend handle going out of scope will
-    // resume it.
-    DEBUG_LOG(Thread) << "Resuming cloning source thread.";
-  } else {
-    DEBUG_LOG(Thread) << "LinuxTask::OnClone: GetEventMsg failed.";
+  unsupported_abi_ = !linux::ReadGeneralRegisters(pid_).has_value();
+  if (unsupported_abi_)
+    LOGS(Error) << "Exec did not provide native x86-64 registers; detach to release the unsupported image.";
+  exiting_ = false;
+  single_step_ = false;
+  stop_pending_ = false;
+  group_stopped_ = false;
+  resume_signal_ = 0;
+  ++generation_;
+  ++suspend_count_;
+  LinuxSuspendHandle stop(fxl::RefPtr<LinuxTask>(this), LinuxSuspendHandle::AlreadySuspended());
+  if (vfork_parent_) {
+    CompleteVfork(true);
+    return;
   }
+  observer_->OnExec(this, record.event_msg ? static_cast<int>(*record.event_msg) : pid_);
 }
 
-void LinuxTask::OnFork(const SignalRecord& record) {
-  if (record.event_msg) {
-    // Account for the implicit stop during processing, the suspend handle will own the suspension.
-    suspend_count_++;
-    LinuxSuspendHandle sus(fxl::RefPtr<LinuxTask>(this), LinuxSuspendHandle::AlreadySuspended());
+void LinuxTask::OnClone(const SignalRecord& record) { OnChild(record); }
 
-    int new_pid = static_cast<int>(*record.event_msg);
-    DEBUG_LOG(Thread) << "LinuxTask::OnFork of PID=" << pid() << " new PID=" << new_pid
-                      << " suspend count = " << suspend_count_;
-    FX_DCHECK(pid_ != new_pid);  // Expecting a different PID for the new thread.
+void LinuxTask::OnFork(const SignalRecord& record) { OnChild(record); }
 
-    // We should already be attached to the new process.
-    auto new_task = fxl::MakeRefCounted<LinuxTask>(new_pid, true);
-    new_task->suspend_count_++;  // Account for the count the LinuxExceptionHandle will take.
-
-    observer_->OnProcessStarting(std::make_unique<LinuxExceptionHandle>(
-        debug_ipc::ExceptionType::kThreadStarting, std::move(new_task)));
-
-    // The current thread will also be suspended. The suspend handle going out of scope will
-    // resume it.
-    DEBUG_LOG(Thread) << "Resuming forking source thread for " << pid();
-  } else {
-    DEBUG_LOG(Thread) << "LinuxTask::OnFork GetEventMsg failed.";
+void LinuxTask::OnChild(const SignalRecord& record) {
+  if (!record.event_msg || *record.event_msg == 0) {
+    last_error_ = debug::Status("Could not collect ptrace child identity.");
+    LOGS(Error) << last_error_.message();
+    return;
   }
+  int child_pid = static_cast<int>(*record.event_msg);
+  if (observer_->HasTask(child_pid)) {
+    // Attach enumeration already collected and registered this kernel child.
+    if (suspend_count_ == 0)
+      Resume();
+    return;
+  }
+  auto child = fxl::MakeRefCounted<LinuxTask>(child_pid, true);
+  child->seized_ = seized_;
+  if (auto regs = linux::ReadGeneralRegisters(pid_)) {
+    unsigned long flags = 0;
+    if (regs->orig_rax == SYS_clone)
+      flags = regs->rdi;
+#ifdef SYS_clone3
+    else if (regs->orig_rax == SYS_clone3) {
+      errno = 0;
+      auto word = ptrace(PTRACE_PEEKDATA, pid_, regs->rdi, nullptr);
+      if (!errno)
+        flags = static_cast<unsigned long>(word);
+    }
+#endif
+    child->shared_vm_clone_ = (flags & CLONE_VM) && !(flags & CLONE_THREAD);
+  }
+  if (IsPtraceEvent(record.status, PTRACE_EVENT_VFORK))
+    child->vfork_parent_ = weak_factory_.GetWeakPtr();
+  pending_children_[child_pid] = child;
+  ++suspend_count_;
+  // Waiting by child PID preserves an early initial stop in the kernel. Registration
+  // also schedules a scan, so no second SIGCHLD is needed when the child stopped first.
+  child->process_watch_handle_ = debug::MessageLoopLinux::Current()->WatchChildSignals(
+      child_pid, [weak = weak_factory_.GetWeakPtr(), generation = generation_](int pid, int status) {
+        if (weak && weak->generation_ == generation && weak->observer_)
+          weak->CollectChild(pid, status);
+      });
 }
 
-void LinuxTask::OnVFork(const SignalRecord& record) {
-  DEBUG_LOG(Thread) << "LinuxTask::OnVFork UNIMPLEMENTED" << pid_;
-  // TODO(brettw) implement this.
+void LinuxTask::CollectChild(int pid, int status) {
+  auto keep_alive = fxl::RefPtr<LinuxTask>(this);
+  auto found = pending_children_.find(pid);
+  if (found == pending_children_.end())
+    return;
+  auto child = found->second;
+  child->process_watch_handle_.StopWatching();
+  pending_children_.erase(found);
+  if (WIFSTOPPED(status)) {
+    child->stopped_ = true;
+    ++child->suspend_count_;
+    auto exception = std::make_unique<LinuxExceptionHandle>(
+        debug_ipc::ExceptionType::kThreadStarting, child);
+    auto child_status = linux::GetStatus(pid);
+    auto parent_status = linux::GetStatus(pid_);
+    if (child->vfork_parent_) {
+      observer_->OnVforkStarting(std::move(exception));
+      return;  // Hold the parent's event token until the shared image is released.
+    }
+    if (!child_status["Tgid"].empty() && child_status["Tgid"] == parent_status["Tgid"])
+      observer_->OnThreadStarting(std::move(exception));
+    else if (child->shared_vm_clone_) {
+      unsupported_shared_clone_ = true;
+      observer_->OnUnsupportedClone(std::move(exception));
+      LOGS(Error) << "A non-thread CLONE_VM process is unsupported. Both tasks remain stopped; "
+                    "detach to release them safely.";
+      observer_->OnStopSignal(this, std::make_unique<LinuxExceptionHandle>(
+          fxl::RefPtr<LinuxTask>(this), siginfo_t{}));
+      return;
+    } else
+      observer_->OnProcessStarting(std::move(exception));
+  } else {
+    child->is_attached_ = false;
+    child->terminated_ = true;
+  }
+  DecrementSuspendCount();
+}
+
+void LinuxTask::OnVFork(const SignalRecord& record) { OnChild(record); }
+
+void LinuxTask::CompleteVfork(bool exec) {
+  auto parent = vfork_parent_;
+  vfork_parent_.reset();
+  if (parent && parent->observer_) {
+    parent->observer_->OnVforkFinished(fxl::RefPtr<LinuxTask>(this), exec);
+    if (parent)
+      parent->DecrementSuspendCount();
+  }
 }
 
 void LinuxTask::OnExit(const SignalRecord& record) {
-  DEBUG_LOG(Thread) << "LinuxTask::OnExit " << pid_;
-
-  // Tolerate failure since we need to send the exit notification even if ptrace fails.
-  unsigned long result_code = static_cast<unsigned long>(-1);
-  if (record.event_msg)
-    result_code = *record.event_msg;
-
+  // An exit event is a ptrace stop, not a final wait result. Resume it even when
+  // client tokens remain, and retain the watch until the kernel reports death.
   exiting_ = true;
-
-  DEBUG_LOG(Thread) << "  LinuxTask::OnFDReady TRACE EXIT, result=" << result_code;
-  int wait_status = static_cast<int>(result_code);
-  exit_code_ = WIFEXITED(wait_status) ? WEXITSTATUS(wait_status)
-                                    : (WIFSIGNALED(wait_status) ? 128 + WTERMSIG(wait_status) : -1);
-  suspend_count_++;  // Account for suspend count the LinuxException will take.
-
-  LinuxSuspendHandle sus(fxl::RefPtr<LinuxTask>(this));
-  observer_->OnExited(
-      this, std::make_unique<LinuxExceptionHandle>(debug_ipc::ExceptionType::kThreadExiting,
-                                                   fxl::RefPtr<LinuxTask>(this)));
+  single_step_ = false;
+  resume_signal_ = 0;
+  Resume();
 }
 
 void LinuxTask::OnSignaled(const SignalRecord& record) {
@@ -251,8 +322,40 @@ void LinuxTask::OnSignaled(const SignalRecord& record) {
 
 void LinuxTask::OnStopped(const SignalRecord& record) {
   DEBUG_LOG(Thread) << "  LinuxTask::OnFDReady " << pid_ << " STOPPED";
-  if (!record.siginfo)
-    return;  // This can happen when a process is killed.
+  if ((record.status >> 16) == PTRACE_EVENT_STOP) {
+    if (WSTOPSIG(record.status) == SIGTRAP) {
+      if (!stop_pending_)
+        group_stopped_ = false;  // SIGCONT woke a listening group stop.
+      stop_pending_ = false;
+      if (suspend_count_ == 0)
+        Resume();
+    } else {
+      group_stopped_ = true;
+      if (suspend_count_ == 0)
+        Resume();
+    }
+    return;
+  }
+  if (!record.siginfo) {
+    // GETSIGINFO reports EINVAL for a traditional group stop.
+    group_stopped_ = true;
+    return;
+  }
+  group_stopped_ = false;
+  if (record.siginfo->si_signo == SIGCHLD || record.siginfo->si_signo == SIGCONT ||
+      record.siginfo->si_signo == SIGWINCH) {
+    // Routine process and terminal notifications retain their native delivery.
+    resume_signal_ = record.siginfo->si_signo;
+    if (suspend_count_ == 0)
+      Resume();
+    return;
+  }
+  if (vfork_parent_) {
+    // The shared image runs without debugger traps until exec or exit.
+    resume_signal_ = record.siginfo->si_signo;
+    Resume();
+    return;
+  }
 
   DEBUG_LOG(Thread) << "Got stop signal " << record.siginfo->si_signo << " code "
                     << record.siginfo->si_code;
@@ -285,6 +388,8 @@ LinuxTask::SignalRecord LinuxTask::MakeSignalRecord(int pid, int status) {
     siginfo_t sig = {};
     if (ptrace(PTRACE_GETSIGINFO, pid, nullptr, &sig) != -1) {
       rec.siginfo = sig;
+      if ((status >> 16) == 0 && (sig.si_signo != SIGTRAP || sig.si_code <= 0))
+        resume_signal_ = sig.si_signo;
     }
   }
 
@@ -292,99 +397,97 @@ LinuxTask::SignalRecord LinuxTask::MakeSignalRecord(int pid, int status) {
 }
 
 void LinuxTask::IncrementSuspendCount() {
-  DEBUG_LOG(Thread) << "LinuxTask::IncrementSuspendCount of PID=" << pid() << " from "
-                    << suspend_count_;
-  suspend_count_++;
-  if (suspend_count_ > 1)
-    return;  // Already suspended, nothing to do.
-
-  // Check after adjusting the suspend reference counts so they balance even when unattached.
+  ++suspend_count_;
+  if (stopped_ || terminated_)
+    return;
   if (!is_attached_) {
-    DEBUG_LOG(Thread) << "Skipping pause due to not being attached.";
+    last_error_ = debug::Status("Cannot suspend an unattached task.");
     return;
   }
-  if (exiting_) {
-    DEBUG_LOG(Thread) << "Skipping pause due to exiting.";
-    return;
+  if (!stop_pending_ && !initial_stop_pending_) {
+    int result = ptrace(PTRACE_INTERRUPT, pid_, nullptr, nullptr);
+    if (result == -1) {
+      last_error_ = debug::ErrnoStatus(errno, "Could not request task stop.");
+      return;
+    }
+    stop_pending_ = true;
   }
 
-  // Suspend.
-  DEBUG_LOG(Thread) << "Sending SIGSTOP";
-  if (tkill(pid_, SIGSTOP) == -1) {
-    DEBUG_LOG(Thread) << "Sending SIGSTOP failed with errno = " << errno;
+  // Bound synchronous ptrace waits so an uninterruptible task cannot freeze the agent.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  int status = 0;
+  for (;;) {
+    int result = waitpid(pid_, &status, __WALL | __WNOTHREAD | WNOHANG);
+    if (result == pid_)
+      break;
+    if (result < 0 && errno != EINTR) {
+      last_error_ = debug::ErrnoStatus(errno, "Could not collect task stop.");
+      return;
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+      last_error_ = debug::Status("Timed out waiting for task stop.");
+      return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  auto record = MakeSignalRecord(pid_, status);
+  stopped_ = WIFSTOPPED(status);
+  bool our_stop = stopped_ && (initial_stop_pending_ ||
+      ((status >> 16) == PTRACE_EVENT_STOP && WSTOPSIG(status) == SIGTRAP));
+  initial_stop_pending_ = false;
+  if (our_stop) {
+    stop_pending_ = false;
+    last_error_ = debug::Status();
     return;
   }
+  if (!stopped_)
+    last_error_ = debug::Status("Task exited while waiting for suspension.");
 
-  // Synchronously wait for the stop reply. This is necessary because ptrace has a synchronous
-  // model. It will send a SIGSTOP ptrace event back to the message loop which we won't be able to
-  // differentiate from our own, and which will race with a continue call (PTRACE_CONT will have no
-  // effect until we've received the STOP signal).
-  int stop_status = 0;
-  if (waitpid(pid_, &stop_status, __WNOTHREAD) == -1) {
-    DEBUG_LOG(Thread) << "waitpid failed with errno = " << errno;
-    return;
-  }
-  DEBUG_LOG(Thread) << "waitpid " << WaitpidStatusToString(stop_status);
-
-  // Waiting for a ptrace event will itself race with other reasons the thread may stop and waitpid
-  // will report a stop here we would want to dispatch. This code attempts to filter out these
-  // cases.
-  //
-  // It's possible somebody else sent us a SIGSTOP at the exact time we're doing this and we never
-  // report that stop. That should be very uncommon as generally non-debugger code never uses
-  // SIGSTOP.
-  if (WIFSTOPPED(stop_status) && WSTOPSIG(stop_status) == SIGSTOP)
-    return;  // This is our SIGSTOP.
-
-  // Got a ptrace event for something else. We can't recursively handle that now without causing
-  // horrible reentrant bugs. So post that message back to the message loop.
-  //
-  // Take a suspend reference for the duration of this state to represent this stop so we don't try
-  // to resume the thread before that ptrace event is processed. Don't use a SuspendHandle because
-  // that will take a reference to |this|, and we might curretly be destructing this object.
-  DEBUG_LOG(Thread) << "Got a waitpid result for a different signal, re-posting";
-  SignalRecord wait_record = MakeSignalRecord(pid_, stop_status);
-  suspend_count_++;  // Take reference for the existing stop. Balanced in the callback.
-  debug::MessageLoopPoll::Current()->PostTask(
-      FROM_HERE, [weak_this = weak_factory_.GetWeakPtr(), wait_record]() {
-        DEBUG_LOG(Thread) << "Re-dispatching previous stop.";
-        if (weak_this)
-          weak_this->DispatchEvent(wait_record);
-        if (weak_this)                         // OnPidRead could have deleted us!
-          weak_this->DecrementSuspendCount();  // Balance the suspend_count_++ above.
+  // A competing stop must be delivered with the metadata captured at collection.
+  // Keep its token until replay, and invalidate replay on detach or observer replacement.
+  ++suspend_count_;
+  debug::MessageLoop::Current()->PostTask(
+      FROM_HERE, [weak = weak_factory_.GetWeakPtr(), generation = generation_, record]() {
+        if (!weak)
+          return;
+        auto keep_alive = fxl::RefPtr<LinuxTask>(weak.get());
+        if (weak->generation_ == generation && weak->observer_)
+          weak->DispatchEvent(record);
+        weak->DecrementSuspendCount();
       });
+}
 
-  // In this case the process is stopped, just not for the reason we expected. This is fine as it
-  // will be the same as taking a suspend handle on a thread in an exception.
+debug::Status LinuxTask::Resume() {
+  if (unsupported_abi_) {
+    last_error_ = debug::Status("Cannot resume an unsupported inferior ABI; detach first.");
+    return last_error_;
+  }
+  if (unsupported_shared_clone_) {
+    last_error_ = debug::Status("Cannot resume an unsupported shared-address-space clone; detach first.");
+    LOGS(Error) << last_error_.message();
+    return last_error_;
+  }
+  if (!is_attached_ || !stopped_ || terminated_)
+    return debug::Status();
+  auto request = group_stopped_ && seized_ ? PTRACE_LISTEN
+                                         : (single_step_ ? PTRACE_SINGLESTEP : PTRACE_CONT);
+  if (ptrace(request, pid_, nullptr,
+             reinterpret_cast<void*>(static_cast<intptr_t>(resume_signal_))) == -1) {
+    last_error_ = debug::ErrnoStatus(errno, "Could not resume task.");
+    LOGS(Error) << last_error_.message();
+    return last_error_;
+  }
+  stopped_ = false;
+  resume_signal_ = 0;
+  last_error_ = debug::Status();
+  return last_error_;
 }
 
 void LinuxTask::DecrementSuspendCount() {
-  DEBUG_LOG(Thread) << "LinuxTask::DecrementSuspendCount of PID=" << pid() << " from "
-                    << suspend_count_;
-
   FX_DCHECK(suspend_count_ > 0);
-  suspend_count_--;
-
-  if (exiting_) {
-    DEBUG_LOG(Thread) << "Skipping resume due to exiting.";
-    return;
-  }
-
-  if (suspend_count_ == 0 && is_attached_) {
-    // Resume.
-    if (single_step_) {
-      DEBUG_LOG(Thread) << "LinuxTask: Resuming single step";
-      if (ptrace(PTRACE_SINGLESTEP, pid_, 0, 0) == -1) {
-        DEBUG_LOG(Thread) << "PTRACE_SINGLESTEP failed with errno = " << errno;
-      }
-    } else {
-      DEBUG_LOG(Thread) << "LinuxTask: Resuming continue";
-      if (ptrace(PTRACE_CONT, pid_, 0, 0) == -1) {
-        DEBUG_LOG(Thread) << "PTRACE_CONT failed with errno = " << errno;
-      }
-    }
-  }
-  DEBUG_LOG(Thread);
+  --suspend_count_;
+  if (suspend_count_ == 0)
+    Resume();
 }
 
 }  // namespace debug_agent

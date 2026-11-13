@@ -36,9 +36,10 @@ class LinuxProcessHandle final : public ProcessHandle, public LinuxTaskObserver 
   int64_t GetReturnCode() const override { return task_->exit_code(); }
   debug::Status Attach(ProcessHandleObserver* observer, AttachConfig config) override;
   bool IsAttached() const override;
-  void Detach() override;
+  debug::Status Detach() override;
   uint64_t GetLoaderBreakpointAddress() override;
   std::vector<debug_ipc::AddressRegion> GetAddressSpace(uint64_t address) const override;
+  std::optional<bool> IsAddressMapped(uint64_t address) const override;
   std::optional<debug_ipc::AddressRegion> GetSharedAddressSpace() const override;
   std::vector<debug_ipc::Module> GetModules() const override;
   fit::result<debug::Status, std::vector<debug_ipc::InfoHandle>> GetHandles() const override;
@@ -61,6 +62,11 @@ class LinuxProcessHandle final : public ProcessHandle, public LinuxTaskObserver 
 
  private:
   // LinuxTaskObserver implementat.
+  void OnUnsupportedClone(std::unique_ptr<LinuxExceptionHandle> exception) override;
+  void OnVforkStarting(std::unique_ptr<LinuxExceptionHandle> exception) override;
+  void OnVforkFinished(fxl::RefPtr<LinuxTask> child, bool exec) override;
+  bool HasTask(int pid) const override { return tasks_.contains(pid); }
+  void OnExec(LinuxTask* task, int former_tid) override;
   void OnExited(LinuxTask* task, std::unique_ptr<LinuxExceptionHandle> exception) override;
   void OnProcessStarting(std::unique_ptr<LinuxExceptionHandle> exception) override;
   void OnThreadStarting(std::unique_ptr<LinuxExceptionHandle> exception) override;
@@ -69,6 +75,9 @@ class LinuxProcessHandle final : public ProcessHandle, public LinuxTaskObserver 
   void OnContinued(int pid) override;
 
   fxl::RefPtr<LinuxTask> task_;
+  std::map<int, fxl::RefPtr<LinuxTask>> tasks_;
+  std::map<int, fxl::RefPtr<LinuxTask>> vfork_children_;
+  std::map<int, std::unique_ptr<LinuxExceptionHandle>> unsupported_children_;
 
   ProcessHandleObserver* observer_ = nullptr;
 };

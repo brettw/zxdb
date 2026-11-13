@@ -949,7 +949,7 @@ void Session::DispatchNotifyException(const debug_ipc::NotifyException& notify, 
 void Session::DispatchNotifyModules(const debug_ipc::NotifyModules& notify) {
   ProcessImpl* process = system_.ProcessImplFromKoid(notify.process_koid);
   if (process) {
-    process->OnModules(std::move(notify.modules));
+    process->OnModules(std::move(notify.modules), notify.reset);
   } else {
     LOGS(Warn) << "Received modules notification for an unexpected process: "
                << notify.process_koid;

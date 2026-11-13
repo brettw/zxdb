@@ -116,6 +116,7 @@ class DebuggedThread {
   void SendThreadNotification() const;
 
   // Notification that a ProcessBreakpoint is about to be deleted.
+  void FinishStepOver();
   void WillDeleteProcessBreakpoint(ProcessBreakpoint* bp);
 
   bool in_exception() const { return !!exception_handle_; }

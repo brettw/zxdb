@@ -27,7 +27,7 @@ class ZirconProcessHandle final : public ProcessHandle, public debug::ZirconExce
   int64_t GetReturnCode() const override;
   debug::Status Attach(ProcessHandleObserver* observer, AttachConfig attach_config) override;
   bool IsAttached() const override;
-  void Detach() override;
+  debug::Status Detach() override;
   uint64_t GetLoaderBreakpointAddress() override;
   std::vector<debug_ipc::AddressRegion> GetAddressSpace(uint64_t address) const override;
   std::optional<debug_ipc::AddressRegion> GetSharedAddressSpace() const override;

@@ -1342,4 +1342,35 @@ TEST(Protocol, NotifyFilterCreatedWithVersion) {
   EXPECT_TRUE(serialized.empty());
 }
 
+
+TEST(Protocol, LinuxExceptionMetadataVersioning) {
+  NotifyException initial;
+  initial.exception.linux_signal = 11;
+  initial.exception.linux_code = 1;
+  initial.exception.linux_address = 0x1234;
+  initial.exception.linux_sender_pid = 42;
+  NotifyException current;
+  ASSERT_TRUE(SerializeDeserialize(initial, &current));
+  EXPECT_EQ(11, current.exception.linux_signal);
+  EXPECT_EQ(1, current.exception.linux_code);
+  EXPECT_EQ(0x1234u, current.exception.linux_address);
+  EXPECT_EQ(42, current.exception.linux_sender_pid);
+  NotifyException old;
+  ASSERT_TRUE(SerializeDeserialize(initial, &old, 78));
+  EXPECT_EQ(0, old.exception.linux_signal);
+  EXPECT_EQ(0u, old.exception.linux_address);
+}
+
+
+TEST(Protocol, ExecModuleResetVersioning) {
+  NotifyModules initial;
+  initial.reset = true;
+  NotifyModules current;
+  ASSERT_TRUE(SerializeDeserialize(initial, &current));
+  EXPECT_TRUE(current.reset);
+  NotifyModules old;
+  ASSERT_TRUE(SerializeDeserialize(initial, &old, 78));
+  EXPECT_FALSE(old.reset);
+}
+
 }  // namespace debug_ipc

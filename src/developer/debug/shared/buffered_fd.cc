@@ -39,6 +39,11 @@ bool BufferedFD::Stop() {
   return true;
 }
 
+void BufferedFD::DrainRead() {
+  if (IsValid())
+    OnFDReady(fd_.get(), true, false, false);
+}
+
 void BufferedFD::ResetInternal() {
   // The watch must be disabled before the socket is reset.
   watch_handle_.StopWatching();
@@ -99,7 +104,7 @@ void BufferedFD::OnFDReady(int fd, bool readable, bool writable, bool err) {
       // data so this pipe doesn't starve the entire app.
     }
 
-    if (callback())
+    if (callback() && stream().IsAvailable(1))
       callback()();
   }
 

@@ -94,6 +94,8 @@ Callers and implementations must preserve these invariants:
 - The active target in `ConsoleContext` always exists outside setup and
   teardown, whereas the active thread, breakpoint, tracepoint, filter, and
   symbol server may be null or `0`.
+- Linux exception records display signal number, code, and fault address or
+  sender PID without interpreting those fields as architecture exception data.
 - `GetNouns()` and `GetVerbs()` return static maps that never change after
   initialization.
 

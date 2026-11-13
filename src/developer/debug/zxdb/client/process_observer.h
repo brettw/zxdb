@@ -26,6 +26,9 @@ class ProcessObserver {
   // Called after a process is created.
   virtual void DidCreateProcess(Process* process, uint64_t timestamp) {}
 
+  // Called after exec replaces the image, before the new module symbols load.
+  virtual void DidExec(Process* process) {}
+
   // Called after detaching from or destroying a process. The Process object will still exist on the
   // Target but the Target will report |state == kNone|.
   //

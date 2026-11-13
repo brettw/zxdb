@@ -5,18 +5,34 @@
 #include "src/developer/debug/debug_agent/linux_exception_handle.h"
 
 #include <string.h>
+#include <sys/ptrace.h>
 #include <zircon/errors.h>
 
 #include "src/developer/debug/debug_agent/linux_arch.h"
 #include "src/developer/debug/debug_agent/linux_task.h"
 #include "src/developer/debug/debug_agent/linux_thread_handle.h"
+#include "src/developer/debug/debug_agent/linux_utils.h"
 
 namespace debug_agent {
 
 LinuxExceptionHandle::LinuxExceptionHandle(fxl::RefPtr<LinuxTask> task, const siginfo_t& info)
     : task_(std::move(task)),
       type_(arch::DecodeExceptionType(info.si_signo, info.si_code)),
-      info_(info) {}
+      info_(info) {
+  // TRAP_BRKPT can also be a program's ICEBP; only a pending debugger step
+  // authorizes interpreting it as step completion.
+  if (info.si_signo == SIGTRAP &&
+      (info.si_code == TRAP_BRKPT || info.si_code == TRAP_TRACE) && !task_->single_step())
+    type_ = debug_ipc::ExceptionType::kGeneral;
+  if (info.si_signo == SIGTRAP && info.si_code == TRAP_BRKPT) {
+    if (auto regs = linux::ReadGeneralRegisters(task_->pid()); regs && regs->rip) {
+      errno = 0;
+      long instruction = ptrace(PTRACE_PEEKTEXT, task_->pid(), regs->rip - 1, nullptr);
+      if (!errno && (instruction & 0xff) == 0xf1)
+        type_ = debug_ipc::ExceptionType::kGeneral;
+    }
+  }
+}
 
 // This contructor creates thread start/exit exceptions. There is no siginfo_t since it doesn't
 // correspond to a real Linux exception.
@@ -32,7 +48,8 @@ LinuxExceptionHandle::LinuxExceptionHandle(debug_ipc::ExceptionType type,
 }
 
 LinuxExceptionHandle::~LinuxExceptionHandle() {
-  // Resume the thread.
+  if (info_.si_signo)
+    task_->set_resume_signal(resolution_ == Resolution::kTryNext ? info_.si_signo : 0);
   task_->DecrementSuspendCount();
 }
 
@@ -51,12 +68,11 @@ debug_ipc::ExceptionType LinuxExceptionHandle::GetType(const ThreadHandle& threa
 
 fit::result<debug::Status, ExceptionHandle::Resolution> LinuxExceptionHandle::GetResolution()
     const {
-  // TODO(brettw) implement exception forwarding on Linux.
-  return fit::error(debug::Status("Unimplemented on Linux"));
+  return fit::success(resolution_);
 }
 
-debug::Status LinuxExceptionHandle::SetResolution(Resolution) {
-  // TODO(brettw) implement exception forwarding on Linux.
+debug::Status LinuxExceptionHandle::SetResolution(Resolution resolution) {
+  resolution_ = resolution;
   return debug::Status();
 }
 
@@ -65,19 +81,29 @@ fit::result<debug::Status, debug_ipc::ExceptionStrategy> LinuxExceptionHandle::G
 }
 
 debug::Status LinuxExceptionHandle::SetStrategy(debug_ipc::ExceptionStrategy strategy) {
-  return debug::Status("Linux does not support exception strategies.");
+  if (strategy != debug_ipc::ExceptionStrategy::kSecondChance)
+    return debug::Status("Unsupported Linux exception strategy.");
+  resolution_ = Resolution::kTryNext;
+  return debug::Status();
 }
 
 debug_ipc::ExceptionRecord LinuxExceptionHandle::GetRecord() const {
-  // TODO(brettw) implement this.
-  return debug_ipc::ExceptionRecord();
+  debug_ipc::ExceptionRecord record;
+  record.strategy = debug_ipc::ExceptionStrategy::kFirstChance;
+  record.linux_signal = info_.si_signo;
+  record.linux_code = info_.si_code;
+  if (info_.si_code <= 0)
+    record.linux_sender_pid = info_.si_pid;
+  else if (info_.si_signo == SIGSEGV || info_.si_signo == SIGBUS ||
+           info_.si_signo == SIGILL || info_.si_signo == SIGFPE || info_.si_signo == SIGTRAP)
+    record.linux_address = reinterpret_cast<uint64_t>(info_.si_addr);
+  return record;
 }
 
 uint64_t LinuxExceptionHandle::GetPid() const {
-  // Processes and threads are difficult to distinguish on Linux, since exceptions happen on threads
-  // we don't return any information here since the LinuxTask we have should be corresponding to the
-  // thread the exception occurred on.
-  return 0;
+  auto status = linux::GetStatus(task_->pid());
+  auto found = status.find("Tgid");
+  return found == status.end() ? 0 : strtoull(found->second.c_str(), nullptr, 10);
 }
 
 uint64_t LinuxExceptionHandle::GetTid() const { return task_->pid(); }

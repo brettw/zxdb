@@ -16,7 +16,7 @@ class LinuxBinaryLauncher : public BinaryLauncher {
   // Preserve ignored SIGPIPE inherited by the frontend, not its own ignored setting.
   explicit LinuxBinaryLauncher(bool inherited_sigpipe_ignored = false)
       : inherited_sigpipe_ignored_(inherited_sigpipe_ignored) {}
-  ~LinuxBinaryLauncher() override = default;
+  ~LinuxBinaryLauncher() override;
 
   // BinaryLauncher implementation:
   debug::Status Setup(const std::vector<std::string>& argv) override;

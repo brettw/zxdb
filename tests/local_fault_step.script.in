@@ -1,0 +1,12 @@
+[zxdb] set console-mode = shell
+[zxdb] status
+Connected to
+[zxdb] break FaultFirst
+Created Breakpoint
+[zxdb] run @CMAKE_CURRENT_BINARY_DIR@/linux_lifecycle_inferior fault-step
+on bp 1
+[zxdb] stepi
+Linux signal 4
+[zxdb] continue --forward
+Process 1 exited with code 7.
+[zxdb] quit

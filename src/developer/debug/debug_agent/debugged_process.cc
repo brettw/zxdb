@@ -91,11 +91,32 @@ DebuggedProcess::DebuggedProcess(DebugAgent* debug_agent) : debug_agent_(debug_a
 
 DebuggedProcess::~DebuggedProcess() {
   if (process_handle_) {
-    DetachFromProcess();
+    if (auto status = DetachFromProcess(); status.has_error()) {
+      LOGS(Error) << "Cannot safely release process: " << status.message();
+      process_handle_->Kill();
+    }
   }
 }
 
-void DebuggedProcess::DetachFromProcess() {
+debug::Status DebuggedProcess::DetachFromProcess() {
+  if (!process_handle_->IsAttached())
+    return debug::Status();
+#if defined(__linux__)
+  std::vector<std::unique_ptr<SuspendHandle>> stops;
+  for (auto& [tid, thread] : threads_) {
+    if (thread->thread_handle().GetState().state == debug_ipc::ThreadRecord::State::kDead)
+      continue;
+    stops.push_back(thread->InternalSuspend(true));
+    if (!thread->thread_handle().WaitForSuspension(DebuggedThread::DefaultSuspendDeadline()))
+      return debug::Status("Cannot stop all threads for detach.");
+  }
+  for (auto& [address, breakpoint] : software_breakpoints_) {
+    if (auto status = breakpoint->RestoreMemory(); status.has_error()) {
+      ClientSuspendAllThreads();
+      return status;
+    }
+  }
+#endif
   DEBUG_LOG(Process) << LogPreamble(this) << "DetachFromProcess";
 
   // 1. Remove installed software breakpoints. We need to tell each thread that this will happen.
@@ -122,14 +143,16 @@ void DebuggedProcess::DetachFromProcess() {
   hardware_breakpoints_.clear();
   watchpoints_.clear();
 
+#if !defined(__linux__)
   // 2. Resume threads. Technically a 0'ed request would work, but being explicit is future-proof.
   debug_ipc::ResumeRequest resume_request = {};
   resume_request.how = debug_ipc::ResumeRequest::How::kResolveAndContinue;
   resume_request.ids.push_back({.process = koid(), .thread = 0});
   OnResume(resume_request);
+#endif
 
   // 3. Unbind from notifications (this will detach from the process).
-  process_handle_->Detach();
+  return process_handle_->Detach();
 }
 
 debug::Status DebuggedProcess::Init(DebuggedProcessCreateInfo create_info) {
@@ -176,8 +199,6 @@ debug::Status DebuggedProcess::Init(DebuggedProcessCreateInfo create_info) {
     DEBUG_LOG(Process) << LogPreamble(this) << "Can't get ld.so debug address.";
   }
 
-  // Linux doesn't give thread notifications for the initial thread, so grab it now.
-  PopulateCurrentThreads();
 #endif
 
   return debug::Status();
@@ -198,6 +219,16 @@ bool DebuggedProcess::IsAttached() const {
 }
 
 void DebuggedProcess::OnResume(const debug_ipc::ResumeRequest& request) {
+  if (!vfork_stops_.empty())
+    return;
+  for (auto& [address, breakpoint] : software_breakpoints_) {
+    if (!breakpoint->currently_stepping_over_thread()) {
+      if (auto status = breakpoint->Reinstall(); status.has_error()) {
+        LOGS(Error) << "Cannot resume until breakpoint memory is restored: " << status.message();
+        return;
+      }
+    }
+  }
   if (request.ids.empty()) {
     // Empty thread ID list means resume all threads.
     suspend_new_threads_ = false;
@@ -209,9 +240,9 @@ void DebuggedProcess::OnResume(const debug_ipc::ResumeRequest& request) {
         // The request may contain resume requests for more than one process.
         continue;
       }
-      suspend_new_threads_ = false;
       if (!id.thread) {
         // A 0 thread koid will resume all threads of the given process.
+        suspend_new_threads_ = false;
         for (auto& [thread_koid, thread] : threads_) {
           thread->ClientResume(request);
         }
@@ -324,6 +355,8 @@ void DebuggedProcess::SuspendAndSendModules() {
   debug_ipc::NotifyModules notify;
   notify.process_koid = koid();
   notify.modules = module_list_.modules();
+  notify.reset = reset_modules_;
+  reset_modules_ = false;
   notify.timestamp = GetNowTimestamp();
 
   DEBUG_LOG(Process) << LogPreamble(this) << "Sending " << notify.modules.size() << " modules.";
@@ -500,8 +533,80 @@ void DebuggedProcess::OnBreakpointFinishedSteppingOver() {
   }
 }
 
+debug::Status DebuggedProcess::OnVfork(bool starting) {
+  if (starting) {
+    for (auto& [tid, thread] : threads_) {
+      vfork_stops_.push_back(thread->InternalSuspend(true));
+      if (!thread->thread_handle().WaitForSuspension(DebuggedThread::DefaultSuspendDeadline()))
+        return debug::Status("Could not stop vfork parent threads.");
+    }
+    for (auto& [address, breakpoint] : software_breakpoints_) {
+      if (!breakpoint->Installed(0))
+        continue;
+      vfork_breakpoints_.push_back(breakpoint->GetWeakPtr());
+      if (auto status = breakpoint->RestoreMemory(); status.has_error())
+        return status;
+    }
+  } else {
+    for (auto& breakpoint : vfork_breakpoints_) {
+      if (breakpoint) {
+        auto status = static_cast<SoftwareBreakpoint*>(breakpoint.get())->Reinstall();
+        if (status.has_error()) {
+          ClientSuspendAllThreads();
+          return status;
+        }
+      }
+    }
+    vfork_breakpoints_.clear();
+    vfork_stops_.clear();
+  }
+  return debug::Status();
+}
+
+void DebuggedProcess::OnExec() {
+  // The kernel has already removed the old mappings and sibling threads.
+  // Discard trap bytes before destroying any breakpoint objects.
+  for (auto& [address, breakpoint] : software_breakpoints_)
+    breakpoint->ForgetMemory();
+  step_over_queue_.clear();
+  for (auto& [tid, thread] : threads_) {
+    debug_ipc::NotifyThreadExiting notify;
+    notify.record.id = {.process = koid(), .thread = tid};
+    notify.record.state = debug_ipc::ThreadRecord::State::kDead;
+    notify.timestamp = GetNowTimestamp();
+    debug_agent_->SendNotification(notify);
+  }
+  threads_.clear();
+#if defined(__linux__)
+  loader_breakpoint_.reset();
+#endif
+  software_breakpoints_.clear();
+  hardware_breakpoints_.clear();
+  watchpoints_.clear();
+  module_list_ = ModuleList();
+  reset_modules_ = true;
+#if defined(__linux__)
+  dl_debug_addr_ = linux::GetLdSoDebugAddress(koid());
+  if (uint64_t address = linux::GetLdSoBreakpointAddress(koid())) {
+    loader_breakpoint_ = std::make_unique<Breakpoint>(debug_agent_, true);
+    auto status = loader_breakpoint_->SetSettings("Internal shared library load breakpoint", koid(), address);
+    if (status.has_error())
+      LOGS(Warn) << status.message();
+  }
+#endif
+  PopulateCurrentThreads();
+  module_list_.Update(process_handle());
+  SuspendAndSendModules();
+}
+
 void DebuggedProcess::OnProcessTerminated() {
   DEBUG_LOG(Process) << LogPreamble(this) << "Terminating.";
+#if defined(__linux__)
+  if (stdout_)
+    stdout_->DrainRead();
+  if (stderr_)
+    stderr_->DrainRead();
+#endif
   debug_ipc::NotifyProcessExiting notify;
   notify.process_koid = koid();
   notify.return_code = process_handle_->GetReturnCode();
@@ -535,6 +640,11 @@ void DebuggedProcess::OnThreadStarting(std::unique_ptr<ExceptionHandle> exceptio
     new_thread->ClientSuspend(true);
   }
 
+  if (!vfork_stops_.empty())
+    vfork_stops_.push_back(new_thread->InternalSuspend(true));
+  for (auto& [address, breakpoint] : software_breakpoints_)
+    breakpoint->SuspendNewThread(new_thread.get());
+
   // Notify the client.
   new_thread->SendThreadNotification();
 
@@ -549,6 +659,8 @@ void DebuggedProcess::OnThreadExiting(std::unique_ptr<ExceptionHandle> exception
   // Clean up our DebuggedThread object.
   auto found_thread = threads_.find(thread_id);
   if (found_thread != threads_.end()) {
+    found_thread->second->FinishStepOver();
+    PruneStepOverQueue(found_thread->second.get());
     threads_.erase(thread_id);
   }
 
@@ -587,7 +699,8 @@ void DebuggedProcess::OnException(std::unique_ptr<ExceptionHandle> exception) {
   thread->OnException(std::move(exception));
 }
 
-void DebuggedProcess::OnProcessStarting(std::unique_ptr<ProcessHandle> new_process_handle) {
+void DebuggedProcess::OnProcessStarting(std::unique_ptr<ProcessHandle> new_process_handle,
+                                        bool inherited_breakpoints) {
   // This is called only on Linux when we observe a fork. Fuchsia new processes are detected by
   // the job.
 #if defined(__linux__)
@@ -599,8 +712,14 @@ void DebuggedProcess::OnProcessStarting(std::unique_ptr<ProcessHandle> new_proce
   // back now).
   //
   // Either way, undo all software breakpoints in the new process that referred to our current one.
-  for (const auto& [addr, sw_bp] : software_breakpoints_) {
-    sw_bp->UninstallFromMemorySpace(*new_process_handle);
+  if (inherited_breakpoints) {
+    for (const auto& [addr, sw_bp] : software_breakpoints_) {
+      if (auto status = sw_bp->UninstallFromMemorySpace(*new_process_handle); status.has_error()) {
+        LOGS(Error) << "Cannot restore fork child instructions: " << status.message();
+        new_process_handle->Kill();
+        return;
+      }
+    }
   }
 
   debug_agent_->OnProcessChanged(DebugAgent::ProcessChangedHow::kStarting,

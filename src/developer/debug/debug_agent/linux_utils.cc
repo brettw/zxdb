@@ -8,6 +8,7 @@
 // clang-format on
 
 #include "src/developer/debug/debug_agent/linux_utils.h"
+#include "src/developer/debug/shared/logging/logging.h"
 
 #include <ctype.h>
 #include <cstring>
@@ -46,7 +47,10 @@ std::string ReadProcFile(int pid, const char* name) {
   std::string file_name = fxl::StringPrintf("/proc/%d/%s", pid, name);
 
   std::string result;
-  files::ReadFileToString(file_name, &result);
+  bool success = files::ReadFileToString(file_name, &result);
+  if (!success && errno != ENOENT && errno != ESRCH) {
+    DEBUG_LOG(Process) << "Cannot read " << file_name << ": " << strerror(errno);
+  }
   return result;
 }
 
@@ -94,7 +98,7 @@ zx_status_t WriteGeneralRegisters(int pid, const user_regs_struct& regs) {
   return ZX_OK;
 }
 
-std::vector<MapEntry> ParseMaps(const std::string& contents) {
+debug::Result<std::vector<MapEntry>, debug::Status> ParseMapsChecked(const std::string& contents) {
   std::vector<MapEntry> result;
 
   std::istringstream lines(contents);
@@ -108,7 +112,7 @@ std::vector<MapEntry> ParseMaps(const std::string& contents) {
     char hyphen = 0;
     in >> std::hex >> begin >> hyphen >> std::hex >> end;
     if (!in.good() || hyphen != '-' || end < begin)
-      return result;
+      return debug::Status("Malformed procfs mapping.");
     entry.range = debug::AddressRange(begin, end);
 
     // Flags.
@@ -117,7 +121,7 @@ std::vector<MapEntry> ParseMaps(const std::string& contents) {
     if (!in.good() || (r_bit != 'r' && r_bit != '-') ||
         (w_bit != 'w' && w_bit != '-') || (x_bit != 'x' && x_bit != '-') ||
         (s_bit != 's' && s_bit != 'p'))
-      return result;
+      return debug::Status("Malformed procfs mapping.");
     entry.read = r_bit == 'r';
     entry.write = w_bit == 'w';
     entry.execute = x_bit == 'x';
@@ -127,7 +131,7 @@ std::vector<MapEntry> ParseMaps(const std::string& contents) {
     in >> std::hex >> entry.offset >> entry.device >> std::dec >> entry.inode;
 
     if (in.fail())
-      return result;
+      return debug::Status("Malformed procfs mapping.");
 
     // Everything else to the end is the path (could be empty).
     while (in.good() && in.peek() == ' ')
@@ -139,7 +143,24 @@ std::vector<MapEntry> ParseMaps(const std::string& contents) {
   return result;
 }
 
-std::vector<MapEntry> GetMaps(int pid) { return ParseMaps(ReadProcFile(pid, "maps")); }
+std::vector<MapEntry> ParseMaps(const std::string& contents) {
+  return ParseMapsChecked(contents).take_value_or_empty();
+}
+
+debug::Result<std::vector<MapEntry>, debug::Status> GetMapsChecked(int pid) {
+  std::string contents;
+  if (!files::ReadFileToString(fxl::StringPrintf("/proc/%d/maps", pid), &contents))
+    return debug::ErrnoStatus(errno, "Cannot read process mappings.");
+  return ParseMapsChecked(contents);
+}
+
+std::vector<MapEntry> GetMaps(int pid) {
+  auto result = GetMapsChecked(pid);
+  if (result.has_error()) {
+    DEBUG_LOG(Process) << result.err().message();
+  }
+  return result.take_value_or_empty();
+}
 
 std::map<std::string, std::string> ParseStatus(const std::string& contents) {
   std::istringstream in(contents);
@@ -204,8 +225,13 @@ std::optional<LdSoInfo> GetLdSoInfo(int pid) {
     return std::nullopt;
 
   for (const MapEntry& entry : GetMaps(pid)) {
-    if (entry.range.begin() == load_addr)
-      return LdSoInfo{.load_address = load_addr, .path = entry.path};
+    if (entry.range.begin() == load_addr) {
+      auto path = fxl::StringPrintf("/proc/%d/map_files/%lx-%lx", pid,
+                                    entry.range.begin(), entry.range.end());
+      if (access(path.c_str(), R_OK) != 0)
+        path = fxl::StringPrintf("/proc/%d/root", pid) + entry.path;
+      return LdSoInfo{.load_address = load_addr, .path = std::move(path)};
+    }
   }
   return std::nullopt;
 }

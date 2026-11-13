@@ -1,0 +1,10 @@
+[zxdb] set console-mode = shell
+[zxdb] status
+Connected to
+[zxdb] break StepFirst
+Created Breakpoint
+[zxdb] run @CMAKE_CURRENT_BINARY_DIR@/linux_lifecycle_inferior vfork-exit
+on bp 1
+[zxdb] continue
+Process 1 exited with code 7.
+[zxdb] quit

@@ -1,0 +1,6 @@
+[zxdb] set console-mode = shell
+[zxdb] status
+Connected to
+[zxdb] run @CMAKE_CURRENT_BINARY_DIR@/linux_lifecycle_inferior @LIFECYCLE_MODE@
+Process 1 exited with code 7.
+[zxdb] quit

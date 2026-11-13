@@ -304,10 +304,22 @@ add_executable(debug_agent_tests
   ../debug_agent/aligned_chunk_unittest.cc
   ../debug_agent/elf_utils_unittest.cc
   ../debug_agent/linux_utils_unittest.cc
+  ../debug_agent/linux_task_unittest.cc
+  ../debug_agent/software_breakpoint_unittest.cc
+  ../debug_agent/mock_thread.cc
+  ../debug_agent/mock_process.cc
+  ../debug_agent/mock_process_handle.cc
+  ../debug_agent/mock_thread_handle.cc
+  ../debug_agent/mock_limbo_provider.cc
+  ../debug_agent/mock_job_handle.cc
+  ../debug_agent/mock_system_interface.cc
+  ../debug_agent/mock_component_manager.cc
   ../debug_agent/posix/file_descriptor_shuffle_unittest.cc
 )
 target_link_libraries(debug_agent_tests PRIVATE debug_agent debug_shared_test_support GTest::gtest_main GTest::gmock)
-gtest_discover_tests(debug_agent_tests DISCOVERY_TIMEOUT 30)
+target_compile_definitions(debug_agent_tests PRIVATE LINUX_LIFECYCLE_INFERIOR="$<TARGET_FILE:linux_lifecycle_inferior>")
+add_dependencies(debug_agent_tests linux_lifecycle_inferior)
+gtest_discover_tests(debug_agent_tests DISCOVERY_TIMEOUT 30 PROPERTIES TIMEOUT 15)
 
 if(LLVM_VERSION_MAJOR EQUAL 19)
   set_source_files_properties(symbols/test_symbol_module.cc PROPERTIES COMPILE_OPTIONS -std=c++20)

@@ -8,16 +8,24 @@
 #include <signal.h>
 
 #include <memory>
+#include "src/lib/fxl/memory/ref_ptr.h"
 
 namespace debug_agent {
 
 class LinuxExceptionHandle;
+class LinuxTask;
 
 // These callbacks correspond to the results of waitpid(). See that man page for more.
 class LinuxTaskObserver {
  public:
   // The "exit" message means a thread is exiting. On LInux, since threads and processes are
   // basically the same thing, this also indicates process exit when it's the main thread.
+  virtual void OnUnsupportedClone(std::unique_ptr<LinuxExceptionHandle> exception) = 0;
+  virtual void OnVforkStarting(std::unique_ptr<LinuxExceptionHandle> exception) = 0;
+  virtual void OnVforkFinished(fxl::RefPtr<LinuxTask> child, bool exec) = 0;
+  virtual bool HasTask(int pid) const = 0;
+  virtual void OnExec(LinuxTask* task, int former_tid) = 0;
+
   virtual void OnExited(LinuxTask* task, std::unique_ptr<LinuxExceptionHandle> exception) = 0;
 
   // Indicates a fork. The exception handle will refer to the *new* process.

@@ -35,7 +35,7 @@ namespace debug_ipc {
 // CURRENT_SUPPORTED_API_LEVEL is equal to the numbered API level currently represented by "NEXT".
 // If not, continue reading the comments below.
 
-constexpr uint32_t kCurrentProtocolVersion = 78;
+constexpr uint32_t kCurrentProtocolVersion = 79;
 
 // How to decide kMinimumProtocolVersion
 // -------------------------------------
@@ -804,8 +804,14 @@ struct NotifyModules {
   uint64_t timestamp = kTimestampDefault;
   uint64_t process_koid = 0;
   std::vector<Module> modules;
+  // Exec replaces the image even when module names and load addresses match.
+  bool reset = false;
 
-  void Serialize(Serializer& ser, uint32_t ver) { ser | timestamp | process_koid | modules; }
+  void Serialize(Serializer& ser, uint32_t ver) {
+    ser | timestamp | process_koid | modules;
+    if (ver >= 79)
+      ser | reset;
+  }
 };
 
 struct NotifyIO {
