@@ -1,6 +1,7 @@
 [zxdb] set console-mode = shell
 [zxdb] status
   Connected to
+No processes waiting on exception.
 [zxdb] break StandaloneCompute
 Created Breakpoint 1
 [zxdb] run @CMAKE_CURRENT_BINARY_DIR@/local_inferior

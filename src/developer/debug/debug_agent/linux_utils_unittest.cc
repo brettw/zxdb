@@ -5,6 +5,14 @@
 #include "src/developer/debug/debug_agent/linux_utils.h"
 
 #include <gtest/gtest.h>
+#include <lib/fit/defer.h>
+
+#include <sys/mman.h>
+#include <unistd.h>
+#include "src/developer/debug/debug_agent/linux_process_handle.h"
+#include "src/developer/debug/debug_agent/linux_task.h"
+#include "src/developer/debug/shared/message_loop_linux.h"
+
 
 namespace debug_agent {
 namespace linux {
@@ -116,4 +124,165 @@ nonvoluntary_ctxt_switches:     152
 }
 
 }  // namespace linux
+}  // namespace debug_agent
+
+namespace debug_agent::linux {
+TEST(LinuxUtils, AuxvBounds) {
+  const uint64_t words[] = {AT_PHENT, sizeof(Elf64_Phdr), AT_BASE, 123,
+                            AT_NULL, 0, AT_ENTRY, 456};
+  std::string storage(1, 'x');
+  storage.append(reinterpret_cast<const char*>(words), sizeof(words));
+  auto bytes = std::string_view(storage).substr(1);
+  auto parsed = ParseAuxv(bytes);
+  ASSERT_EQ(2u, parsed.size());
+  EXPECT_EQ(123u, parsed.at(AT_BASE));
+  EXPECT_TRUE(ParseAuxv({}).empty());
+  for (size_t size = 1; size < 16; ++size)
+    EXPECT_TRUE(ParseAuxv(bytes.substr(0, size)).empty());
+  EXPECT_EQ(123u, ParseAuxv(bytes.substr(0, 32)).at(AT_BASE));
+}
+
+TEST(LinuxUtils, AuxvRejectsUnsupportedLayout) {
+  const uint32_t compat[] = {AT_PHENT, sizeof(Elf32_Phdr), AT_BASE, 123,
+                             AT_ENTRY, 456, AT_NULL, 0};
+  EXPECT_TRUE(ParseAuxv(std::string_view(reinterpret_cast<const char*>(compat),
+                                       sizeof(compat))).empty());
+  const uint64_t wrong_size[] = {AT_PHENT, sizeof(Elf32_Phdr), AT_NULL, 0};
+  EXPECT_TRUE(ParseAuxv(std::string_view(reinterpret_cast<const char*>(wrong_size),
+                                       sizeof(wrong_size))).empty());
+  const uint64_t missing[] = {AT_BASE, 123, AT_NULL, 0};
+  EXPECT_TRUE(ParseAuxv(std::string_view(reinterpret_cast<const char*>(missing),
+                                       sizeof(missing))).empty());
+  auto native = ReadAuxv(getpid());
+  ASSERT_NE(native.end(), native.find(AT_PHENT));
+  EXPECT_EQ(sizeof(Elf64_Phdr), native.at(AT_PHENT));
+}
+
+TEST(LinuxUtils, LargeInodeAndMalformedMaps) {
+  auto maps = ParseMaps("1000-2000 r--p 0 00:01 4294967296 /large inode\n"
+                        "2000-3000 rw-p 0 00:00 0\n");
+  ASSERT_EQ(2u, maps.size());
+  EXPECT_EQ(4294967296ull, maps[0].inode);
+  EXPECT_EQ("/large inode", maps[0].path);
+  EXPECT_TRUE(maps[1].path.empty());
+  EXPECT_TRUE(ParseMaps("1000+2000 r--p 0 00:00 0").empty());
+  EXPECT_TRUE(ParseMaps("2000-1000 r--p 0 00:00 0").empty());
+  EXPECT_TRUE(ParseMaps("1000-2000 r--p 0 00:00").empty());
+}
+}  // namespace debug_agent::linux
+
+
+namespace debug_agent {
+TEST(LinuxMemory, PartialReadAndInvalidRanges) {
+  debug::MessageLoopLinux loop;
+  std::string error;
+  ASSERT_TRUE(loop.Init(&error));
+  auto cleanup = fit::defer([&] { loop.Cleanup(); });
+  {
+    auto task = fxl::MakeRefCounted<LinuxTask>(getpid());
+    LinuxProcessHandle process(task);
+    size_t page = sysconf(_SC_PAGESIZE);
+    void* mapping = mmap(nullptr, page * 3, PROT_READ | PROT_WRITE,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    ASSERT_NE(MAP_FAILED, mapping);
+    auto unmap = fit::defer([&] { munmap(mapping, page * 3); });
+    auto bytes = static_cast<uint8_t*>(mapping);
+    bytes[page - 1] = 0xab;
+    ASSERT_EQ(0, mprotect(bytes + page, page, PROT_NONE));
+    auto blocks = process.ReadMemoryBlocks(reinterpret_cast<uintptr_t>(bytes + page - 1), 2);
+    ASSERT_EQ(2u, blocks.size());
+    EXPECT_TRUE(blocks[0].valid);
+    EXPECT_EQ(1u, blocks[0].size);
+    EXPECT_EQ(std::vector<uint8_t>({0xab}), blocks[0].data);
+    EXPECT_FALSE(blocks[1].valid);
+    EXPECT_EQ(1u, blocks[1].size);
+    EXPECT_EQ(blocks[0].address + 1, blocks[1].address);
+    EXPECT_TRUE(blocks[1].data.empty());
+    EXPECT_EQ(0u, blocks[1].data.capacity());
+    bytes[page * 2] = 0xcd;
+    auto base = reinterpret_cast<uintptr_t>(bytes);
+    blocks = process.ReadMemoryBlocks(base + page - 1, page + 2);
+    ASSERT_EQ(3u, blocks.size());
+    EXPECT_EQ(std::vector<uint8_t>({0xab}), blocks[0].data);
+    EXPECT_FALSE(blocks[1].valid);
+    EXPECT_EQ(0u, blocks[1].data.capacity());
+    EXPECT_EQ(page, blocks[1].size);
+    EXPECT_TRUE(blocks[2].valid);
+    EXPECT_EQ(base + page * 2, blocks[2].address);
+    EXPECT_EQ(std::vector<uint8_t>({0xcd}), blocks[2].data);
+    blocks = process.ReadMemoryBlocks(base + page, page + 1);
+    ASSERT_EQ(2u, blocks.size());
+    EXPECT_FALSE(blocks[0].valid);
+    EXPECT_EQ(0u, blocks[0].data.capacity());
+    EXPECT_EQ(page, blocks[0].size);
+    EXPECT_TRUE(blocks[1].valid);
+    EXPECT_EQ(std::vector<uint8_t>({0xcd}), blocks[1].data);
+    // Repeat with an unmapped hole instead of a protected mapping.
+    ASSERT_EQ(0, munmap(bytes + page, page));
+    blocks = process.ReadMemoryBlocks(base + page - 1, page + 2);
+    ASSERT_EQ(3u, blocks.size());
+    EXPECT_TRUE(blocks[0].valid);
+    EXPECT_FALSE(blocks[1].valid);
+    EXPECT_EQ(0u, blocks[1].data.capacity());
+    EXPECT_EQ(page, blocks[1].size);
+    EXPECT_EQ(std::vector<uint8_t>({0xcd}), blocks[2].data);
+    size_t actual = 123;
+    uint8_t dest;
+    EXPECT_TRUE(process.ReadMemory(0, &dest, 1, &actual).has_error());
+    EXPECT_EQ(0u, actual);
+    EXPECT_FALSE(process.ReadMemoryBlocks(UINT64_MAX, 2)[0].valid);
+    EXPECT_TRUE(process.ReadMemoryBlocks(0, 0)[0].valid);
+  }
+}
+
+TEST(LinuxCapabilities, NoHardwareSlotsUntilImplemented) {
+  EXPECT_EQ(0u, arch::GetHardwareBreakpointCount());
+  EXPECT_EQ(0u, arch::GetHardwareWatchpointCount());
+}
+}  // namespace debug_agent
+
+namespace debug_agent {
+namespace {
+uintptr_t memory_words[4];
+int fail_write_at = -1;
+int write_count = 0;
+debug::Status ReadTestWord(pid_t, uintptr_t address, uintptr_t* value) {
+  *value = memory_words[address / sizeof(uintptr_t)];
+  return debug::Status();
+}
+debug::Status WriteTestWord(pid_t, uintptr_t address, uintptr_t value) {
+  if (write_count++ == fail_write_at)
+    return debug::Status("Injected write failure");
+  memory_words[address / sizeof(uintptr_t)] = value;
+  return debug::Status();
+}
+}  // namespace
+
+TEST(LinuxMemory, WordWritesPreserveEdgesAndReportProgress) {
+  std::vector<uint8_t> input(16, 0xab);
+  for (size_t offset = 0; offset < sizeof(uintptr_t); ++offset) {
+    for (size_t length = 0; length <= input.size(); ++length) {
+      memset(memory_words, 0x12, sizeof(memory_words));
+      fail_write_at = -1;
+      write_count = 0;
+      size_t actual = 123;
+      EXPECT_FALSE(LinuxProcessHandle::WriteMemoryByWord(
+          0, offset, input.data(), length, ReadTestWord, WriteTestWord, &actual).has_error());
+      EXPECT_EQ(length, actual);
+      auto bytes = reinterpret_cast<uint8_t*>(memory_words);
+      for (size_t i = 0; i < sizeof(memory_words); ++i)
+        EXPECT_EQ(i >= offset && i < offset + length ? 0xab : 0x12, bytes[i]);
+    }
+  }
+  size_t actual = 123;
+  fail_write_at = 1;
+  write_count = 0;
+  EXPECT_TRUE(LinuxProcessHandle::WriteMemoryByWord(
+      0, 0, input.data(), 16, ReadTestWord, WriteTestWord, &actual).has_error());
+  EXPECT_EQ(sizeof(uintptr_t), actual);
+  actual = 123;
+  EXPECT_TRUE(LinuxProcessHandle::WriteMemoryByWord(
+      0, UINTPTR_MAX, input.data(), 2, ReadTestWord, WriteTestWord, &actual).has_error());
+  EXPECT_EQ(0u, actual);
+}
 }  // namespace debug_agent

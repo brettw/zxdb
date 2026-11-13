@@ -90,6 +90,15 @@ Callers and implementations must preserve these invariants:
   IPC `Hello` handshake) before serializing notifications to a stream.
 - Call `Init()` and check for an OK `debug::Status` before using any
   `DebuggedJob` or `DebuggedProcess` instance.
+- Linux memory reads report only the bytes returned by the kernel as valid.
+  Failed reads are retried at mapping boundaries to preserve readable regions
+  after holes. Partial reads contain only the bytes returned by the kernel.
+  Invalid blocks retain no data allocation, and the initial read buffer is
+  released before fallback reads allocate their buffers.
+  Linux launches restore the pre-loop signal mask and preserve SIGPIPE ignored
+  by the user before the frontend starts. Auxv ABI validation uses AT_PHENT and
+  does not require read permission on the executable.
+  Hardware breakpoint/watchpoint slot counts are zero until supported.
 - A `DebuggedThread` runs only when neither `client_suspend_handle_` nor any
   internal `SuspendHandle` token exists.
 - `DebuggedProcess` serializes breakpoint step-overs through `step_over_queue_`

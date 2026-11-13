@@ -118,7 +118,7 @@ void SetupCommandLineOptions(const CommandLineOptions& options, Session* session
 }  // namespace
 
 int ConsoleMain(int argc, const char* argv[]) {
-  signal(SIGPIPE, SIG_IGN);
+  [[maybe_unused]] bool inherited_sigpipe_ignored = signal(SIGPIPE, SIG_IGN) == SIG_IGN;
 
   // Declare the loop at the top because it must outlive other objects that
   // might call loop methods during their destruction.
@@ -168,7 +168,7 @@ int ConsoleMain(int argc, const char* argv[]) {
   std::optional<LocalAgentResult> local_agent;
   fit::deferred_callback cleanup_local_agent;
   if (options.local) {
-    local_agent = ForkLocalAgent();
+    local_agent = ForkLocalAgent(inherited_sigpipe_ignored);
     if (local_agent->status == LocalAgentResult::kSuccess) {
       cleanup_local_agent = fit::defer_callback([pid = local_agent->agent_pid]() {
         // The early returns in the code below will leave the forked agent running and the wait

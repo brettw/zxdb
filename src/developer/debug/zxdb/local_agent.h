@@ -44,8 +44,8 @@ struct LocalAgentResult {
 };
 
 // Creates a debug_agent by forking this process and running the agent code in the resulting
-// process.
-LocalAgentResult ForkLocalAgent();
+// process. The signal flag records the disposition before the frontend ignores SIGPIPE.
+LocalAgentResult ForkLocalAgent(bool inherited_sigpipe_ignored);
 
 }  // namespace zxdb
 

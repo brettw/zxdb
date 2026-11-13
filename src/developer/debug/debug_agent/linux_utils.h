@@ -40,7 +40,7 @@ struct MapEntry {
 
   uint64_t offset = 0;
   std::string device;
-  int inode = 0;
+  uint64_t inode = 0;
   std::string path;
 };
 
@@ -89,6 +89,9 @@ uint64_t GetLdSoBreakpointAddress(int pid);
 // Reads the contents of /proc/<pid>/auxv and returns the key/value store. The keys are AT_*
 // constants from <linux/auxvec.h>. Returns the empty map on failure.
 std::map<uint64_t, uint64_t> ReadAuxv(int pid);
+// Parses Linux ELF64 entries. Requires native AT_PHENT, rejects truncated input,
+// and stops at AT_NULL.
+std::map<uint64_t, uint64_t> ParseAuxv(std::string_view contents);
 
 // Decodes the value of a /proc/status "State" line. Returns nullopt if parsing failed.
 std::optional<ThreadHandle::State> ThreadStateFromLinuxState(const std::string& linux_state);

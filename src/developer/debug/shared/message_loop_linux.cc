@@ -18,19 +18,7 @@ struct MessageLoopLinux::SignalWatchInfo {
   SignalWatcher watcher;
 };
 
-MessageLoopLinux::MessageLoopLinux() {
-  // Register for signals from child processes. We may need to add to the set of signals in the
-  // future as requirements grow.
-  sigset_t mask;
-  sigemptyset(&mask);
-  sigaddset(&mask, SIGCHLD);
-
-  // Prevents the signals that are being processed via the signal fd from being sent via the normal
-  // signal channel.
-  sigprocmask(SIG_BLOCK, &mask, NULL);
-
-  signal_fd_.reset(signalfd(-1, &mask, 0));
-}
+MessageLoopLinux::MessageLoopLinux() = default;
 
 MessageLoopLinux::~MessageLoopLinux() = default;
 
@@ -42,36 +30,45 @@ bool MessageLoopLinux::Init(std::string* error_message) {
   if (!MessageLoopPoll::Init(error_message))
     return false;
 
-  signal_fd_watch_ =
-      WatchFD(WatchMode::kRead, signal_fd_.get(), [this](int fd, bool readable, bool, bool) {
+  sigset_t mask;
+  sigemptyset(&mask);
+  sigaddset(&mask, SIGCHLD);
+  if (sigprocmask(SIG_BLOCK, &mask, &original_mask_) == -1) {
+    if (error_message)
+      *error_message = "Could not block SIGCHLD";
+    MessageLoopPoll::Cleanup();
+    return false;
+  }
+  mask_saved_ = true;
+  signal_fd_.reset(signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC));
+  if (!signal_fd_.is_valid()) {
+    if (error_message)
+      *error_message = "Could not create signalfd";
+    Cleanup();
+    return false;
+  }
+  signal_fd_watch_ = WatchFD(WatchMode::kRead, signal_fd_.get(),
+      [this](int, bool readable, bool, bool) {
         if (!readable)
           return;
-
-        FX_DCHECK(fd == signal_fd_.get());
-
-        struct signalfd_siginfo fdsi;
-        auto nread = HANDLE_EINTR(read(signal_fd_.get(), &fdsi, sizeof(struct signalfd_siginfo)));
-        FX_DCHECK(nread == sizeof(signalfd_siginfo));
-
-        for (const auto& [index, info] : signal_watches_) {
-          if (info.pid == static_cast<int>(fdsi.ssi_pid)) {
-            // The full status is available only from waitpid, the fdsi.status only contains the
-            // child signal number.
-            int status = 0;
-            if (waitpid(info.pid, &status, __WALL | WUNTRACED | WNOHANG) >= 0)
-              info.watcher(fdsi.ssi_pid, status);
-            return;
-          }
-        }
+        signalfd_siginfo info;
+        while (HANDLE_EINTR(read(signal_fd_.get(), &info, sizeof(info))) == sizeof(info)) {}
+        DrainChildSignals();
       });
   return true;
 }
 
 void MessageLoopLinux::Cleanup() {
   // Force unregister our signal watch before cleaning up current MessageLoop.
-  signal_fd_watch_ = WatchHandle();
+  signal_fd_watch_.StopWatching();
+  signal_fd_.reset();
+  if (mask_saved_) {
+    sigprocmask(SIG_SETMASK, &original_mask_, nullptr);
+    mask_saved_ = false;
+  }
 
   MessageLoopPoll::Cleanup();
+  child_scan_pending_ = false;
 }
 
 MessageLoop::WatchHandle MessageLoopLinux::WatchChildSignals(pid_t pid, SignalWatcher watcher) {
@@ -79,9 +76,9 @@ MessageLoop::WatchHandle MessageLoopLinux::WatchChildSignals(pid_t pid, SignalWa
   // loop is.
   FX_DCHECK(Current() == static_cast<MessageLoop*>(this));
 
-  SignalWatchInfo info;
-  info.pid = pid;
-  info.watcher = std::move(watcher);
+  auto info = std::make_shared<SignalWatchInfo>();
+  info->pid = pid;
+  info->watcher = std::move(watcher);
 
   // The reason this function must be called on the message loop thread is that otherwise adding a
   // new watch would require synchronously breaking out of the existing poll() call to add the new
@@ -89,7 +86,40 @@ MessageLoop::WatchHandle MessageLoopLinux::WatchChildSignals(pid_t pid, SignalWa
   int watch_id = GetNextWatchId();
   signal_watches_[watch_id] = std::move(info);
 
+  // A stop may already be pending when its owner registers after a clone event.
+  // Batch registrations share one scan instead of each scanning every watch.
+  if (!child_scan_pending_) {
+    child_scan_pending_ = true;
+    PostTask(FROM_HERE, [this] {
+      child_scan_pending_ = false;
+      DrainChildSignals();
+    });
+  }
   return WatchHandle(this, watch_id);
+}
+
+pid_t MessageLoopLinux::WaitForChildEvent(pid_t pid, int* status) {
+  return HANDLE_EINTR(waitpid(pid, status, __WALL | WUNTRACED | WNOHANG));
+}
+
+void MessageLoopLinux::DrainChildSignals() {
+  // SIGCHLD coalesces. Probe every owned PID, without reaping unrelated children.
+  // Callbacks can remove themselves or register new children, so retain the callback
+  // and restart the scan after each delivered status.
+  bool delivered;
+  do {
+    delivered = false;
+    for (const auto& [id, info] : signal_watches_) {
+      int status = 0;
+      pid_t pid = WaitForChildEvent(info->pid, &status);
+      if (pid > 0) {
+        auto retained = info;
+        retained->watcher(pid, status);
+        delivered = true;
+        break;
+      }
+    }
+  } while (delivered);
 }
 
 void MessageLoopLinux::StopWatching(int id) {

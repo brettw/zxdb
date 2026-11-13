@@ -6,6 +6,8 @@
 #define SRC_DEVELOPER_DEBUG_SHARED_MESSAGE_LOOP_LINUX_H_
 
 #include <sys/types.h>
+#include <signal.h>
+#include <memory>
 
 #include "src/developer/debug/shared/message_loop_poll.h"
 
@@ -25,11 +27,21 @@ class MessageLoopLinux : public MessageLoopPoll {
   bool Init(std::string* error_message) override;
   void Cleanup() override;
 
+  const sigset_t& original_signal_mask() const { return original_mask_; }
+
   using SignalWatcher = fit::function<void(pid_t pid, int status)>;
   WatchHandle WatchChildSignals(pid_t pid, SignalWatcher watcher);
 
+ protected:
+  // Syscall boundary for deterministic child-event tests.
+  virtual pid_t WaitForChildEvent(pid_t pid, int* status);
+
  private:
   struct SignalWatchInfo;
+  void DrainChildSignals();
+  sigset_t original_mask_{};
+  bool mask_saved_ = false;
+  bool child_scan_pending_ = false;
 
   // MessageLoop protected override.
   void StopWatching(int id) override;
@@ -38,7 +50,7 @@ class MessageLoopLinux : public MessageLoopPoll {
   fbl::unique_fd signal_fd_;
   WatchHandle signal_fd_watch_;
 
-  using SignalWatchMap = std::map<int, SignalWatchInfo>;
+  using SignalWatchMap = std::map<int, std::shared_ptr<SignalWatchInfo>>;
   SignalWatchMap signal_watches_;
 };
 

@@ -120,6 +120,25 @@ TEST(ElfUtils, MergeMmapedModules) {
   EXPECT_EQ(modules[2].base, kBase3);
 }
 
+TEST(ElfUtils, DifferentLoadBiases) {
+  std::vector<debug_ipc::Module> modules;
+  std::vector<debug_ipc::AddressRegion> maps = {
+      {.base = 0x400000, .size = 0x2000, .read = true},
+      {.base = 0x800000, .size = 0x1000, .read = true},
+      {.base = 0x801000, .size = 0x1000, .read = true},
+  };
+  std::vector<uint64_t> probes;
+  internal::MergeMmapedModules(modules, maps, [&](uint64_t base) {
+    probes.push_back(base);
+    uint64_t vaddr = base == 0x400000 ? 0x400000 : 0;
+    return std::optional<internal::ElfSegInfo>({
+        .segment_headers = {{.p_type = elflib::PT_LOAD, .p_vaddr = vaddr, .p_memsz = 0x2000}}});
+  });
+  EXPECT_EQ((std::vector<uint64_t>{0x400000, 0x800000}), probes);
+  ASSERT_EQ(2u, modules.size());
+  EXPECT_EQ(0x800000u, modules[1].base);
+}
+
 // This is the same as above, but inserts a module between two segment headers from another module.
 TEST(ElfUtils, MergeMmapedModulesWithHole) {
   const char kBinaryName[] = "/home/me/a.out";

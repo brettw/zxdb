@@ -2,14 +2,39 @@
 
 Audited 2026-11-12 at commit `6e2fae0a98efa2bef8ae2816b5aa364aec2f8b37`.
 Scope: the integrated Linux x86-64 agent, its PID/ptrace event loop, and the
-shared process, thread, and breakpoint code used by that agent. This is an
-audit and test plan; it does not implement fixes.
+shared process, thread, and breakpoint code used by that agent. The findings below describe the audited baseline. See the implementation
+status for changes made after the audit.
 
 The Linux backend is not yet reliable for general multithreaded or
 multiprocess debugging. The largest risks are lost wait events, incomplete
 thread attachment, incorrect exec/exit transitions, and breakpoint operations
 that assume a stop succeeded. A successful single-threaded session does not
 exercise these paths.
+
+## Implementation status
+
+The first implementation pass addresses the following paths. The remaining
+findings below are open; this does not establish general multithreaded safety.
+
+| Item | Change | Remaining coverage or work |
+| --- | --- | --- |
+| L01/L02 | Drain all watched PIDs on each wakeup; dispatch only positive wait results; retry EINTR; retain callbacks across watch removal; probe newly registered watches with one queued scan per registration batch | Inject syscall failures; join clone creation and initial stops (L03) |
+| L09 | Decode normal exit status; use 128 + signal for signaled pre-exit status | Final-reap and exactly-once termination depend on L08 |
+| L19 | Report zero hardware breakpoint/watchpoint slots | Hardware register implementation remains unsupported |
+| L21 | Zero-initialize registers and reject nonnative regset lengths | Compat-exec lifecycle and injected short regsets |
+| L23 | Parse complete 64-bit auxv pairs with memcpy, stop at AT_NULL, reject partial pairs and nonnative layouts using AT_PHENT without reopening the executable | Sanitizer run and compat-inferior integration |
+| L24 | Initialize actual counts, reject address overflow, retry across mapping boundaries and split partial reads into valid and invalid blocks; release unused buffers before retries and in invalid blocks | Ptrace read fallback and concurrent mapping changes |
+| L25 | Set up signalfd in Init with CLOEXEC/NONBLOCK and error handling; restore the caller mask in Cleanup; restore the pre-loop mask and the user-inherited SIGPIPE disposition in the inferior | Helper-thread signal routing, descriptor-exhaustion tests |
+| L26 | Handle fork and second-pipe failures; check TRACEME; retry initial wait on EINTR; kill/reap unexpected initial stops; preserve stdin when open returns fd 0 | Full failure injection, local-agent setup, and launcher abandonment |
+| L30 | Parse 64-bit inodes and reject incomplete rows; reset segment load bias for each module | Namespace and loader lifecycle coverage, procfs error reporting |
+| System information | Query online CPUs and physical memory from Linux | No synthetic failure injection |
+
+Focused tests run in the host test processes. Child-event tests use short-lived
+forked children; the memory test reads the current process. The integration
+fixtures check symbolic debugging, default and ignored inherited SIGPIPE, and
+exit code 7. An auxv fixture removes read permission from a private executable
+copy and verifies that auxv discovery still works. Memory tests cover readable
+regions on both sides of a protected or unmapped hole.
 
 ## Evidence and priorities
 

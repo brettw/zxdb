@@ -10,6 +10,7 @@
 #include "src/developer/debug/debug_agent/linux_utils.h"
 
 #include <ctype.h>
+#include <cstring>
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -72,12 +73,13 @@ std::optional<int> PathToPid(const std::filesystem::path& path) {
 fbl::unique_fd OpenPidfd(int pid) { return fbl::unique_fd(syscall(kPidFDOpenSyscallID, pid, 0)); }
 
 std::optional<user_regs_struct> ReadGeneralRegisters(int pid) {
-  user_regs_struct regs;
+  user_regs_struct regs{};
 
   iovec vec;
   vec.iov_base = &regs;
   vec.iov_len = sizeof(regs);
-  if (ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &vec) == -1) {
+  if (ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &vec) == -1 ||
+      vec.iov_len != sizeof(regs)) {
     return std::nullopt;
   }
   return regs;
@@ -95,22 +97,26 @@ zx_status_t WriteGeneralRegisters(int pid, const user_regs_struct& regs) {
 std::vector<MapEntry> ParseMaps(const std::string& contents) {
   std::vector<MapEntry> result;
 
-  std::istringstream in(contents);
-  while (in.good()) {
+  std::istringstream lines(contents);
+  std::string line;
+  while (std::getline(lines, line)) {
+    std::istringstream in(line);
     MapEntry entry;
 
     // <address>-<address>
     uint64_t begin = 0, end = 0;
     char hyphen = 0;
     in >> std::hex >> begin >> hyphen >> std::hex >> end;
-    if (!in.good() || end < begin)
+    if (!in.good() || hyphen != '-' || end < begin)
       return result;
     entry.range = debug::AddressRange(begin, end);
 
     // Flags.
     char r_bit, w_bit, x_bit, s_bit;
     in >> r_bit >> w_bit >> x_bit >> s_bit;
-    if (!in.good())
+    if (!in.good() || (r_bit != 'r' && r_bit != '-') ||
+        (w_bit != 'w' && w_bit != '-') || (x_bit != 'x' && x_bit != '-') ||
+        (s_bit != 's' && s_bit != 'p'))
       return result;
     entry.read = r_bit == 'r';
     entry.write = w_bit == 'w';
@@ -119,6 +125,9 @@ std::vector<MapEntry> ParseMaps(const std::string& contents) {
 
     // Offset, device, inode.
     in >> std::hex >> entry.offset >> entry.device >> std::dec >> entry.inode;
+
+    if (in.fail())
+      return result;
 
     // Everything else to the end is the path (could be empty).
     while (in.good() && in.peek() == ' ')
@@ -222,15 +231,27 @@ uint64_t GetLdSoBreakpointAddress(int pid) {
 }
 
 std::map<uint64_t, uint64_t> ReadAuxv(int pid) {
+  return ParseAuxv(ReadProcFile(pid, "auxv"));
+}
+
+std::map<uint64_t, uint64_t> ParseAuxv(std::string_view contents) {
   std::map<uint64_t, uint64_t> result;
-
-  std::string contents = ReadProcFile(pid, "auxv");
-  size_t key_count = contents.size() / sizeof(uint64_t);
-  const uint64_t* raw = reinterpret_cast<const uint64_t*>(contents.data());
-
-  for (size_t i = 0; i < key_count; i++)
-    result[raw[i * 2]] = raw[i * 2 + 1];
-
+  constexpr size_t kEntrySize = 2 * sizeof(uint64_t);
+  if (contents.size() % kEntrySize)
+    return result;
+  for (size_t offset = 0; offset < contents.size(); offset += kEntrySize) {
+    uint64_t key, value;
+    memcpy(&key, contents.data() + offset, sizeof(key));
+    memcpy(&value, contents.data() + offset + sizeof(key), sizeof(value));
+    if (key == AT_NULL)
+      break;
+    result[key] = value;
+  }
+  // Linux supplies the ELF program-header size in auxv. Validate the native
+  // layout without requiring permission to reopen the executable on disk.
+  auto phent = result.find(AT_PHENT);
+  if (phent == result.end() || phent->second != sizeof(Elf64_Phdr))
+    return {};
   return result;
 }
 

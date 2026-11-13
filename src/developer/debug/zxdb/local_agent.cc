@@ -18,7 +18,8 @@
 
 namespace zxdb {
 
-int RunLocalAgent(fbl::unique_fd read_pipe, fbl::unique_fd write_pipe) {
+int RunLocalAgent(fbl::unique_fd read_pipe, fbl::unique_fd write_pipe,
+                  bool inherited_sigpipe_ignored) {
   // Uncomment to enable debugging output for the local debug_agent. Currently there is not
   // configurable from the command line, as the --debug mode option only applies to the frontend
   // code.
@@ -40,7 +41,8 @@ int RunLocalAgent(fbl::unique_fd read_pipe, fbl::unique_fd write_pipe) {
     // The debug agent is independent of whether it's connected or not.
     // DebugAgent::Disconnect is called by ~SocketConnection is called by ~SocketServer, so the
     // debug agent must be destructed after the SocketServer.
-    debug_agent::DebugAgent debug_agent(std::make_unique<debug_agent::LinuxSystemInterface>());
+    debug_agent::DebugAgent debug_agent(
+        std::make_unique<debug_agent::LinuxSystemInterface>(inherited_sigpipe_ignored));
     auto buffer =
         std::make_unique<debug::BufferedBidiPipe>(std::move(read_pipe), std::move(write_pipe));
 
@@ -52,7 +54,7 @@ int RunLocalAgent(fbl::unique_fd read_pipe, fbl::unique_fd write_pipe) {
   return 0;
 }
 
-LocalAgentResult ForkLocalAgent() {
+LocalAgentResult ForkLocalAgent(bool inherited_sigpipe_ignored) {
   // Two pipes, one for each direction to communicate with the agent.
   const char kPipeError[] = "Can't create pipe to agent process.\n";
   int client_to_agent[2] = {0, 0};
@@ -78,7 +80,8 @@ LocalAgentResult ForkLocalAgent() {
     close(client_to_agent[1]);
     close(agent_to_client[0]);
     int exit_code =
-        RunLocalAgent(fbl::unique_fd(client_to_agent[0]), fbl::unique_fd(agent_to_client[1]));
+        RunLocalAgent(fbl::unique_fd(client_to_agent[0]), fbl::unique_fd(agent_to_client[1]),
+                      inherited_sigpipe_ignored);
     return LocalAgentResult(LocalAgentResult::kInForked, exit_code);
   }
 

@@ -60,6 +60,11 @@ Callers and implementations must preserve these invariants:
   `Cleanup()`, which must run on the same thread as `Run()`. Call `QuitNow()`,
   `WatchFD()`, Zircon watch methods, and `WatchHandle` destructors only on the
   `MessageLoop` thread.
+- Linux child watches own wait collection only for registered PIDs. SIGCHLD
+  wakes a scan of all watches. Only positive wait results reach callbacks.
+  A batch of registrations shares one pending scan for already-pending statuses.
+  Init blocks
+  SIGCHLD on the loop thread; Cleanup restores that thread's original mask.
 - Watch each file descriptor at most once per `MessageLoop`. Do not unregister a
   `MessageLoopFuchsia::WatchSocket` `WatchHandle` inside its callback because
   the loop may invoke read and write callbacks back-to-back.

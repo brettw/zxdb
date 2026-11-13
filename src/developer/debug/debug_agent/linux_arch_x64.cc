@@ -17,13 +17,13 @@ namespace debug_agent {
 namespace arch {
 
 uint32_t GetHardwareBreakpointCount() {
-  // TODO(brettW) implement this.
-  return 4;
+  // Hardware register installation is not implemented on Linux.
+  return 0;
 }
 
 uint32_t GetHardwareWatchpointCount() {
-  // TODO(brettW) implement this.
-  return 4;
+  // Hardware register installation is not implemented on Linux.
+  return 0;
 }
 
 void SaveGeneralRegs(const PlatformGeneralRegisters& input,

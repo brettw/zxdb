@@ -232,7 +232,9 @@ void LinuxTask::OnExit(const SignalRecord& record) {
   exiting_ = true;
 
   DEBUG_LOG(Thread) << "  LinuxTask::OnFDReady TRACE EXIT, result=" << result_code;
-  exit_code_ = static_cast<int>(result_code);
+  int wait_status = static_cast<int>(result_code);
+  exit_code_ = WIFEXITED(wait_status) ? WEXITSTATUS(wait_status)
+                                    : (WIFSIGNALED(wait_status) ? 128 + WTERMSIG(wait_status) : -1);
   suspend_count_++;  // Account for suspend count the LinuxException will take.
 
   LinuxSuspendHandle sus(fxl::RefPtr<LinuxTask>(this));

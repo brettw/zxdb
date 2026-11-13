@@ -4,6 +4,8 @@
 
 #include "src/developer/debug/debug_agent/linux_process_handle.h"
 
+#include <algorithm>
+
 #include <fcntl.h>
 #include <inttypes.h>
 #include <signal.h>
@@ -145,6 +147,9 @@ fit::result<debug::Status, std::vector<debug_ipc::InfoHandle>> LinuxProcessHandl
 
 debug::Status LinuxProcessHandle::ReadMemory(uintptr_t address, void* buffer, size_t len,
                                              size_t* actual) const {
+  *actual = 0;
+  if (len > UINTPTR_MAX - address)
+    return debug::Status("Memory read address overflow.");
   iovec local_iov;
   local_iov.iov_base = buffer;
   local_iov.iov_len = len;
@@ -178,22 +183,70 @@ debug::Status LinuxProcessHandle::WriteMemory(uintptr_t address, const void* buf
 
 std::vector<debug_ipc::MemoryBlock> LinuxProcessHandle::ReadMemoryBlocks(uint64_t address,
                                                                          uint32_t size) const {
-  // TODO(brettw) figure out how this should work with respect to invalid memory regions.
-  debug_ipc::MemoryBlock block;
-  block.address = address;
-  block.size = size;
-  block.valid = true;
-  block.data.resize(size);
-
-  if (size > 0) {
-    size_t actual;
-    if (ReadMemory(address, &block.data[0], size, &actual).has_error()) {
-      block.valid = false;
-      block.data.clear();
+  auto read_block = [this](uint64_t begin, uint32_t length) {
+    debug_ipc::MemoryBlock block;
+    block.address = begin;
+    block.size = length;
+    block.data.resize(length);
+    size_t actual = 0;
+    if (ReadMemory(begin, block.data.data(), length, &actual).has_error())
+      actual = 0;
+    if (actual == 0) {
+      // Invalid blocks describe a range; they must not retain a data allocation.
+      std::vector<uint8_t>().swap(block.data);
+    } else if (actual < length) {
+      std::vector<uint8_t>(block.data.begin(), block.data.begin() + actual).swap(block.data);
     }
+    block.valid = actual == length;
+    return block;
+  };
+  if (size > UINT64_MAX - address) {
+    debug_ipc::MemoryBlock invalid;
+    invalid.address = address;
+    invalid.size = size;
+    return {std::move(invalid)};
   }
+  std::vector<debug_ipc::MemoryBlock> result;
+  {
+    auto block = read_block(address, size);
+    if (block.valid) {
+      result.push_back(std::move(block));
+      return result;
+    }
+  }  // Release the initial read buffer before allocating fallback blocks.
 
-  return {std::move(block)};
+  // A failed read says nothing about later mappings. Retry at each mapping
+  // boundary so a hole cannot hide readable memory after it.
+  uint64_t end = address + size;
+  std::vector<uint64_t> boundaries;
+  for (const auto& map : linux::GetMaps(task_->pid())) {
+    if (map.range.begin() > address && map.range.begin() < end)
+      boundaries.push_back(map.range.begin());
+    if (map.range.end() > address && map.range.end() < end)
+      boundaries.push_back(map.range.end());
+  }
+  boundaries.push_back(end);
+  std::sort(boundaries.begin(), boundaries.end());
+  boundaries.erase(std::unique(boundaries.begin(), boundaries.end()), boundaries.end());
+
+  for (uint64_t boundary : boundaries) {
+    auto part = read_block(address, boundary - address);
+    if (!part.valid && !part.data.empty()) {
+      // Mappings can change during the read. Preserve any successfully read
+      // prefix, but never label unread bytes as valid.
+      debug_ipc::MemoryBlock unread;
+      unread.address = address + part.data.size();
+      unread.size = boundary - unread.address;
+      part.size = part.data.size();
+      part.valid = true;
+      result.push_back(std::move(part));
+      result.push_back(std::move(unread));
+    } else {
+      result.push_back(std::move(part));
+    }
+    address = boundary;
+  }
+  return result;
 }
 
 debug::Status LinuxProcessHandle::SaveMinidump(const std::vector<DebuggedThread*>& threads,
@@ -206,6 +259,9 @@ debug::Status LinuxProcessHandle::WriteMemoryByWord(pid_t pid, uintptr_t address
                                                     const void* buffer, size_t len,
                                                     ReadWordFunc read_fn, WriteWordFunc write_fn,
                                                     size_t* actual) {
+  *actual = 0;
+  if (len > UINTPTR_MAX - address)
+    return debug::Status("Memory write address overflow.");
   if (len == 0)
     return debug::Status();
 

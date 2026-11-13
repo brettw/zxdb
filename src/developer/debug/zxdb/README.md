@@ -45,10 +45,10 @@ Top-level host entry points in `//src/developer/debug/zxdb` include:
 - `zxdb::ConsoleMain(int argc, const char* argv[])` (`main.cc`): Host entry
   point that parses CLI flags, initializes `MessageLoopPoll` and `Session`, and
   runs the console or DAP server.
-- `zxdb::ForkLocalAgent()` and `zxdb::LocalAgentResult` (`local_agent.h`,
+- `zxdb::ForkLocalAgent(bool inherited_sigpipe_ignored)` and `zxdb::LocalAgentResult` (`local_agent.h`,
   `local_agent.cc`): Forks a local Linux `debug_agent` over a
   `debug::BufferedBidiPipe` for `--local` on Linux x64 hosts.
-- `zxdb::RunLocalAgent(fbl::unique_fd read_pipe, fbl::unique_fd write_pipe)`
+- `zxdb::RunLocalAgent(read_pipe, write_pipe, inherited_sigpipe_ignored)`
   (`local_agent.cc`): Runs the child `debug_agent::DebugAgent` backed by
   `debug_agent::LinuxSystemInterface` on a `debug::MessageLoopPoll`.
 
@@ -77,7 +77,9 @@ Callers and entry points must preserve these invariants:
 
 Running `zxdb` produces these process, I/O, and network side effects:
 
-- Ignores `SIGPIPE` process-wide via `signal(SIGPIPE, SIG_IGN)`.
+- Ignores `SIGPIPE` process-wide via `signal(SIGPIPE, SIG_IGN)`. Captures the
+  inherited disposition first and passes it to the local agent for inferior
+  launches, so intentionally ignored SIGPIPE remains ignored.
 - Initializes and cleans up global `libcurl` state (`Curl::GlobalInit` /
   `Curl::GlobalCleanup`) and telemetry (`Analytics::Init` /
   `Analytics::CleanUp`).

@@ -11,6 +11,7 @@
 #include <unistd.h>
 #include <zircon/errors.h>
 
+#include "src/developer/debug/shared/message_loop_linux.h"
 #include "src/developer/debug/debug_agent/linux_process_handle.h"
 #include "src/developer/debug/debug_agent/linux_task.h"
 #include "src/developer/debug/debug_agent/linux_utils.h"
@@ -117,7 +118,9 @@ debug::Status LinuxBinaryLauncher::Setup(const std::vector<std::string>& argv) {
   }
   int stderr_pipe[2] = {0, 0};
   if (pipe2(stderr_pipe, 0) != 0) {
-    return debug::Status("Could not create pipe for stdout.");
+    close(stdout_pipe[0]);
+    close(stdout_pipe[1]);
+    return debug::Status("Could not create pipe for stderr.");
   }
 
   // For redirecting stdin, stdout, and stderr. This needs to be allocated before forking to avoid
@@ -133,7 +136,19 @@ debug::Status LinuxBinaryLauncher::Setup(const std::vector<std::string>& argv) {
     ptrs.push_back(const_cast<char*>(arg.c_str()));
   ptrs.push_back(nullptr);
 
+  sigset_t target_mask = debug::MessageLoopLinux::Current()->original_signal_mask();
+  struct sigaction pipe_action{};
+  // Exec preserves ignored dispositions and resets caught signals to default.
+  pipe_action.sa_handler = inherited_sigpipe_ignored_ ? SIG_IGN : SIG_DFL;
+  sigemptyset(&pipe_action.sa_mask);
+
   pid_ = fork();
+  if (pid_ < 0) {
+    int error = errno;
+    for (int fd : {stdout_pipe[0], stdout_pipe[1], stderr_pipe[0], stderr_pipe[1]})
+      close(fd);
+    return debug::ErrnoStatus(error, "Could not fork inferior.");
+  }
   if (pid_ == 0) {
     // DANGER: fork() rule: in the child, if you don't end up doing exec*(), you call _exit()
     // instead of exit(). This is because _exit() does not call any previously-registered (in the
@@ -151,7 +166,8 @@ debug::Status LinuxBinaryLauncher::Setup(const std::vector<std::string>& argv) {
       if (new_null_fd != STDIN_FILENO) {
         _exit(127);
       }
-      IGNORE_EINTR(close(null_fd));
+      if (null_fd != STDIN_FILENO)
+        IGNORE_EINTR(close(null_fd));
     }
 
     // Redirect output to our pipes (for both copies of the shuffle structure).
@@ -167,7 +183,12 @@ debug::Status LinuxBinaryLauncher::Setup(const std::vector<std::string>& argv) {
 
     CloseSuperfluousFds(fd_shuffle2);
 
-    ptrace(PTRACE_TRACEME, 0, nullptr, nullptr);
+    if (ptrace(PTRACE_TRACEME, 0, nullptr, nullptr) == -1)
+      _exit(127);
+
+    if (sigprocmask(SIG_SETMASK, &target_mask, nullptr) == -1 ||
+        sigaction(SIGPIPE, &pipe_action, nullptr) == -1)
+      _exit(127);
 
     // Child process. Execve returns only on failure.
     execv(argv[0].c_str(), &ptrs[0]);
@@ -194,7 +215,7 @@ debug::Status LinuxBinaryLauncher::Setup(const std::vector<std::string>& argv) {
   // The execv will issue a trap just after setting up the new process. To ensure the new process is
   // set up by the time we return, block on that signal.
   int status = 0;
-  if (waitpid(pid_, &status, 0) < 0)
+  if (HANDLE_EINTR(waitpid(pid_, &status, 0)) < 0)
     return debug::ErrnoStatus(errno, "Can't create process.");
 
   if (WIFEXITED(status)) {
@@ -204,6 +225,10 @@ debug::Status LinuxBinaryLauncher::Setup(const std::vector<std::string>& argv) {
 
   if (!WIFSTOPPED(status) || WSTOPSIG(status) != SIGTRAP) {
     DEBUG_LOG(Process) << "Unexpected first signal from the child.";
+    if (!WIFSIGNALED(status)) {
+      kill(pid_, SIGKILL);
+      HANDLE_EINTR(waitpid(pid_, &status, __WALL));
+    }
     return debug::Status("Unexpected signal " + std::to_string(status));
   }
 

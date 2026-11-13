@@ -4,21 +4,25 @@
 
 #include "src/developer/debug/debug_agent/linux_system_interface.h"
 
+#include <unistd.h>
+#include <sys/sysinfo.h>
+
 #include "src/developer/debug/debug_agent/linux_binary_launcher.h"
 #include "src/developer/debug/debug_agent/linux_job_handle.h"
 
 namespace debug_agent {
 
-LinuxSystemInterface::LinuxSystemInterface() : component_manager_(this) {}
+LinuxSystemInterface::LinuxSystemInterface(bool inherited_sigpipe_ignored)
+    : inherited_sigpipe_ignored_(inherited_sigpipe_ignored), component_manager_(this) {}
 
 uint32_t LinuxSystemInterface::GetNumCpus() const {
-  // TODO(brettw) implement this (need to read "/proc").
-  return 1;
+  long count = sysconf(_SC_NPROCESSORS_ONLN);
+  return count > 0 ? static_cast<uint32_t>(count) : 0;
 }
 
 uint64_t LinuxSystemInterface::GetPhysicalMemory() const {
-  // TODO(brettw) implement this (need to read "/proc").
-  return 1000000000llu;
+  struct sysinfo info{};
+  return sysinfo(&info) == 0 ? static_cast<uint64_t>(info.totalram) * info.mem_unit : 0;
 }
 
 std::unique_ptr<JobHandle> LinuxSystemInterface::GetRootJob() const {
@@ -27,7 +31,7 @@ std::unique_ptr<JobHandle> LinuxSystemInterface::GetRootJob() const {
 }
 
 std::unique_ptr<BinaryLauncher> LinuxSystemInterface::GetLauncher() const {
-  return std::make_unique<LinuxBinaryLauncher>();
+  return std::make_unique<LinuxBinaryLauncher>(inherited_sigpipe_ignored_);
 }
 
 }  // namespace debug_agent

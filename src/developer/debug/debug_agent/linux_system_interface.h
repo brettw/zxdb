@@ -15,7 +15,7 @@ namespace debug_agent {
 
 class LinuxSystemInterface final : public SystemInterface {
  public:
-  LinuxSystemInterface();
+  explicit LinuxSystemInterface(bool inherited_sigpipe_ignored = false);
 
   // SystemInterface implementation:
   uint32_t GetNumCpus() const override;
@@ -27,6 +27,7 @@ class LinuxSystemInterface final : public SystemInterface {
   std::string GetSystemVersion() override { return "Unknown"; }
 
  private:
+  bool inherited_sigpipe_ignored_;
   LinuxComponentManager component_manager_;
   LinuxLimboProvider limbo_provider_;
 };

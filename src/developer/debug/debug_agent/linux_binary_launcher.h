@@ -13,7 +13,9 @@ namespace debug_agent {
 
 class LinuxBinaryLauncher : public BinaryLauncher {
  public:
-  LinuxBinaryLauncher() = default;
+  // Preserve ignored SIGPIPE inherited by the frontend, not its own ignored setting.
+  explicit LinuxBinaryLauncher(bool inherited_sigpipe_ignored = false)
+      : inherited_sigpipe_ignored_(inherited_sigpipe_ignored) {}
   ~LinuxBinaryLauncher() override = default;
 
   // BinaryLauncher implementation:
@@ -24,6 +26,7 @@ class LinuxBinaryLauncher : public BinaryLauncher {
 
  private:
   // These are valid after Setup().
+  bool inherited_sigpipe_ignored_;
   int pid_ = 0;
   fxl::RefPtr<LinuxTask> task_;
 

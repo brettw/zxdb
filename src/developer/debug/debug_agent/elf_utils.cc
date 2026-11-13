@@ -177,7 +177,6 @@ void MergeMmapedModules(std::vector<debug_ipc::Module>& modules,
                         std::function<std::optional<ElfSegInfo>(uint64_t)> get_elf_info_for_base) {
   std::set<uint64_t> visited_modules;
   uint64_t end_of_last_module = 0;
-  uint64_t vaddr_start = -1ul;
 
 #if defined(__Fuchsia__)
   const uint64_t page_size = zx_system_get_page_size();
@@ -206,6 +205,7 @@ void MergeMmapedModules(std::vector<debug_ipc::Module>& modules,
       continue;
     }
 
+    uint64_t vaddr_start = -1ul;
     size_t next_map_index = current_map_index + 1;
     for (size_t phdr_index = 0; phdr_index < opt_info->segment_headers.size(); phdr_index++) {
       const auto& phdr = opt_info->segment_headers[phdr_index];
