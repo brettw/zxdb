@@ -388,9 +388,8 @@ TEST(Index, DumpIndex) {
 }
 #endif
 
-// Enable and substitute a path on your system for kFilename to run the
-// indexing benchmark.
-#if 0
+// Configure ZXDB_INDEX_BENCHMARK_BINARY to enable the indexing benchmark.
+#if defined(ZXDB_INDEX_BENCHMARK_BINARY)
 static int64_t GetTickMicroseconds() {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -404,11 +403,12 @@ static int64_t GetTickMicroseconds() {
 }
 
 TEST(Index, BenchmarkIndexing) {
-  const char kFilename[] = "chrome";
+  const char kFilename[] = ZXDB_INDEX_BENCHMARK_BINARY;
   int64_t begin_us = GetTickMicroseconds();
 
   TestSymbolModule setup(kFilename, "");
-  ASSERT_TRUE(setup.Init("", false).ok());
+  Err err = setup.Init("", false);
+  ASSERT_TRUE(err.ok()) << err.msg();
 
   int64_t load_complete_us = GetTickMicroseconds();
 
@@ -421,8 +421,6 @@ TEST(Index, BenchmarkIndexing) {
          " µs\n  Index: %" PRId64 " µs\n\n",
          kFilename, load_complete_us - begin_us,
          index_complete_us - load_complete_us);
-
-  sleep(10);
 }
 #endif  // End indexing benchmark.
 

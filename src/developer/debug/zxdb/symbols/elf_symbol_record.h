@@ -7,6 +7,7 @@
 
 #include <stdint.h>
 
+#include <optional>
 #include <string>
 
 namespace zxdb {
@@ -25,7 +26,7 @@ enum class ElfSymbolType {
 struct ElfSymbolRecord {
   ElfSymbolRecord() = default;
 
-  // Automatically sets both the linkage name and unmangled name.
+  // Stores the linkage name. Demangling is deferred until the name is requested.
   explicit ElfSymbolRecord(ElfSymbolType type, uint64_t relative_address, uint64_t size,
                            const std::string& linkage_name);
 
@@ -44,7 +45,10 @@ struct ElfSymbolRecord {
   //
   // Symbols for function names will include parens. This means it will NOT parse as an Identifier.
   // TODO(bug 41928) make Identifier support function parameters.
-  std::string unmangled_name;
+  const std::string& GetUnmangledName() const;
+
+ private:
+  mutable std::optional<std::string> unmangled_name_;
 };
 
 }  // namespace zxdb

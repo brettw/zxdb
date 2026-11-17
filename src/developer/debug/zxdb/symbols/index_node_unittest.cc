@@ -14,6 +14,23 @@ namespace zxdb {
 using SymbolRef = IndexNode::SymbolRef;
 using Kind = IndexNode::Kind;
 
+// Tests that insertion and lookup respect a string view's length, including an empty view into
+// nonempty storage. Equivalent views and null-terminated names must reuse the same index node.
+TEST(IndexNode, BoundedNames) {
+  IndexNode root(Kind::kRoot);
+  const std::string storage = "namespace_suffix";
+  const std::string_view name(storage.data(), 9);
+  auto* first = root.AddChild(Kind::kNamespace, name);
+  EXPECT_EQ(first, root.AddChild(Kind::kNamespace, "namespace"));
+  EXPECT_EQ(1u, root.namespaces().size());
+  EXPECT_NE(first, root.AddChild(Kind::kNamespace, storage));
+
+  const std::string_view empty(storage.data(), 0);
+  auto* anonymous = root.AddChild(Kind::kNamespace, empty);
+  EXPECT_EQ(anonymous, root.AddChild(Kind::kNamespace, ""));
+  EXPECT_EQ(3u, root.namespaces().size());
+}
+
 // Tests de-duplicating type definitions, and upgrading forward declarations to full definitions.
 TEST(IndexNode, DeDupeType) {
   IndexNode node(Kind::kType);

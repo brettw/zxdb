@@ -248,6 +248,11 @@ add_executable(zxdb_tests
 )
 target_link_libraries(zxdb_tests PRIVATE zxdb_debug_adapter debug_shared_test_support GTest::gtest_main GTest::gmock)
 set_target_properties(zxdb_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
+set(ZXDB_INDEX_BENCHMARK_BINARY "" CACHE FILEPATH "Optional binary for the symbol indexing benchmark")
+if(ZXDB_INDEX_BENCHMARK_BINARY)
+  target_compile_definitions(zxdb_tests PRIVATE
+    ZXDB_INDEX_BENCHMARK_BINARY="${ZXDB_INDEX_BENCHMARK_BINARY}")
+endif()
 
 add_library(zxdb_symbol_test SHARED
   symbols/test_data/cpp/line_lookup_symbol_test.cc

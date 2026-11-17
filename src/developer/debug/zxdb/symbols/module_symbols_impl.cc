@@ -1212,6 +1212,7 @@ void ModuleSymbolsImpl::FillElfSymbols() {
 
   const std::map<std::string, llvm::ELF::Elf64_Sym>& elf_syms = binary_->GetELFSymbols();
   const std::map<std::string, uint64_t>& plt_syms = binary_->GetPLTSymbols();
+  elf_addresses_.reserve(elf_syms.size() + plt_syms.size());
 
   // Insert the regular symbols.
   //
@@ -1229,8 +1230,9 @@ void ModuleSymbolsImpl::FillElfSymbols() {
     if (sym.st_value == 0)
       continue;  // No address for this symbol. Probably imported.
 
-    auto inserted = mangled_elf_symbols_.emplace(
-        std::piecewise_construct, std::forward_as_tuple(name),
+    // The source map is sorted, so each normal symbol belongs at the end.
+    auto inserted = mangled_elf_symbols_.emplace_hint(
+        mangled_elf_symbols_.end(), std::piecewise_construct, std::forward_as_tuple(name),
         std::forward_as_tuple(ElfSymbolType::kNormal, sym.st_value, sym.st_size, name));
 
     // Append all addresses for now, this will be sorted at the bottom.

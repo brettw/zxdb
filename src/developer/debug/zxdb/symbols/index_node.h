@@ -18,7 +18,7 @@ class SymbolFactory;
 
 class IndexNode {
  public:
-  using Map = std::map<std::string, IndexNode>;
+  using Map = std::map<std::string, IndexNode, std::less<>>;
 
   // The type of an index node. There are several "physical" kinds which are associated with
   // children of each node. These physical ones count up from 0 so one can iterate over them

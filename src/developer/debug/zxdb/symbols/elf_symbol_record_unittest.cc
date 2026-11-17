@@ -13,7 +13,7 @@ TEST(ElfSymbolRecord, Demangle) {
   ElfSymbolRecord a(ElfSymbolType::kNormal, 0x1234u, 0, kMangled);
   EXPECT_EQ(0x1234u, a.relative_address);
   EXPECT_EQ(kMangled, a.linkage_name);
-  EXPECT_EQ("fxl::LogMessage::stream()", a.unmangled_name);
+  EXPECT_EQ("fxl::LogMessage::stream()", a.GetUnmangledName());
 }
 
 TEST(ElfSymbolRecord, NonMangled) {
@@ -22,7 +22,7 @@ TEST(ElfSymbolRecord, NonMangled) {
   ElfSymbolRecord b(ElfSymbolType::kNormal, 0x5678u, 0, kNonMangled);
   EXPECT_EQ(0x5678u, b.relative_address);
   EXPECT_EQ(kNonMangled, b.linkage_name);
-  EXPECT_EQ(kNonMangled, b.unmangled_name);
+  EXPECT_EQ(kNonMangled, b.GetUnmangledName());
 }
 
 }  // namespace zxdb

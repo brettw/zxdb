@@ -10,8 +10,12 @@ namespace zxdb {
 
 ElfSymbolRecord::ElfSymbolRecord(ElfSymbolType t, uint64_t relative_address, uint64_t size,
                                  const std::string& linkage_name)
-    : type(t), relative_address(relative_address), size(size), linkage_name(linkage_name) {
-  unmangled_name = llvm::demangle(linkage_name);
+    : type(t), relative_address(relative_address), size(size), linkage_name(linkage_name) {}
+
+const std::string& ElfSymbolRecord::GetUnmangledName() const {
+  if (!unmangled_name_)
+    unmangled_name_ = llvm::demangle(linkage_name);
+  return *unmangled_name_;
 }
 
 }  // namespace zxdb

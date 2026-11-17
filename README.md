@@ -94,6 +94,34 @@ in this repository. They are excluded from test discovery unless supplied:
   `-DZXDB_SAMPLE_CORE_DIR=/path/to/sample_core` (containing `core/core.dmp`
   and its companion symbol files).
 
+To time symbol indexing with optimized code against the existing debug executable,
+build a separate release configuration and enable the optional benchmark:
+
+```sh
+cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm \
+  -DZXDB_INDEX_BENCHMARK_BINARY="$PWD/build/zxdb"
+cmake --build build-release -j 2
+FUCHSIA_ANALYTICS_DISABLED=1 ./build-release/zxdb_tests \
+  --gtest_filter=Index.BenchmarkIndexing
+```
+
+The benchmark reports file-loading and full-DIE indexing times separately in
+microseconds. It indexes only the selected binary, without its shared libraries.
+The benchmark is omitted when `ZXDB_INDEX_BENCHMARK_BINARY` is unset.
+For comparisons, use the same input binary, finish compilation first, and run
+both versions on the same CPU with warm filesystem caches. For example:
+
+```sh
+FUCHSIA_ANALYTICS_DISABLED=1 taskset -c 0 ./build-release/zxdb_tests \
+  --gtest_filter=Index.BenchmarkIndexing --gtest_repeat=10
+```
+
+Core selection matters on hybrid CPUs. Keep a baseline test executable and
+alternate runs of the baseline and changed versions. Name demangling is deferred
+until a symbol's display name is requested, so that cost is outside the loading
+measurement. The benchmark also excludes module teardown and later symbol queries.
+
 ## Imported dependencies and source changes
 
 Fuchsia support libraries live in separate directories under `src/lib/`.

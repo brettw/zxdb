@@ -5,6 +5,8 @@
 #include "src/developer/debug/zxdb/symbols/index.h"
 
 #include <filesystem>
+#include <string_view>
+#include <variant>
 
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugInfoEntry.h"
@@ -31,9 +33,12 @@ class NamedSymbolRef : public IndexNode::SymbolRef {
  public:
   NamedSymbolRef() = default;
 
-  // Creates a SymbolRef we should index. The pointed-to string must outlive this class.
+  // Creates a SymbolRef we should index.
+  //
+  // WARNING: name is a non-owning string_view. Its backing storage must remain alive and unchanged
+  // for this object's lifetime and the lifetime of every copy that borrows the same name.
   NamedSymbolRef(SymbolRef::Kind kind, int32_t dwo_index, DwarfDieRef die_ref, IndexNode::Kind k,
-                 const char* name, uint64_t decl_offset, bool has_abstract_origin)
+                 std::string_view name, uint64_t decl_offset, bool has_abstract_origin)
       : SymbolRef(kind, dwo_index, die_ref),
         kind_(k),
         name_(name),
@@ -50,9 +55,15 @@ class NamedSymbolRef : public IndexNode::SymbolRef {
   // of a function with a specification, the implementation will have should_index set, but we'll
   // traverse the specification to fill in the name. This will generate a valid but not indexable
   // item for the specification.
-  const std::string& name() const { return name_; }
-  void set_name(const char* n) { name_ = n; }
+  std::string_view name() const {
+    if (const auto* borrowed = std::get_if<std::string_view>(&name_))
+      return *borrowed;
+    return std::get<std::string>(name_);
+  }
+  void copy_name(const NamedSymbolRef& other) { name_ = other.name_; }
   void set_name(std::string n) { name_ = std::move(n); }
+  // Borrows n with the same lifetime requirements as the constructor's name parameter.
+  void set_name(const char* n) { name_ = std::string_view(n); }
 
   // If this DIE has a declaration associated with it (a DW_AT_declaration tag), this indicates the
   // absolute offset of the declaration DIE. Will be 0 if none. It may or may not be inside the
@@ -107,7 +118,8 @@ class NamedSymbolRef : public IndexNode::SymbolRef {
 
  private:
   IndexNode::Kind kind_ = IndexNode::Kind::kNone;
-  std::string name_;
+  // DWARF strings outlive the unit's indexing pass. Only synthesized template names need storage.
+  std::variant<std::string_view, std::string> name_ = std::string_view();
   uint64_t decl_offset_ = 0;
   IndexNode* index_node_ = nullptr;
   bool has_abstract_origin_ = false;
@@ -270,6 +282,16 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
     if (kind == IndexNode::Kind::kNone)
       continue;
 
+    if (kind == IndexNode::Kind::kTemplateParameter) {
+      uint32_t parent_idx = scanner_.GetParentIndex(scanner_.die_index());
+      if (parent_idx == DwarfDieScanner::kNoParent)
+        continue;
+      const auto& parent = indexable_[parent_idx];
+      // Names that already contain template arguments need no parameter decoding.
+      if (!parent.has_modified_template_name() && debug::StringContains(parent.name(), "<"))
+        continue;
+    }
+
     // This DIE is of the type we want to index so decode. Must reset all output vars first.
     is_declaration.reset();
     has_const_value = false;
@@ -287,9 +309,7 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
 
     if (kind == IndexNode::Kind::kVar && die->getTag() == llvm::dwarf::DW_TAG_member &&
         !has_const_value) {
-      // Don't need to index structure members that don't have const values. This needs to be
-      // disambiguated because GetKindForDie doesn't have access to the attributes and we don't
-      // want to decode twice.
+      // An abstract origin can supply the constant value, so confirm its presence after decoding.
       //
       // In C++ everything with a const_value will generally also be external (i.e. "static") which
       // are things we want to index. Theoretically the compiler could generated a const_value
@@ -311,14 +331,7 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
 
       NamedSymbolRef& parent = indexable_[parent_idx];
 
-      // Check to see if the parent DIE already has a template parameter present in the name before
-      // we've modified anything. If this is the case, it's likely that the program was not compiled
-      // with the simple-template-names flag and the template parameters will be present directly in
-      // the name.
-      if (!parent.has_modified_template_name() && debug::StringContains(parent.name(), "<"))
-        continue;
-
-      std::string fixup_template_name = parent.name();
+      std::string fixup_template_name(parent.name());
 
       // Unfortunately, we need to decode again here to get the actual type instantiation. This
       // should be relatively quick and there should still be an overall speedup when using
@@ -407,8 +420,13 @@ IndexNode::Kind UnitIndexer::GetKindForDie(const llvm::DWARFDebugInfoEntry* die)
       return IndexNode::Kind::kNone;  // Variable with no location.
 
     case DwarfTag::kMember:
-      // Caller needs to check this case (see declaration comment).
-      return IndexNode::Kind::kVar;
+      // Ordinary instance members are not part of the global symbol index.
+      for (const auto& spec : abbrev->attributes()) {
+        if (spec.Attr == llvm::dwarf::DW_AT_const_value ||
+            spec.Attr == llvm::dwarf::DW_AT_abstract_origin)
+          return IndexNode::Kind::kVar;
+      }
+      return IndexNode::Kind::kNone;
 
     case DwarfTag::kTemplateTypeParameter:
     case DwarfTag::kTemplateValueParameter:
@@ -462,7 +480,7 @@ void UnitIndexer::AddEntryToIndex(uint32_t index_me, IndexNode* root) {
         // the lack of a name and not recompute.
         indexable_[cur].set_name(GetDieName(cur));
       }
-      indexable_[index_me].set_name(indexable_[cur].name());
+      indexable_[index_me].copy_name(indexable_[cur]);
     }
   }
 
@@ -532,7 +550,7 @@ void UnitIndexer::AddStandaloneEntryToIndex(uint32_t index_me, IndexNode* index_
   NamedSymbolRef& named_ref = indexable_[index_me];
 
   // Compute the name (avoiding GetDieName()) and the DIE to start indexing from.
-  std::string name = named_ref.name();
+  std::string name(named_ref.name());
   llvm::DWARFDie die;
   if (named_ref.decl_offset()) {
     // When there's a separate declaration, its parent encodes the scope information.

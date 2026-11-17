@@ -112,6 +112,9 @@ Using `zxdb/symbols` produces these disk, cache, and IPC side effects:
 - Calling `Symbol::GetFullName()`, `Symbol::GetIdentifier()`, or
   `Collection::GetSpecialType()` lazily computes and caches the formatted name,
   `Identifier`, or `SpecialType` on the `Symbol`.
+- `ElfSymbolRecord::GetUnmangledName()` demangles and caches the name on demand.
+  Loading a module builds its ELF name and address indices without demangling
+  each symbol.
 - `SystemSymbols::GetModule()` loads ELF and DWARF files from disk via
   `BuildIDIndex` and builds the symbol `Index`, or calls
   `RequestDownloadFunction` when local symbols are missing.

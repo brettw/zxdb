@@ -8,14 +8,14 @@ namespace zxdb {
 
 std::string ElfSymbol::ComputeFullName() const {
   // See ComputeIdentifier below for some of the complexity for these symbols.
-  return record_.unmangled_name;
+  return record_.GetUnmangledName();
 }
 
 Identifier ElfSymbol::ComputeIdentifier() const {
   switch (elf_type()) {
     case ElfSymbolType::kPlt:
       // Annotate the name with a "PLT" special identifier type.
-      return Identifier(IdentifierComponent(SpecialIdentifier::kPlt, record_.unmangled_name));
+      return Identifier(IdentifierComponent(SpecialIdentifier::kPlt, record_.GetUnmangledName()));
 
     case ElfSymbolType::kNormal:
     default:
@@ -30,7 +30,7 @@ Identifier ElfSymbol::ComputeIdentifier() const {
       //  - "virtual thunk to std::__2::basic_istream<char, std::__2::char_traits<char> >::~basic_istream()"
       //  - "(anonymous namespace)::TransformerBase::TransformString((anonymous namespace)::Position const&, (anonymous namespace)::TraversalResult*)::string_as_coded_vector"
       // clang-format on
-      return Identifier(IdentifierComponent(SpecialIdentifier::kElf, record_.unmangled_name));
+      return Identifier(IdentifierComponent(SpecialIdentifier::kElf, record_.GetUnmangledName()));
   }
 }
 
