@@ -19,6 +19,7 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_die_scanner.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
+#include "src/developer/debug/zxdb/symbols/source_file_indexer.h"
 #include "src/developer/debug/zxdb/symbols/symbol_utils.h"
 
 namespace zxdb {
@@ -650,11 +651,17 @@ void RecursiveFindExact(const IndexNode* node, const Identifier& input, size_t i
 }  // namespace
 
 void Index::CreateIndex(DwarfBinary& binary, int32_t dwo_index, bool force_slow_path) {
+  // Start the source file work first so it runs on worker threads during DIE indexing.
+  std::optional<SourceFileIndexer> source_files;
+  if (llvm::DWARFContext* context = binary.GetLLVMContext()) {
+    source_files.emplace(*context, CollectLineTableJobs(binary));
+  }
+
   size_t unit_count = binary.GetNormalUnitCount();
   for (size_t i = 0; i < unit_count; i++) {
     UnitIndex unit_index(false, i);
     if (auto unit_ref_ptr = binary.GetUnitAtIndex(unit_index))
-      IndexCompileUnit(*unit_ref_ptr, dwo_index, unit_index, force_slow_path);
+      IndexCompileUnit(*unit_ref_ptr, dwo_index, force_slow_path);
   }
 
   // Index any DWO units. .dwo files store their units in a separate DWARF section. Normally there
@@ -664,9 +671,11 @@ void Index::CreateIndex(DwarfBinary& binary, int32_t dwo_index, bool force_slow_
   for (size_t i = 0; i < dwo_unit_count; i++) {
     UnitIndex unit_index(true, i);
     if (auto unit_ref_ptr = binary.GetUnitAtIndex(unit_index))
-      IndexCompileUnit(*unit_ref_ptr, dwo_index, unit_index, force_slow_path);
+      IndexCompileUnit(*unit_ref_ptr, dwo_index, force_slow_path);
   }
 
+  if (source_files)
+    source_files->FinishInto(&files_);
   IndexFileNames();
 }
 
@@ -720,14 +729,13 @@ const std::vector<UnitIndex>* Index::FindFileUnitIndices(const std::string& name
 
 size_t Index::CountSymbolsIndexed() const { return RecursiveCountDies(root_); }
 
-void Index::IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, UnitIndex unit_index,
-                             bool force_slow_path) {
+void Index::IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, bool force_slow_path) {
   llvm::DWARFDie unit_die = unit.GetUnitDie();
   if (!unit_die.isValid())
     return;
 
   if (static_cast<int>(unit_die.getTag()) == static_cast<int>(DwarfTag::kSkeletonUnit)) {
-    IndexSkeletonCompileUnit(unit, unit_die, unit_index);
+    IndexSkeletonCompileUnit(unit, unit_die);
   } else {
     // Normal compilation unit.
     UnitIndexer indexer(unit, dwo_index);
@@ -735,28 +743,19 @@ void Index::IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, UnitIndex
 
     indexer.Scan(&main_functions_);
     indexer.Index(&root_);
-
-    IndexCompileUnitSourceFiles(unit, unit_index);
   }
 
-  // Evict the unit's decoded line table and DIE array immediately after indexing so transient
-  // parse structures do not accumulate across all compilation units during indexing.
+  // Evict the unit's DIE array immediately after indexing so transient parse structures do not
+  // accumulate across all compilation units during indexing.
   unit_die = llvm::DWARFDie();
-  if (llvm::DWARFUnit* llvm_unit = unit.GetLLVMUnit()) {
-    if (DwarfBinary* binary = unit.GetBinary()) {
-      if (llvm::DWARFContext* context = binary->GetLLVMContext()) {
-        context->clearLineTableForUnit(llvm_unit);
-      }
-    }
+  if (llvm::DWARFUnit* llvm_unit = unit.GetLLVMUnit())
     llvm_unit->clear();
-  }
 }
 
 // Skeleton units are units in the main binary that reference a .dwo file containing the symbols
 // for just that compilation unit. The skeleton unit has the addr_base which defines how addresses
 // are relocated from the link-independent .dwo file, as well as the line table.
-void Index::IndexSkeletonCompileUnit(const DwarfUnit& unit, const llvm::DWARFDie& unit_die,
-                                     UnitIndex unit_index) {
+void Index::IndexSkeletonCompileUnit(const DwarfUnit& unit, const llvm::DWARFDie& unit_die) {
   DwarfDieDecoder unit_decoder(*unit.GetBinary());
 
   std::optional<const char*> dwo_name;
@@ -783,45 +782,8 @@ void Index::IndexSkeletonCompileUnit(const DwarfUnit& unit, const llvm::DWARFDie
   skeleton.comp_dir = comp_dir ? *comp_dir : "";
   skeleton.addr_base = *addr_base;
 
-  // Even for skeleton units, the line table is still in the main binary.
-  IndexCompileUnitSourceFiles(unit, unit_index);
-}
-
-// TODO: It might be nice if the DwarfUnit knew its own undex so it didn't need to be passed in
-// separately.
-void Index::IndexCompileUnitSourceFiles(const DwarfUnit& unit, UnitIndex unit_index) {
-  const llvm::DWARFDebugLine::LineTable* line_table = unit.GetLLVMLineTable();
-  if (!line_table)
-    return;  // No line table for this unit.
-
-  // This table is the size of the file name table (which confusingly counts from 0 up to the
-  // the "size"). Entries are set to 1 when we've added them to the index already.
-  std::vector<int> added_file;
-  added_file.resize(line_table->Prologue.FileNames.size() + 1, 0);
-
-  // We don't want to just add all the files from the line table to the index. The line table will
-  // contain entries for every file referenced by the compilation unit, which includes declarations.
-  // We want only files that contribute code, which in practice is a tiny fraction of the total.
-  //
-  // To get this, iterate through the unit's row table and collect all referenced file names.
-  std::string file_name;
-  for (size_t i = 0; i < line_table->Rows.size(); i++) {
-    auto file_id = line_table->Rows[i].File;
-    if (file_id > added_file.size())
-      continue;
-
-    if (!added_file[file_id]) {
-      added_file[file_id] = 1;
-      if (line_table->getFileNameByIndex(
-              file_id, "", llvm::DILineInfoSpecifier::FileLineInfoKind::RelativeFilePath,
-              file_name)) {
-        // The files here can contain relative components like "/foo/bar/../baz". This is OK because
-        // we want it to match other places in the symbol code that do a similar computation to get
-        // a file name.
-        files_[NormalizePath(file_name)].push_back(unit_index);
-      }
-    }
-  }
+  // The line table of a skeleton unit is in the main binary. CreateIndex() indexes it with the
+  // other units.
 }
 
 void Index::IndexFileNames() {

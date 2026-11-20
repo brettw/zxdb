@@ -39,8 +39,10 @@ add_library(zxdb_symbols STATIC
   input_location.cc
   lazy_symbol.cc
   line_details.cc
+  line_file_table.cc
+  line_program.cc
   line_table.cc
-  line_table_impl.cc
+  line_table_cache.cc
   loaded_module_symbols.cc
   location.cc
   member_ptr.cc
@@ -50,6 +52,7 @@ add_library(zxdb_symbols STATIC
   module_symbols_impl.cc
   namespace.cc
   process_symbols.cc
+  source_file_indexer.cc
   source_util.cc
   symbol.cc
   symbol_context.cc

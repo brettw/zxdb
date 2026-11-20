@@ -7,7 +7,6 @@
 #include <span>
 #include <lib/syslog/cpp/macros.h>
 
-#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/symbols/code_block.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/line_table.h"
@@ -22,16 +21,16 @@ enum class FileChecked { kUnchecked = 0, kMatch, kNoMatch };
 }  // namespace
 
 std::vector<LineMatch> GetAllLineTableMatchesInUnit(const LineTable& line_table,
+                                                    const FunctionForAddress& function_for_address,
                                                     const std::string& full_path, int line) {
   std::vector<LineMatch> result;
 
   // The file table usually has a bunch of entries not referenced by the line table (these are
   // usually for declarations of things).
   //
-  // The extra "+1" is required because the file name indices count from 1. The 0-index file name
-  // index implicitly takes the file name from the compilation unit.
+  // This is indexed by the raw file register value, like the file table.
   std::vector<FileChecked> checked;
-  checked.resize(line_table.GetNumFileNames() + 1, FileChecked::kUnchecked);
+  checked.resize(line_table.files().size(), FileChecked::kUnchecked);
 
   // The |best_line| is the line number of the smallest line in the file we've found >= to the
   // search line. The |result| contains all lines we've encountered in the unit so far that match
@@ -42,13 +41,13 @@ std::vector<LineMatch> GetAllLineTableMatchesInUnit(const LineTable& line_table,
   // Rows in the line table.
   size_t num_sequences = line_table.GetNumSequences();
   for (size_t sequence_i = 0; sequence_i < num_sequences; sequence_i++) {
-    std::span<const llvm::DWARFDebugLine::Row> sequence = line_table.GetSequenceAt(sequence_i);
+    std::span<const LineRow> sequence = line_table.GetSequenceAt(sequence_i);
 
-    for (const auto& row : sequence) {
-      if (!row.IsStmt || row.EndSequence)
+    for (const LineRow& row : sequence) {
+      if (!row.is_stmt() || row.end_sequence())
         continue;
 
-      auto file_id = row.File;
+      uint32_t file_id = row.file;
       if (file_id >= checked.size())
         continue;  // Symbols are corrupt.
 
@@ -56,7 +55,7 @@ std::vector<LineMatch> GetAllLineTableMatchesInUnit(const LineTable& line_table,
       // same line table, so don't assume just because we found it that no other files match.
       if (checked[file_id] == FileChecked::kUnchecked) {
         // Look up effective file name and see if it's a match.
-        if (auto file_name = line_table.GetFileNameByIndex(file_id)) {
+        if (const std::string* file_name = line_table.files().GetFileName(file_id)) {
           if (full_path == *file_name) {
             checked[file_id] = FileChecked::kMatch;
           } else {
@@ -68,7 +67,7 @@ std::vector<LineMatch> GetAllLineTableMatchesInUnit(const LineTable& line_table,
       }
 
       if (checked[file_id] == FileChecked::kMatch) {
-        int row_line = static_cast<int>(row.Line);
+        int row_line = static_cast<int>(row.line);
         if (line <= row_line) {
           // All lines >= to the line in question are possibilities.
           if (row_line < best_line) {
@@ -78,8 +77,9 @@ std::vector<LineMatch> GetAllLineTableMatchesInUnit(const LineTable& line_table,
           }
           if (row_line == best_line) {
             // Accumulate all matching results, do not insert invalid symbols.
-            if (auto lazy_symbol = line_table.GetFunctionForRow(row); lazy_symbol.is_valid()) {
-              result.emplace_back(row.Address.Address, row_line, lazy_symbol);
+            if (LazySymbol lazy_symbol = function_for_address(row.address);
+                lazy_symbol.is_valid()) {
+              result.emplace_back(row.address, row_line, lazy_symbol);
             }
           }
         }
@@ -213,10 +213,10 @@ size_t GetFunctionPrologueSize(const LineTable& line_table, const Function* func
   size_t prologue_end_index = first_row;
   bool found_marked_end = false;
   for (size_t i = 0; i < kMaxSearchCount && first_row + i < found.sequence.size(); i++) {
-    if (!code_ranges.InRange(found.sequence[first_row + i].Address.Address))
+    if (!code_ranges.InRange(found.sequence[first_row + i].address))
       break;  // Outside the function.
 
-    if (found.sequence[first_row + i].PrologueEnd) {
+    if (found.sequence[first_row + i].prologue_end()) {
       // Found match.
       prologue_end_index = first_row + i;
       found_marked_end = true;
@@ -234,18 +234,18 @@ size_t GetFunctionPrologueSize(const LineTable& line_table, const Function* func
   // There can be compiler-generated code immediately following the prologue annotated by "line 0".
   // Count this as prologue also.
   while (prologue_end_index + 1 < found.sequence.size() &&
-         found.sequence[prologue_end_index].Line == 0) {
+         found.sequence[prologue_end_index].line == 0) {
     prologue_end_index++;
   }
 
   // Sanity check: None of those previous operations should have left us outside of the function's
   // code or outside of a known instruction (there's an end_sequence marker). If it did, this line
   // table looks different than we expect and we don't report a prologue.
-  if (!code_ranges.InRange(found.sequence[prologue_end_index].Address.Address) ||
-      found.sequence[prologue_end_index].EndSequence)
+  if (!code_ranges.InRange(found.sequence[prologue_end_index].address) ||
+      found.sequence[prologue_end_index].end_sequence())
     return 0;
 
-  return found.sequence[prologue_end_index].Address.Address - code_range_begin;
+  return found.sequence[prologue_end_index].address - code_range_begin;
 }
 
 }  // namespace zxdb

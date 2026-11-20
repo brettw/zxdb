@@ -12,6 +12,8 @@
 #include "src/developer/debug/zxdb/common/file_util.h"
 #include "src/developer/debug/zxdb/symbols/const_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
+#include "src/developer/debug/zxdb/symbols/line_file_table.h"
+#include "src/developer/debug/zxdb/symbols/line_table_cache.h"
 
 namespace zxdb {
 
@@ -108,24 +110,6 @@ void DwarfDieDecoder::AddCString(llvm::dwarf::Attribute attribute,
   });
 }
 
-void DwarfDieDecoder::AddLineTableFile(llvm::dwarf::Attribute attribute,
-                                       std::optional<std::string>* output) {
-  attrs_.emplace_back(
-      attribute, [this, output](llvm::DWARFUnit* unit, const llvm::DWARFFormValue& form) {
-        const llvm::DWARFDebugLine::LineTable* line_table = context_->getLineTableForUnit(unit);
-        if (!line_table)
-          return;
-
-        output->emplace();
-        // Pass "" for the compilation directory so it doesn't rebase the file name. Our output
-        // file names are always relative to the build (compilation) dir.
-        line_table->getFileNameByIndex(
-            form.getAsUnsignedConstant().value(), "",
-            llvm::DILineInfoSpecifier::FileLineInfoKind::RelativeFilePath, output->value());
-        output->value() = NormalizePath(output->value());
-      });
-}
-
 void DwarfDieDecoder::AddConstValue(llvm::dwarf::Attribute attribute, ConstValue* output) {
   // The ConstValue already holds an "unset" state so we don't need an optional. Assume it's already
   // in the unset state when adding.
@@ -184,21 +168,21 @@ void DwarfDieDecoder::AddFile(llvm::dwarf::Attribute attribute,
   attrs_.emplace_back(
       attribute, [this, output](llvm::DWARFUnit* unit, const llvm::DWARFFormValue& form) {
         std::optional<uint64_t> file_index = form.getAsUnsignedConstant();
-        if (!file_index)
+        if (!file_index || !unit)
           return;
 
-        const llvm::DWARFDebugLine::LineTable* line_table = context_->getLineTableForUnit(unit);
-        if (!line_table)
-          return;
-
-        // Pass "" for the compilation directory so it doesn't rebase the file name. Our output file
-        // names are always relative to the build (compilation) dir.
-        std::string file_name;
-        if (line_table->getFileNameByIndex(
-                *file_index, "", llvm::DILineInfoSpecifier::FileLineInfoKind::RelativeFilePath,
-                file_name)) {
-          *output = NormalizePath(file_name);
+        // The binary caches the file tables. Without a binary, use a cache for this lookup only.
+        std::shared_ptr<const LineFileTable> files;
+        if (binary_) {
+          files = binary_->GetLineFileTable(unit, *file_index);
+        } else {
+          files = LineTableCache().GetFileTable(*unit, *file_index);
         }
+        if (!files)
+          return;
+
+        if (const std::string* name = files->GetFileName(*file_index))
+          *output = *name;
       });
 }
 

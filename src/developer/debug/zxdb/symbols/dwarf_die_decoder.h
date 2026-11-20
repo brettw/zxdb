@@ -79,7 +79,6 @@ class DwarfDieDecoder {
   void AddAddress(llvm::dwarf::Attribute attribute, std::optional<uint64_t>* output);
   void AddHighPC(std::optional<HighPC>* output);
   void AddCString(llvm::dwarf::Attribute attribute, std::optional<const char*>* output);
-  void AddLineTableFile(llvm::dwarf::Attribute attribute, std::optional<std::string>* output);
   void AddConstValue(llvm::dwarf::Attribute attribute, ConstValue* const_value);
   void AddSectionOffset(llvm::dwarf::Attribute attribute, std::optional<uint64_t>* offset);
   void AddBlock(llvm::dwarf::Attribute attribute, std::optional<std::vector<uint8_t>>* block);

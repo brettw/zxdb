@@ -84,20 +84,15 @@ void ModuleIndexer::IndexDwos() {
                    &collected_dwo_info]() {
       std::unique_ptr<DwoInfo> info = IndexOneDwo(skeleton_index, dwo_refs[skeleton_index]);
 
-      // Save the info and update the tracking information inside the lock.
-      bool signal_completion = false;
-      {
-        std::unique_lock<std::mutex> lock(work_mutex);
-        collected_dwo_info[skeleton_index] = std::move(info);
+      // Save the info and update the tracking information inside the lock. Signal completion
+      // inside the lock too. The waiting thread destroys the condition variable as soon as it can
+      // take the lock, so notifying after unlocking can use a destroyed condition variable.
+      std::unique_lock<std::mutex> lock(work_mutex);
+      collected_dwo_info[skeleton_index] = std::move(info);
 
-        work_count--;
-        signal_completion = (work_count == 0);
-      }
-
-      // Signal completion outside of the lock.
-      if (signal_completion) {
+      work_count--;
+      if (work_count == 0)
         completion.notify_all();
-      }
     });
   }
 

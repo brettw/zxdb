@@ -89,11 +89,8 @@ class Index {
   size_t CountSymbolsIndexed() const;
 
  private:
-  void IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, UnitIndex unit_index,
-                        bool force_slow_path);
-  void IndexSkeletonCompileUnit(const DwarfUnit& unit, const llvm::DWARFDie& unit_die,
-                                UnitIndex unit_index);
-  void IndexCompileUnitSourceFiles(const DwarfUnit& unit, UnitIndex unit_index);
+  void IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, bool force_slow_path);
+  void IndexSkeletonCompileUnit(const DwarfUnit& unit, const llvm::DWARFDie& unit_die);
 
   // Populates the file_name_index_ given a now-unchanging files_ map.
   void IndexFileNames();

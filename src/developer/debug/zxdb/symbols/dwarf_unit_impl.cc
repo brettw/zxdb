@@ -14,7 +14,6 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/lazy_symbol.h"
-#include "src/developer/debug/zxdb/symbols/line_table_impl.h"
 
 namespace zxdb {
 
@@ -78,19 +77,12 @@ std::string DwarfUnitImpl::GetCompilationDir() const {
 
 const LineTable& DwarfUnitImpl::GetLineTable() const {
   if (!line_table_) {
-    if (binary_) {
-      line_table_.emplace(GetWeakPtr(), GetLLVMLineTable());
-    } else {
+    if (binary_)
+      line_table_.emplace(binary_->DecodeLineTable(unit_));
+    else
       line_table_.emplace();
-    }
   }
   return *line_table_;
-}
-
-const llvm::DWARFDebugLine::LineTable* DwarfUnitImpl::GetLLVMLineTable() const {
-  if (!binary_)
-    return nullptr;
-  return binary_->GetLLVMContext()->getLineTableForUnit(unit_);
 }
 
 uint64_t DwarfUnitImpl::GetDieCount() const { return unit_->getNumDIEs(); }

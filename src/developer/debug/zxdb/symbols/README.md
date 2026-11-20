@@ -55,6 +55,15 @@ Public headers expose these symbol classes, factories, and evaluators:
   `symbol_utils.h` (`zxdb::GetSymbolScopePrefix`, `zxdb::NameHasTemplate`,
   `zxdb::StripTemplate`, `zxdb::AddTemplateParameterToName`).
 
+- Line tables: `zxdb::LineTable` (`line_table.h`) is concrete, immutable data
+  made of `zxdb::LineRow` rows (`line_row.h`) and a `zxdb::LineFileTable`
+  (`line_file_table.h`). Tests construct it directly with
+  `line_table_test_support.h`. `zxdb::LineProgram` (`line_program.h`) parses
+  a line table header with LLVM and decodes the program with the zxdb decoder.
+  `zxdb::SourceFileIndexer` (`source_file_indexer.h`) finds the source files
+  of each unit for the `Index`. See `line_tables.md` for the design and the
+  required test coverage.
+
 ## Invariants
 
 Callers and implementations must preserve these invariants:
@@ -98,6 +107,23 @@ Callers and implementations must preserve these invariants:
 - Local type units in `.debug_names` use `.debug_info` offsets. Foreign type
   unit entries return `std::nullopt` until `zxdb` supports split DWARF
   (https://fxbug.dev/583730372).
+- All file names from line tables come from `ResolveLineFileName()`, so names
+  from line rows, `DW_AT_decl_file`, and the file index compare equal.
+- `IsStrippedSequenceStart()` is the only rule for removed code. `LineTable`
+  drops those sequences, and the file index ignores their files.
+- The line program decoder must produce the same rows as
+  `llvm::DWARFDebugLine::LineTable::parse()`, except for the differences that
+  `line_tables.md` lists. `line_program_binary_unittest.cc` checks this
+  on real binaries.
+- `SourceFileIndexer` workers read only immutable section data. They must not
+  call LLVM APIs that change the `DWARFContext` or a `DWARFUnit` (for example
+  `getUnitDIE()` or `getLineTableForUnit()`), and they pass a null unit to the
+  header parser. Line tables with string forms that need the unit
+  (`DW_FORM_strx` and similar) are resolved in `FinishInto()` on the thread
+  that owns the context.
+- `DW_LNE_define_file` can add files that the line table header doesn't have.
+  File lookups go through `LineTableCache`, which decodes the program when an
+  index is past the header's entries.
 - Index fallback: when `.debug_names` is absent or empty, or when
   `force_slow_index` is set, `ModuleSymbolsImpl` falls back to the full-DIE
   `Index`.
@@ -112,6 +138,13 @@ Using `zxdb/symbols` produces these disk, cache, and IPC side effects:
 - Calling `Symbol::GetFullName()`, `Symbol::GetIdentifier()`, or
   `Collection::GetSpecialType()` lazily computes and caches the formatted name,
   `Identifier`, or `SpecialType` on the `Symbol`.
+- `DwarfUnit::GetLineTable()` decodes and caches the unit's line table.
+  `DwarfBinary::GetLineFileTable()` usually parses only the line table header.
+  Both share the file tables in the binary's `LineTableCache`.
+  `DwarfBinary::ClearLLVMCache()` clears the cache.
+- `Index::CreateIndex()` starts worker threads for the source file index when
+  the binary has 256 KB or more of line tables: one, plus one for each 8 MB,
+  up to six.
 - `ElfSymbolRecord::GetUnmangledName()` demangles and caches the name on demand.
   Loading a module builds its ELF name and address indices without demangling
   each symbol.

@@ -4,53 +4,133 @@
 
 #include "src/developer/debug/zxdb/symbols/line_table.h"
 
-#include <span>
 #include <lib/syslog/cpp/macros.h>
-#include <unistd.h>
 
 #include <algorithm>
-#include <cstdint>
-#include <limits>
 
 #include "src/developer/debug/shared/largest_less_or_equal.h"
+#include "src/developer/debug/zxdb/symbols/line_details.h"
 #include "src/developer/debug/zxdb/symbols/symbol_context.h"
 
 namespace zxdb {
 
-static constexpr uint64_t kMaxAddress = std::numeric_limits<uint64_t>::max();
+namespace {
 
-size_t LineTable::GetNumSequences() const {
-  EnsureSequences();
-  return sequences_.size();
+const std::shared_ptr<const LineFileTable>& EmptyFileTable() {
+  static const std::shared_ptr<const LineFileTable> empty = std::make_shared<LineFileTable>();
+  return empty;
 }
 
-std::span<const LineTable::Row> LineTable::GetSequenceAt(size_t index) const {
-  // Callers will have to call GetNumSequences() above before querying for a specific one, so we
-  // don't have to call EnsureSequence().
+// The order of the parameters matters because "line 0" is handled in "greedy" mode only for the
+// candidate line. If the caller is asking about an address that matches line 0, we don't want to
+// expand that past line boundaries, but we do want to expand other lines across line 0 in greedy
+// mode.
+bool SameFileLine(const LineRow& reference, const LineRow& candidate, bool greedy) {
+  // end_sequence rows don't have files or lines associated with them, they're just markers. The
+  // table will report the previous line's file and line as a side-effect of the way it's encoded,
+  // so explicitly fail matching for these.
+  if (reference.end_sequence() || candidate.end_sequence())
+    return false;
+
+  if (greedy && candidate.line == 0)
+    return true;
+  return reference.file == candidate.file && reference.line == candidate.line;
+}
+
+}  // namespace
+
+LineTable::LineTable() : files_(EmptyFileTable()) {}
+
+LineTable::LineTable(std::shared_ptr<const LineFileTable> files, std::vector<LineRow> rows)
+    : files_(files ? std::move(files) : EmptyFileTable()) {
+  // Find the live sequences in program order.
+  std::vector<Sequence> found;
+  size_t sequence_begin = 0;
+  for (size_t i = 0; i < rows.size(); i++) {
+    if (!rows[i].end_sequence())
+      continue;
+
+    uint64_t begin = rows[sequence_begin].address;
+    uint64_t end = rows[i].address;
+    // Addresses that go backwards indicate corrupt data.
+    if (!IsStrippedSequenceStart(begin) && end >= begin)
+      found.emplace_back(AddressRange(begin, end), sequence_begin, i);
+    sequence_begin = i + 1;
+  }
+
+  std::stable_sort(found.begin(), found.end(), [](const Sequence& a, const Sequence& b) {
+    if (a.addresses.begin() != b.addresses.begin())
+      return a.addresses.begin() < b.addresses.begin();
+    return a.addresses.end() < b.addresses.end();
+  });
+
+  // Compilers usually write sequences in address order. Copy only when the rows need reordering
+  // or some rows were dropped.
+  bool in_place = true;
+  size_t expected_begin = 0;
+  for (const Sequence& seq : found) {
+    if (seq.row_begin != expected_begin) {
+      in_place = false;
+      break;
+    }
+    expected_begin = seq.row_end + 1;
+  }
+  if (expected_begin != rows.size())
+    in_place = false;
+
+  if (in_place) {
+    rows_ = std::move(rows);
+    sequences_ = std::move(found);
+  } else {
+    CopySequences(rows, found);
+  }
+
+  max_end_.reserve(sequences_.size());
+  uint64_t max_end = 0;
+  for (const Sequence& seq : sequences_) {
+    max_end = std::max(max_end, seq.addresses.end());
+    max_end_.push_back(max_end);
+  }
+}
+
+void LineTable::CopySequences(const std::vector<LineRow>& rows,
+                              const std::vector<Sequence>& found) {
+  size_t row_count = 0;
+  for (const Sequence& seq : found)
+    row_count += seq.row_end - seq.row_begin + 1;
+
+  rows_.reserve(row_count);
+  sequences_.reserve(found.size());
+  for (const Sequence& seq : found) {
+    size_t new_begin = rows_.size();
+    rows_.insert(rows_.end(), rows.begin() + seq.row_begin, rows.begin() + seq.row_end + 1);
+    sequences_.emplace_back(seq.addresses, new_begin, rows_.size() - 1);
+  }
+}
+
+std::span<const LineRow> LineTable::GetSequenceAt(size_t index) const {
   FX_DCHECK(index < sequences_.size());
-
-  std::span<const Row> rows = GetRows();
-  size_t row_begin = sequences_[index].row_begin;
-  return rows.subspan(row_begin, sequences_[index].row_end - row_begin);
+  const Sequence& seq = sequences_[index];
+  return std::span<const LineRow>(rows_).subspan(seq.row_begin, seq.row_end - seq.row_begin);
 }
 
-std::span<const LineTable::Row> LineTable::GetRowSequenceForAddress(
-    const SymbolContext& address_context, TargetPointer absolute_address) const {
-  TargetPointer rel_address = address_context.AbsoluteToRelative(absolute_address);
+std::span<const LineRow> LineTable::GetRowsWithEnd(const Sequence& seq) const {
+  return std::span<const LineRow>(rows_).subspan(seq.row_begin, seq.row_end - seq.row_begin + 1);
+}
 
-  const Sequence* sequence = GetSequenceForRelativeAddress(rel_address);
+std::span<const LineRow> LineTable::GetRowSequenceForAddress(const SymbolContext& address_context,
+                                                             TargetPointer absolute_address) const {
+  const Sequence* sequence =
+      GetSequenceForRelativeAddress(address_context.AbsoluteToRelative(absolute_address));
   if (!sequence)
-    return std::span<const Row>();
-
-  std::span<const Row> rows = GetRows();
-  // Include the last row (marked with EndSequence) in the result.
-  return rows.subspan(sequence->row_begin, sequence->row_end - sequence->row_begin + 1);
+    return std::span<const LineRow>();
+  return GetRowsWithEnd(*sequence);
 }
 
 LineTable::FoundRow LineTable::GetRowForAddress(const SymbolContext& address_context,
                                                 TargetPointer absolute_address,
                                                 SkipMode skip_mode) const {
-  std::span<const Row> seq = GetRowSequenceForAddress(address_context, absolute_address);
+  std::span<const LineRow> seq = GetRowSequenceForAddress(address_context, absolute_address);
   if (seq.empty())
     return FoundRow();
 
@@ -59,8 +139,8 @@ LineTable::FoundRow LineTable::GetRowForAddress(const SymbolContext& address_con
   // a sequence of exact matches. That's the behavior we want here.
   auto found = debug::LargestLessOrEqual(
       seq.begin(), seq.end(), rel_address,
-      [](const Row& row, TargetPointer addr) { return row.Address.Address < addr; },
-      [](const Row& row, TargetPointer addr) { return row.Address.Address == addr; });
+      [](const LineRow& row, TargetPointer addr) { return row.address < addr; },
+      [](const LineRow& row, TargetPointer addr) { return row.address == addr; });
 
   // The address should not be before the beginning of this sequence (the only end() case for
   // LargestLessOrEqual()). Otherwise GetRowSequenceForAddress() shouldn't have returned it.
@@ -72,7 +152,7 @@ LineTable::FoundRow LineTable::GetRowForAddress(const SymbolContext& address_con
   // If the found item has a 0 line entry, then we need to adjust backwards to find a non-zero line
   // entry for symbolization, and adjust forwards for a non-zero line entry with is_stmt set. This
   // is effectively also what gdb does, see https://fxbug.dev/436290252.
-  while (seq[symbolizable_index].Line == 0 && symbolizable_index > 0) {
+  while (seq[symbolizable_index].line == 0 && symbolizable_index > 0) {
     symbolizable_index--;
   }
 
@@ -81,65 +161,100 @@ LineTable::FoundRow LineTable::GetRowForAddress(const SymbolContext& address_con
     // Skip compiler-generated rows until we find the next is_stmt row. Don't advance to an "end
     // sequence" line because that doesn't represent actual code, just the end of the extent of the
     // sequence. This is going to correspond to where we would place a line-based breakpoint at (or
-    // near) |absolute_address|.
+    // near) absolute_address.
     while (next_statement_index + 1 < seq.size() &&
-           (seq[next_statement_index].Line == 0 || !seq[next_statement_index].IsStmt) &&
-           !seq[next_statement_index + 1].EndSequence)
+           (seq[next_statement_index].line == 0 || !seq[next_statement_index].is_stmt()) &&
+           !seq[next_statement_index + 1].end_sequence())
       next_statement_index++;
   }
 
   return FoundRow(seq, symbolizable_index, next_statement_index);
 }
 
-const LineTable::Sequence* LineTable::GetSequenceForRelativeAddress(
-    TargetPointer relative_address) const {
-  EnsureSequences();
-  if (sequences_.empty())
-    return nullptr;
+LineDetails LineTable::GetLineDetails(const SymbolContext& symbol_context,
+                                      TargetPointer absolute_address, bool greedy,
+                                      const std::string& compilation_dir) const {
+  uint64_t relative_address = symbol_context.AbsoluteToRelative(absolute_address);
+  const Sequence* sequence = GetSequenceForRelativeAddress(relative_address);
+  if (!sequence)
+    return LineDetails();
 
-  auto found = debug::LargestLessOrEqual(
-      sequences_.begin(), sequences_.end(), relative_address,
-      [](const Sequence& seq, TargetPointer addr) { return seq.addresses.begin() < addr; },
-      [](const Sequence& seq, TargetPointer addr) { return seq.addresses.begin() == addr; });
-  if (found == sequences_.end() || !found->addresses.InRange(relative_address))
-    return nullptr;  // Not in any range.
+  // A sequence containing an address has at least one row and the end_sequence row.
+  std::span<const LineRow> rows = GetRowsWithEnd(*sequence);
+  FX_DCHECK(rows.size() >= 2);
 
-  return &*found;
-}
+  // Find the last row at or before the address, excluding the end_sequence row. When the compiler
+  // emits several rows at the address of the first instruction of a function, the last one is the
+  // one that describes the code.
+  auto upper = std::upper_bound(
+      rows.begin() + 1, rows.end() - 1, relative_address,
+      [](uint64_t address, const LineRow& row) { return address < row.address; });
+  size_t found_row_index = std::distance(rows.begin(), upper) - 1;
 
-void LineTable::EnsureSequences() const {
-  if (!sequences_.empty())
-    return;
-  const auto& rows = GetRows();
-  if (rows.empty())
-    return;
-
-  constexpr size_t kNoSeq = std::numeric_limits<size_t>::max();
-
-  // Beginning row index of current sequence, or kNoSeq if there is no current sequence.
-  size_t cur_seq_begin_row = kNoSeq;
-
-  for (size_t i = 0; i < rows.size(); i++) {
-    if (cur_seq_begin_row == kNoSeq)
-      cur_seq_begin_row = i;
-
-    if (rows[i].EndSequence) {
-      // When the linker strips dead code it will mark the sequence as starting at address 0. Strip
-      // these from the table. As of revision
-      // e618ccbf431f6730edb6d1467a127c3a52fd57f7 in Clang, -1 is used to
-      // indicate that a function was removed. Versions of Clang earlier than
-      // this do not support this behavior.
-      auto seq_addr = rows[cur_seq_begin_row].Address.Address;
-      if (seq_addr && seq_addr != kMaxAddress)
-        sequences_.emplace_back(AddressRange(seq_addr, rows[i].Address.Address), cur_seq_begin_row,
-                                i);
-      cur_seq_begin_row = kNoSeq;
-    }
+  // Adjust the beginning and end ranges to include all matching entries of the same line.
+  //
+  // Note that this code must not try to hide "line 0" entries (corresponding to compiler-generated
+  // code). This function is used by the stepping code which has its own handling for these ranges.
+  // Trying to put "line 0" code in with the previous or next entry (what some other code does that
+  // tries to hide this from the user) will confuse the stepping code which will always step through
+  // these instructions.
+  size_t first_row_index = found_row_index;
+  while (first_row_index > 0 &&
+         SameFileLine(rows[found_row_index], rows[first_row_index - 1], greedy)) {
+    first_row_index--;
+  }
+  size_t last_row_index = found_row_index;  // Inclusive.
+  while (last_row_index < rows.size() - 1 &&
+         SameFileLine(rows[found_row_index], rows[last_row_index + 1], greedy)) {
+    last_row_index++;
   }
 
-  std::sort(sequences_.begin(), sequences_.end(), [](const Sequence& a, const Sequence& b) {
-    return a.addresses.end() < b.addresses.end();
-  });
+  // Resolve the file name. Skip for "line 0" entries which are compiled-generated code not
+  // associated with a line entry, leaving the file name and compilation directory empty. Typically
+  // there will be a file if we ask, but that's leftover from the previous row in the table by the
+  // state machine and is not relevant.
+  std::string file_name;
+  std::string result_compilation_dir;
+  if (rows[first_row_index].line) {
+    if (const std::string* name = GetFileNameForRow(rows[first_row_index]))
+      file_name = *name;
+    result_compilation_dir = compilation_dir;
+  }
+
+  LineDetails result(FileLine(std::move(file_name), std::move(result_compilation_dir),
+                              rows[first_row_index].line));
+
+  // Add entries for each row. The last row doesn't count because it is the end_sequence marker
+  // that provides the ending address of the previous entry.
+  for (size_t i = first_row_index; i <= last_row_index && i < rows.size() - 1; i++) {
+    if (rows[i + 1].address < rows[i].address)
+      break;  // Going backwards, corrupted so give up.
+
+    LineDetails::LineEntry entry;
+    entry.column = rows[i].column;
+    entry.range = AddressRange(symbol_context.RelativeToAbsolute(rows[i].address),
+                               symbol_context.RelativeToAbsolute(rows[i + 1].address));
+    result.entries().push_back(entry);
+  }
+
+  return result;
+}
+
+const LineTable::Sequence* LineTable::GetSequenceForRelativeAddress(
+    TargetPointer relative_address) const {
+  // Search backward from the last sequence that starts at or before the address. Usually that
+  // sequence contains the address or no sequence does. Overlapping and empty sequences can need
+  // more steps. The search stops when no earlier sequence ends after the address.
+  auto upper = std::upper_bound(
+      sequences_.begin(), sequences_.end(), relative_address,
+      [](TargetPointer addr, const Sequence& seq) { return addr < seq.addresses.begin(); });
+  for (size_t i = std::distance(sequences_.begin(), upper); i > 0; i--) {
+    if (max_end_[i - 1] <= relative_address)
+      break;
+    if (sequences_[i - 1].addresses.InRange(relative_address))
+      return &sequences_[i - 1];
+  }
+  return nullptr;
 }
 
 }  // namespace zxdb

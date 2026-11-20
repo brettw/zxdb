@@ -5,6 +5,8 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_BINARY_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_BINARY_H_
 
+#include <memory>
+
 #include "llvm/BinaryFormat/ELF.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
@@ -26,6 +28,7 @@ class ObjectFile;
 namespace zxdb {
 
 class DwarfSymbolFactory;
+class LineFileTable;
 class SymbolContext;
 
 // Represents the low-level DWARF file. It provides a mockable wrapper around a llvm::DWARFContext.
@@ -114,6 +117,12 @@ class DwarfBinary {
 
   // Returns the DWARF v5 .debug_names accelerator table, or nullptr if absent or empty.
   virtual const llvm::DWARFDebugNames* GetDebugNames() const { return nullptr; }
+
+  // Returns the resolved file name table of the line table of the given unit of this binary, or
+  // null if the unit has no line table. The table has the given file index if the line table has
+  // it. Usually this parses only the line table header. See LineTableCache.
+  virtual std::shared_ptr<const LineFileTable> GetLineFileTable(llvm::DWARFUnit* unit,
+                                                                uint64_t file_index) const = 0;
 
   // Purges cached per-unit DIE arrays, line tables, type signature maps, and unit wrappers so
   // transient parse structures can be reclaimed and re-populated lazily on demand.

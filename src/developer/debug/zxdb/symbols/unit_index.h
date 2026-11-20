@@ -16,6 +16,8 @@ struct UnitIndex {
   UnitIndex() = default;
   UnitIndex(bool d, uint32_t i) : is_dwo(d), index(i) {}
 
+  bool operator==(const UnitIndex& other) const = default;
+
   // When set, this means that the binary is a .dwo file and this index is into the ELF section for
   // Debug Fission data.
   //

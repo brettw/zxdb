@@ -223,10 +223,14 @@ add_executable(zxdb_tests
   symbols/index_node_unittest.cc
   symbols/index_test_support.cc
   symbols/index_unittest.cc
+  symbols/line_program_binary_unittest.cc
+  symbols/line_program_test_util.cc
+  symbols/line_program_unittest.cc
+  symbols/line_table_cache_unittest.cc
+  symbols/line_table_test_support.cc
   symbols/line_table_unittest.cc
   symbols/loaded_module_symbols_unittest.cc
   symbols/member_ptr_unittest.cc
-  symbols/mock_line_table.cc
   symbols/mock_module_symbols.cc
   symbols/mock_source_file_provider.cc
   symbols/mock_symbol_data_provider.cc
@@ -235,6 +239,7 @@ add_executable(zxdb_tests
   symbols/module_symbols_impl_unittest.cc
   symbols/process_symbols_test_setup.cc
   symbols/process_symbols_unittest.cc
+  symbols/source_file_indexer_unittest.cc
   symbols/source_util_unittest.cc
   symbols/symbol_data_provider_unittest.cc
   symbols/symbol_unittest.cc
@@ -268,6 +273,49 @@ set_target_properties(zxdb_symbol_test PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/test_data/zxdb"
   SUFFIX ".targetso")
 add_dependencies(zxdb_tests zxdb_symbol_test)
+
+# Line table fixtures. The same small source builds with different compilers, DWARF versions, and
+# linkers. line_program_binary_unittest.cc compares the zxdb line table decoder with LLVM on each
+# one. GCC and LLD fixtures are optional.
+set(line_table_fixture_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/line_table")
+set(line_table_fixture_sources
+  "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/line_table/line_table_fixture.cc"
+  "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/line_table/line_table_fixture_dead.cc")
+set(line_table_fixture_outputs)
+function(zxdb_add_line_table_fixture name compiler)
+  set(output "${line_table_fixture_dir}/${name}.so")
+  add_custom_command(
+    OUTPUT "${output}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${line_table_fixture_dir}"
+    COMMAND "${compiler}" ${ARGN} -g -shared -fPIC -fvisibility=hidden -ffunction-sections
+      -Wl,--build-id "-I${PROJECT_SOURCE_DIR}" "-fdebug-prefix-map=${PROJECT_SOURCE_DIR}=../.."
+      -o "${output}" ${line_table_fixture_sources}
+    DEPENDS ${line_table_fixture_sources}
+      "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/line_table/line_table_fixture.h"
+    VERBATIM)
+  list(APPEND line_table_fixture_outputs "${output}")
+  set(line_table_fixture_outputs "${line_table_fixture_outputs}" PARENT_SCOPE)
+endfunction()
+zxdb_add_line_table_fixture(clang_dwarf4 "${CMAKE_CXX_COMPILER}" -gdwarf-4 -O0)
+zxdb_add_line_table_fixture(clang_dwarf5_gc "${CMAKE_CXX_COMPILER}" -gdwarf-5 -O2
+  -fuse-ld=bfd -Wl,--gc-sections)
+zxdb_add_line_table_fixture(clang_dwarf64 "${CMAKE_CXX_COMPILER}" -gdwarf-5 -gdwarf64 -O1)
+find_program(ZXDB_LLD NAMES ld.lld HINTS "${LLVM_TOOLS_BINARY_DIR}")
+if(ZXDB_LLD)
+  # Writes the all-ones tombstone instead of 0 for removed code in .debug_line.
+  zxdb_add_line_table_fixture(clang_dwarf4_lld_tombstone "${CMAKE_CXX_COMPILER}" -gdwarf-4 -O2
+    "--ld-path=${ZXDB_LLD}" -Wl,--gc-sections
+    -Wl,-z,dead-reloc-in-nonalloc=.debug_line=0xffffffffffffffff)
+endif()
+find_program(ZXDB_GXX NAMES g++)
+if(ZXDB_GXX)
+  zxdb_add_line_table_fixture(gcc_dwarf4_gc "${ZXDB_GXX}" -gdwarf-4 -O2 -Wl,--gc-sections)
+  zxdb_add_line_table_fixture(gcc_dwarf5 "${ZXDB_GXX}" -gdwarf-5 -O0)
+endif()
+add_custom_target(zxdb_line_table_fixtures DEPENDS ${line_table_fixture_outputs})
+add_dependencies(zxdb_tests zxdb_line_table_fixtures)
+# Only this build makes the fixtures. Other builds run the binary tests on the checked-in data only.
+target_compile_definitions(zxdb_tests PRIVATE ZXDB_LINE_TABLE_FIXTURES)
 
 set(data_dir "${PROJECT_BINARY_DIR}/test_data/zxdb")
 file(MAKE_DIRECTORY "${data_dir}/build_id/.build-id/9e" "${data_dir}/fake_home/.fuchsia/debug")

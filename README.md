@@ -108,7 +108,11 @@ FUCHSIA_ANALYTICS_DISABLED=1 ./build-release/zxdb_tests \
 
 The benchmark reports file-loading and full-DIE indexing times separately in
 microseconds. It indexes only the selected binary, without its shared libraries.
-The benchmark is omitted when `ZXDB_INDEX_BENCHMARK_BINARY` is unset.
+The index time includes the source file index, which runs on worker threads.
+The benchmark also reports the source file work alone on one thread.
+The benchmark is omitted when `ZXDB_INDEX_BENCHMARK_BINARY` is unset. When it is
+set, `LineProgramBinary.BenchmarkBinaryMatchesLLVM` also compares every line
+table of that binary with LLVM.
 For comparisons, use the same input binary, finish compilation first, and run
 both versions on the same CPU with warm filesystem caches. For example:
 

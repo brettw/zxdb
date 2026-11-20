@@ -7,7 +7,7 @@
 
 #include <string>
 
-#include "llvm/DebugInfo/DWARF/DWARFDebugLine.h"
+#include "llvm/DebugInfo/DWARF/DWARFDie.h"
 #include "src/developer/debug/zxdb/symbols/arch.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
 #include "src/developer/debug/zxdb/symbols/symbol_context.h"
@@ -69,21 +69,9 @@ class DwarfUnit : public fxl::RefCountedThreadSafe<DwarfUnit> {
   // relative.
   virtual std::string GetCompilationDir() const = 0;
 
-  // The line table maps addresses to line numbers.
+  // The line table maps addresses to line numbers. Returns an empty table if the unit has no line
+  // table or if the header can't be parsed.
   virtual const LineTable& GetLineTable() const = 0;
-
-  // Returns the internal LLVM line table. This will be null if there is no line table or there
-  // is no LLVM object backing this unit.
-  //
-  // TODO(brettw) this should be removed and all callers should use GetLineTable() so we don't have
-  // to expose the internal LLVM line table pointer. This would allow us to mock the whole line
-  // table for symbol tests.
-  //
-  // The reason this function is here is that some older code uses the LLVM because making our
-  // LineTable from LLVM's requires copying the table. This is nontrivial and we don't want to do
-  // every time this is called. Therefore, we'd want to cache it on a DwarfUnit. But to be useful
-  // the DwarfUnits must themselves be cached in the DwarfBinary whic does not happen yet.
-  virtual const llvm::DWARFDebugLine::LineTable* GetLLVMLineTable() const = 0;
 
   // Returns the number of DIEs in this unit.
   virtual uint64_t GetDieCount() const = 0;
@@ -111,7 +99,7 @@ class DwarfUnit : public fxl::RefCountedThreadSafe<DwarfUnit> {
   DwarfUnit() : weak_factory_(this) {}
   virtual ~DwarfUnit() = default;
 
-  // For line table back-pointers.
+  // Backs GetWeakPtr().
   mutable fxl::WeakPtrFactory<DwarfUnit> weak_factory_;
 };
 

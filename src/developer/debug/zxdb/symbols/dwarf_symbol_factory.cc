@@ -243,7 +243,9 @@ UncachedLazySymbol DwarfSymbolFactory::MakeUncachedLazy(const llvm::DWARFDie& di
 
 fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeFunction(const llvm::DWARFDie& die, DwarfTag tag,
                                                        bool is_specification) const {
-  DwarfDieDecoder decoder(GetLLVMContext());
+  // Use the binary so the file attributes use its cached line file tables.
+  DwarfDieDecoder decoder =
+      binary_ ? DwarfDieDecoder(*binary_.get()) : DwarfDieDecoder(GetLLVMContext());
 
   llvm::DWARFDie parent;
   decoder.AddAbstractParent(&parent);
@@ -644,7 +646,9 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeCompileUnit(const llvm::DWARFDie& 
 }
 
 fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeDataMember(const llvm::DWARFDie& die) const {
-  DwarfDieDecoder decoder(GetLLVMContext());
+  // Use the binary so the file attributes use its cached line file tables.
+  DwarfDieDecoder decoder =
+      binary_ ? DwarfDieDecoder(*binary_.get()) : DwarfDieDecoder(GetLLVMContext());
 
   std::optional<const char*> name;
   decoder.AddCString(llvm::dwarf::DW_AT_name, &name);

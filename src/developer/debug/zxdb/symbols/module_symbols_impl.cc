@@ -86,23 +86,6 @@ class GlobalSymbolDataProvider : public SymbolDataProvider {
   }
 };
 
-// The order of the parameters matters because "line 0" is handled in "greedy" mode only for the
-// candidate line. If the caller is asking about an address that matches line 0, we don't want to
-// expand that past line boundaries, but we do want to expand other lines actoss line 0 in greedy
-// mode.
-bool SameFileLine(const llvm::DWARFDebugLine::Row& reference,
-                  const llvm::DWARFDebugLine::Row& candidate, bool greedy) {
-  // EndSequence entries don't have files or lines associated with them, it's just a marker. The
-  // table will report the previous line's file+line as a side-effect fo the way it's encoded, so
-  // explicitly fail matching for these.
-  if (reference.EndSequence || candidate.EndSequence)
-    return false;
-
-  if (greedy && candidate.Line == 0)
-    return true;
-  return reference.File == candidate.File && reference.Line == candidate.Line;
-}
-
 // Determines if the given input location references a special identifier of the given type. If it
 // does, returns the name of that symbol. If it does not, returns a null optional.
 std::optional<std::string> GetSpecialInputLocation(const InputLocation& loc, SpecialIdentifier si) {
@@ -346,78 +329,10 @@ LineDetails ModuleSymbolsImpl::LineDetailsForAddress(const SymbolContext& symbol
   if (!found_unit)
     return LineDetails();
 
-  // TODO(brettw) this should use our LineTable wrapper instead of LLVM's so it can be mocked.
-  const llvm::DWARFDebugLine::LineTable* line_table =
-      found_unit.main_binary_unit->GetLLVMLineTable();
-  if (!line_table || line_table->Rows.empty())
-    return LineDetails();
-
-  uint64_t relative_address = symbol_context.AbsoluteToRelative(absolute_address);
-  const auto& rows = line_table->Rows;
-  uint32_t found_row_index = line_table->lookupAddress({relative_address});
-
-  // The row could be not found or it could be in a "nop" range indicated by an "end sequence"
-  // marker. For padding between functions, the compiler will insert a row with this marker to
-  // indicate everything until the next address isn't an instruction. With this flag, the other
-  // information on the line will be irrelevant (in practice it will be the same as for the previous
-  // entry).
-  if (found_row_index == line_table->UnknownRowIndex || rows[found_row_index].EndSequence)
-    return LineDetails();
-
-  // Adjust the beginning and end ranges to include all matching entries of the same line.
-  //
-  // Note that this code must not try to hide "line 0" entries (corresponding to compiler-generated
-  // code). This function is used by the stepping code which has its own handling for these ranges.
-  // Trying to put "line 0" code in with the previous or next entry (what some other code does that
-  // tries to hide this from the user) will confuse the stepping code which will always step through
-  // these instructions.
-  uint32_t first_row_index = found_row_index;
-  while (first_row_index > 0 &&
-         SameFileLine(rows[found_row_index], rows[first_row_index - 1], greedy)) {
-    first_row_index--;
-  }
-  uint32_t last_row_index = found_row_index;  // Inclusive.
-  while (last_row_index < rows.size() - 1 &&
-         SameFileLine(rows[found_row_index], rows[last_row_index + 1], greedy)) {
-    last_row_index++;
-  }
-
-  // Resolve the file name. Skip for "line 0" entries which are compiled-generated code not
-  // associated with a line entry, leaving the file name and compilation directory empty. Typically
-  // there will be a file if we ask, but that's leftover from the previous row in the table by the
-  // state machine and is not relevant.
-  std::string file_name;
-  std::string compilation_dir;
-  if (rows[first_row_index].Line) {
-    line_table->getFileNameByIndex(rows[first_row_index].File, "",
-                                   llvm::DILineInfoSpecifier::FileLineInfoKind::RelativeFilePath,
-                                   file_name);
-    if (!build_dir_.empty()) {
-      compilation_dir = build_dir_;
-    } else {
-      compilation_dir = found_unit.details_unit->GetCompilationDir();
-    }
-  }
-
-  LineDetails result(
-      FileLine(NormalizePath(file_name), compilation_dir, rows[first_row_index].Line));
-
-  // Add entries for each row. The last row doesn't count because it should be
-  // an end_sequence marker to provide the ending size of the previous entry.
-  // So never include that.
-  for (uint32_t i = first_row_index; i <= last_row_index && i < rows.size() - 1; i++) {
-    // With loop bounds we can always dereference @ i + 1.
-    if (rows[i + 1].Address < rows[i].Address)
-      break;  // Going backwards, corrupted so give up.
-
-    LineDetails::LineEntry entry;
-    entry.column = rows[i].Column;
-    entry.range = AddressRange(symbol_context.RelativeToAbsolute(rows[i].Address.Address),
-                               symbol_context.RelativeToAbsolute(rows[i + 1].Address.Address));
-    result.entries().push_back(entry);
-  }
-
-  return result;
+  std::string compilation_dir =
+      build_dir_.empty() ? found_unit.details_unit->GetCompilationDir() : build_dir_;
+  return found_unit.main_binary_unit->GetLineTable().GetLineDetails(
+      symbol_context, absolute_address, greedy, compilation_dir);
 }
 
 std::vector<std::string> ModuleSymbolsImpl::FindFileMatches(std::string_view name) const {
@@ -814,7 +729,7 @@ std::optional<Location> ModuleSymbolsImpl::DwarfLocationForAddress(
       // entries which are compiled-generated code not associated with a line entry. Typically there
       // will be a file if we ask, but that's leftover from the previous row in the table by the
       // state machine and is not relevant.
-      const LineTable::Row* maybe_row;
+      const LineRow* maybe_row;
       if (options.suitable_for_breakpoint) {
         maybe_row = &found_row.get_statement();
       } else {
@@ -822,27 +737,28 @@ std::optional<Location> ModuleSymbolsImpl::DwarfLocationForAddress(
       }
 
       if (maybe_row) {
-        const LineTable::Row& row = *maybe_row;
+        const LineRow& row = *maybe_row;
         std::optional<std::string> file_name;
-        if (row.Line) {
-          file_name = line_table.GetFileNameForRow(row);  // Could still return nullopt.
+        if (row.line) {
+          if (const std::string* name = line_table.GetFileNameForRow(row))
+            file_name = *name;
         } else {
           DEBUG_LOG(ModuleSymbols) << "Line table's row did not have a line number for 0x"
                                    << std::hex << absolute_address;
         }
         if (file_name) {
-          // It's important this only gets called when row.Line > 0. FileLine will assert for line 0
+          // It's important this only gets called when row.line > 0. FileLine will assert for line 0
           // if a file name or build directory is given to ensure that all "no code" locations
           // compare identically. This is guaranteed here because file_name will only be set when
           // the line is nonzero.
           if (build_dir_.empty()) {
             file_line = FileLine(std::move(*file_name),
-                                 found_unit.details_unit->GetCompilationDir(), row.Line);
+                                 found_unit.details_unit->GetCompilationDir(), row.line);
           } else {
-            file_line = FileLine(std::move(*file_name), build_dir_, row.Line);
+            file_line = FileLine(std::move(*file_name), build_dir_, row.line);
           }
         }
-        column = row.Column;
+        column = row.column;
       } else {
         DEBUG_LOG(ModuleSymbols) << "Line table did not have entry for 0x" << std::hex
                                  << absolute_address;
@@ -1028,8 +944,12 @@ void ModuleSymbolsImpl::ResolveLineInputLocationForFile(const SymbolContext& sym
     const LineTable& line_table = unit->GetLineTable();
 
     // Complication 1 above: find all matches for this line in the unit.
-    std::vector<LineMatch> unit_matches =
-        GetAllLineTableMatchesInUnit(line_table, canonical_file, line_number);
+    std::vector<LineMatch> unit_matches = GetAllLineTableMatchesInUnit(
+        line_table,
+        [&unit](uint64_t relative_address) {
+          return unit->FunctionForRelativeAddress(relative_address);
+        },
+        canonical_file, line_number);
     matches.insert(matches.end(), unit_matches.begin(), unit_matches.end());
   }
 

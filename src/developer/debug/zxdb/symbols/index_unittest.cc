@@ -17,6 +17,7 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/line_table.h"
 #include "src/developer/debug/zxdb/symbols/module_symbols_impl.h"
+#include "src/developer/debug/zxdb/symbols/source_file_indexer.h"
 #include "src/developer/debug/zxdb/symbols/symbol_factory.h"
 #include "src/developer/debug/zxdb/symbols/test_symbol_module.h"
 #include "src/lib/fxl/strings/split_string.h"
@@ -313,7 +314,7 @@ TEST(Index, CreateIndexEvictsUnitCaches) {
 
   // Subsequent on-demand queries on the unit should lazily re-extract the DIEs and line table.
   EXPECT_TRUE(unit0->GetUnitDie().getFirstChild().isValid());
-  EXPECT_GT(unit0->GetLineTable().GetNumFileNames(), 0u);
+  EXPECT_GT(unit0->GetLineTable().files().size(), 0u);
 }
 
 // Verifies that DwarfBinaryImpl::ClearLLVMCache drops cached DwarfUnit wrappers from unit_map_
@@ -342,10 +343,11 @@ TEST(Index, ClearLLVMCacheEvictsUnitsAndLineTables) {
     weak_unit1 = unit1->GetWeakPtr();
     ASSERT_TRUE(unit1->GetUnitDie().isValid());
     const LineTable& line_table = unit1->GetLineTable();
-    initial_file_count = line_table.GetNumFileNames();
-    ASSERT_GT(initial_file_count, 0u);
-    initial_file = line_table.GetFileNameByIndex(1);
-    ASSERT_TRUE(initial_file.has_value());
+    initial_file_count = line_table.files().size();
+    ASSERT_GT(initial_file_count, 1u);
+    const std::string* name = line_table.files().GetFileName(1);
+    ASSERT_TRUE(name);
+    initial_file = *name;
   }
   EXPECT_TRUE(weak_unit1);
 
@@ -364,8 +366,10 @@ TEST(Index, ClearLLVMCacheEvictsUnitsAndLineTables) {
   fxl::RefPtr<DwarfUnit> reloaded_unit1 = binary->GetUnitAtIndex(UnitIndex(false, 1));
   ASSERT_TRUE(reloaded_unit1);
   const LineTable& reloaded_line_table = reloaded_unit1->GetLineTable();
-  EXPECT_EQ(initial_file_count, reloaded_line_table.GetNumFileNames());
-  EXPECT_EQ(initial_file, reloaded_line_table.GetFileNameByIndex(1));
+  EXPECT_EQ(initial_file_count, reloaded_line_table.files().size());
+  const std::string* reloaded_name = reloaded_line_table.files().GetFileName(1);
+  ASSERT_TRUE(reloaded_name);
+  EXPECT_EQ(initial_file, *reloaded_name);
   EXPECT_GT(reloaded_line_table.GetNumSequences(), 0u);
 }
 
@@ -417,11 +421,27 @@ TEST(Index, BenchmarkIndexing) {
 
   int64_t index_complete_us = GetTickMicroseconds();
 
-  printf("\nIndexing results for %s:\n   Load: %" PRId64
-         " µs\n  Index: %" PRId64 " µs\n\n",
-         kFilename, load_complete_us - begin_us,
-         index_complete_us - load_complete_us);
+  // The index runs the source file work on worker threads during DIE indexing. Measure that work
+  // alone with different thread counts. "Default" is the count that the index uses.
+  printf("\nIndexing results for %s:\n   Load: %" PRId64 " µs\n  Index: %" PRId64 " µs\n",
+         kFilename, load_complete_us - begin_us, index_complete_us - load_complete_us);
+  DwarfBinary& binary = *setup.symbols()->binary();
+  for (std::optional<size_t> thread_count : std::vector<std::optional<size_t>>{
+           std::nullopt, 0, 1, 2, 4, 6}) {
+    int64_t source_files_begin_us = GetTickMicroseconds();
+    SourceFileIndexer source_files(*binary.GetLLVMContext(), CollectLineTableJobs(binary),
+                                   {.thread_count = thread_count});
+    size_t workers = source_files.worker_count();
+    SourceFileIndexer::FileIndex files;
+    source_files.FinishInto(&files);
+    int64_t source_files_us = GetTickMicroseconds() - source_files_begin_us;
+
+    printf("  Source files alone, %s %zu workers: %" PRId64 " µs, %zu files\n",
+           thread_count ? "with" : "default", workers, source_files_us, files.size());
+  }
+  printf("\n");
 }
+
 #endif  // End indexing benchmark.
 
 }  // namespace zxdb

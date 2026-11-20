@@ -11,6 +11,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/common/err.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
+#include "src/developer/debug/zxdb/symbols/line_table_cache.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_symbol_factory.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
 
@@ -59,7 +60,12 @@ class DwarfBinaryImpl final : public DwarfBinary {
   llvm::DWARFDie GetLLVMDieAtOffset(DwarfDieRef die_ref) const override;
   DwarfDieRef GetDieRefForSignature(uint64_t signature) const override;
   const llvm::DWARFDebugNames* GetDebugNames() const override;
+  std::shared_ptr<const LineFileTable> GetLineFileTable(llvm::DWARFUnit* unit,
+                                                        uint64_t file_index) const override;
   void ClearLLVMCache() override;
+
+  // Decodes the whole line table of the unit. The file table is shared with GetLineFileTable().
+  LineTable DecodeLineTable(llvm::DWARFUnit* unit) const;
 
  private:
   // Lazily creates a unit for us and returns it. This can handle null input pointers, which will
@@ -93,6 +99,9 @@ class DwarfBinaryImpl final : public DwarfBinary {
   // Maps 64-bit type unit signatures to their DIE references. Computed lazily by
   // EnsureSignatureMap() by scanning all type units in both normal and DWO unit vectors.
   mutable std::optional<std::map<uint64_t, DwarfDieRef>> signature_to_die_;
+
+  // File tables of the line tables, computed lazily.
+  mutable LineTableCache line_tables_;
 
   uint64_t mapped_length_ = 0;
 

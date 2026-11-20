@@ -241,7 +241,7 @@ OutputBuffer DumpLineTable(ProcessSymbols* process_symbols, uint64_t address,
   }
 
   const LineTable& line_table = found_unit.main_binary_unit->GetLineTable();
-  std::span<const LineTable::Row> sequence =
+  std::span<const LineRow> sequence =
       line_table.GetRowSequenceForAddress(symbol_context, address);
   if (sequence.empty())
     return OutputBuffer("No row sequence covers " + to_hex_string(address) + ".\n");
@@ -253,7 +253,7 @@ OutputBuffer DumpLineTable(ProcessSymbols* process_symbols, uint64_t address,
 
     // Line marker and address.
     Syntax syntax;
-    uint64_t absolute_line_addr = symbol_context.RelativeToAbsolute(row.Address.Address);
+    uint64_t absolute_line_addr = symbol_context.RelativeToAbsolute(row.address);
     if (!seen_address && absolute_line_addr >= address) {
       // Since the sequence is in order and contains the address, the first row that contains the
       // address is the one in question.
@@ -268,13 +268,13 @@ OutputBuffer DumpLineTable(ProcessSymbols* process_symbols, uint64_t address,
 
     // Basic info.
     line.emplace_back(syntax, to_hex_string(absolute_line_addr));
-    if (auto file_name = line_table.GetFileNameForRow(row)) {
+    if (const std::string* file_name = line_table.GetFileNameForRow(row)) {
       line.emplace_back(syntax,
                         process_symbols->target_symbols()->GetShortestUniqueFileName(*file_name));
     } else {
       line.emplace_back();
     }
-    line.emplace_back(syntax, std::to_string(row.Line));
+    line.emplace_back(syntax, std::to_string(row.line));
 
     // Accumulate the flags.
     std::string flags;
@@ -285,11 +285,11 @@ OutputBuffer DumpLineTable(ProcessSymbols* process_symbols, uint64_t address,
         flags += text;
       }
     };
-    append_flag_if(row.IsStmt, "IsStmt");
-    append_flag_if(row.BasicBlock, "BasicBlock");
-    append_flag_if(row.EndSequence, "EndSequence");
-    append_flag_if(row.PrologueEnd, "PrologueEnd");
-    append_flag_if(row.EpilogueBegin, "EpilogueBegin");
+    append_flag_if(row.is_stmt(), "IsStmt");
+    append_flag_if(row.basic_block(), "BasicBlock");
+    append_flag_if(row.end_sequence(), "EndSequence");
+    append_flag_if(row.prologue_end(), "PrologueEnd");
+    append_flag_if(row.epilogue_begin(), "EpilogueBegin");
     line.emplace_back(syntax, flags);
   }
 

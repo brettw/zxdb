@@ -5,29 +5,29 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_LINE_TABLE_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_LINE_TABLE_H_
 
+#include <memory>
 #include <span>
-
-#include <optional>
 #include <string>
 #include <vector>
 
-#include "llvm/DebugInfo/DWARF/DWARFDebugLine.h"
 #include "src/developer/debug/zxdb/common/address_range.h"
 #include "src/developer/debug/zxdb/symbols/arch.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
+#include "src/developer/debug/zxdb/symbols/line_file_table.h"
+#include "src/developer/debug/zxdb/symbols/line_row.h"
 
 namespace zxdb {
 
-class LazySymbol;
+class LineDetails;
 class SymbolContext;
 
-// This virtual interface wraps the line information for a single DWARFUnit. This indirection allows
-// the operations that operate on the line table to be more easily mocked for tests (our
-// requirements are quite low).
+// The decoded line table of one DWARF unit.
+//
+// This is plain data with no virtual functions. Tests construct it from rows directly. The
+// constructor groups the rows into sequences, drops sequences for stripped code, and sorts the
+// sequences by address. The object doesn't change after construction, so it is safe to read from
+// more than one thread.
 class LineTable {
  public:
-  using Row = llvm::DWARFDebugLine::Row;
-
   // The line table can contain lines marked with a line number of 0. These entries indicate code
   // that is compiler-generated and not associated with any source line.
   enum SkipMode {
@@ -38,106 +38,49 @@ class LineTable {
     // non-compiler-generated line. This usually makes more sense to the user since compiler
     // generated instructions will normally be associated with some code.
     //
-    // Thie mode can still return compiler generated line entries if there is no "next" row to
+    // This mode can still return compiler generated line entries if there is no "next" row to
     // advance to.
     kSkipCompilerGenerated,
   };
 
-  // A row from the line table, as found by |GetRowForAddress| that contains the sequence of entries
-  // as found in the row with two important indices (which may be equal to each other):
+  // A row from the line table, as found by GetRowForAddress(). It contains the sequence of rows
+  // with two important indices (which may be equal to each other):
   //
-  // |symbolizable_index| and |get_symbolizable| correspond to the best entry in the sequence that
+  // symbolizable_index and get_symbolizable() correspond to the best entry in the sequence that
   // is suitable for symbolizing with a valid file and line number.
   //
-  // |statement_index| and |get_statement| correspond to the best entry in the row for setting
+  // statement_index and get_statement() correspond to the best entry in the row for setting
   // breakpoints.
   //
-  // Other entries are likely irrelevant for the requested address but may be inspected
-  // anyway.
+  // Other entries are likely irrelevant for the requested address but may be inspected anyway.
   struct FoundRow {
     FoundRow() = default;
-    FoundRow(std::span<const Row> seq, size_t symbolizable_index, size_t statement_index)
+    FoundRow(std::span<const LineRow> seq, size_t symbolizable_index, size_t statement_index)
         : sequence(seq), symbolizable_index(symbolizable_index), statement_index(statement_index) {}
 
     bool empty() const { return sequence.empty(); }
 
-    // Returns the entry associated with the corresponding index. Call only when !empty().
-    // In general, if this FoundRow is for finding an address to place a line based breakpoint, use
-    // |get_breakpoint_row|. Otherwise, use |get_symbolizable_row|.
-    const LineTable::Row& get_symbolizable() const { return sequence[symbolizable_index]; }
-    const LineTable::Row& get_statement() const { return sequence[statement_index]; }
+    // Returns the entry associated with the corresponding index. Call only when !empty(). If this
+    // FoundRow is for finding an address to place a line-based breakpoint, use get_statement().
+    // Otherwise, use get_symbolizable().
+    const LineRow& get_symbolizable() const { return sequence[symbolizable_index]; }
+    const LineRow& get_statement() const { return sequence[statement_index]; }
 
     // The sequence of rows associated with the address. These will be contiguous addresses. This
     // will be empty if nothing was matched. If nonempty, the last row will always be marked with an
-    // EndSequence bit.
-    std::span<const Row> sequence;
+    // end_sequence flag.
+    std::span<const LineRow> sequence;
 
     // Index within the sequence of the found row to use for symbolization of this address. Valid
     // when !empty().
     size_t symbolizable_index = 0;
+
     // Index within the sequence of the found row to use for setting line-based breakpoints around
     // this address. Valid when !empty().
     size_t statement_index = 0;
   };
 
-  virtual ~LineTable() = default;
-
-  // Returns the number of file names referenced by this line table. The DWARFDebugLine::Row::File
-  // entries are 1-based (!) indices into a table of this size.
-  virtual size_t GetNumFileNames() const = 0;
-
-  // Returns the absolute file name for the given file index. This is the value from
-  // DWARFDebugLine::Row::File (1-based). It will return an empty optional on failure, which
-  // includes lookup errors or if the file is not set for this row (0 index).
-  virtual std::optional<std::string> GetFileNameByIndex(uint64_t file_id) const = 0;
-
-  // Helper wrapper to extract the file from a row.
-  std::optional<std::string> GetFileNameForRow(const Row& row) const {
-    return GetFileNameByIndex(row.File);
-  }
-
-  // Returns the function associated with the most specific inlined subroutine (or subprogram) for
-  // the given row. This may be invalid if there is no subroutine for this code (could be
-  // compiler-generated).
-  virtual LazySymbol GetFunctionForRow(const Row& row) const = 0;
-
-  // Query for sequences. This is used for iterating through the entire line table.
-  //
-  // Sequences consist of a contiguous range of addresses and will be in sorted order.
-  size_t GetNumSequences() const;
-  std::span<const Row> GetSequenceAt(size_t index) const;
-
-  // Returns the sequence of rows (contiguous addresses ending in an EndSequence tag) containing the
-  // address. The returned array will be empty if the address was not found. See GetRowForAddress().
-  //
-  // Watch out: the addresses in the returned rows will all be module-relative.
-  std::span<const Row> GetRowSequenceForAddress(const SymbolContext& address_context,
-                                                TargetPointer absolute_address) const;
-
-  // Finds the row in the line table that covers the given address. If there is no match, the
-  // returned sequence will be empty.
-  //
-  // Watch out: the addresses in the returned rows will all be module-relative.
-  FoundRow GetRowForAddress(const SymbolContext& address_context, TargetPointer absolute_address,
-                            SkipMode skip_mode = kSkipCompilerGenerated) const;
-
- protected:
-  // Returns the line table row information.
-  //
-  // This will not necessarily be sorted by address and may contain stripped regions. Queries should
-  // go through the sequence table.
-  //
-  // The implementation should ensure that the returned value never changes. This will be indexed
-  // into sequences and cached.
-  virtual const std::vector<Row>& GetRows() const = 0;
-
- public:
-  // The DWARF row table will be mostly sorted by address but there will be sequences of addresses
-  // that are out-of-order relative to each other. In pracice, on common reason for this is when
-  // code is stripped, the stripped code will have its start address set back to 0.
-  //
-  // This tracks the blocks of rows with contiguous addresses. To find a row corresponding to an
-  // address, binary search to find the block, then binary search the rows referenced by the block.
+  // A block of rows with contiguous addresses, ending with an end_sequence row.
   struct Sequence {
     Sequence() = default;
     Sequence(const AddressRange& a, size_t r_begin, size_t r_end)
@@ -145,25 +88,79 @@ class LineTable {
 
     AddressRange addresses;
 
-    // Index into GetRows() of the beginning.
+    // Index into rows() of the first row.
     size_t row_begin = 0;
 
-    // Index into GetRows() of the ending. This will be the index of the EndSequence row.
-    //
-    // If the table doesn't end in an EndSequence row, the last sequence will be ignored so this row
-    // is guaranteed to exist.
+    // Index into rows() of the end_sequence row.
     size_t row_end = 0;
   };
 
-  // Will return an null pointer if there isn't one found.
+  // An empty line table.
+  LineTable();
+
+  // The rows are in DWARF program order. Rows after the last end_sequence row are dropped because
+  // they don't form a complete sequence. Sequences that start at a stripped address (see
+  // IsStrippedSequenceStart()) are also dropped.
+  LineTable(std::shared_ptr<const LineFileTable> files, std::vector<LineRow> rows);
+
+  const LineFileTable& files() const { return *files_; }
+
+  // Returns the file name for the row's file, or null if it has none.
+  const std::string* GetFileNameForRow(const LineRow& row) const {
+    return files_->GetFileName(row.file);
+  }
+
+  // The rows of all live sequences, in address order of the sequences.
+  const std::vector<LineRow>& rows() const { return rows_; }
+
+  // Sequences consist of a contiguous range of addresses and are sorted by address.
+  const std::vector<Sequence>& sequences() const { return sequences_; }
+  size_t GetNumSequences() const { return sequences_.size(); }
+
+  // Returns the rows of the given sequence, excluding the end_sequence row.
+  std::span<const LineRow> GetSequenceAt(size_t index) const;
+
+  // Returns the sequence of rows (contiguous addresses ending in an end_sequence row) containing
+  // the address. The returned array will be empty if the address was not found. See
+  // GetRowForAddress().
+  //
+  // Watch out: the addresses in the returned rows will all be module-relative.
+  std::span<const LineRow> GetRowSequenceForAddress(const SymbolContext& address_context,
+                                                    TargetPointer absolute_address) const;
+
+  // Finds the row in the line table that covers the given address. If there is no match, the
+  // returned sequence will be empty. When more than one row has the address, this returns the
+  // first one.
+  //
+  // Watch out: the addresses in the returned rows will all be module-relative.
+  FoundRow GetRowForAddress(const SymbolContext& address_context, TargetPointer absolute_address,
+                            SkipMode skip_mode = kSkipCompilerGenerated) const;
+
+  // Computes the extent of the line containing the given address. In greedy mode, the extent
+  // continues across adjacent "line 0" rows.
+  //
+  // When more than one row has the address, this uses the last one, which is what LLVM does. The
+  // compilation_dir is used for the FileLine of the result.
+  LineDetails GetLineDetails(const SymbolContext& symbol_context, TargetPointer absolute_address,
+                             bool greedy, const std::string& compilation_dir) const;
+
+  // Returns null if no sequence contains the address. Sequences can overlap in corrupt or unusual
+  // tables. Then this returns the containing sequence with the latest start address.
   const Sequence* GetSequenceForRelativeAddress(TargetPointer relative_address) const;
 
-  // Ensures that the sequences_ vector is populated from the rows.
-  void EnsureSequences() const;
+ private:
+  std::span<const LineRow> GetRowsWithEnd(const Sequence& seq) const;
 
-  // Sorted by Sequence.addresses.end() so lower_bound() can find the right one. Lazily populated,
-  // see EnsureSequences().
-  mutable std::vector<Sequence> sequences_;
+  // Fills rows_ and sequences_ with copies of the found sequences, in the order given.
+  void CopySequences(const std::vector<LineRow>& rows, const std::vector<Sequence>& found);
+
+  std::shared_ptr<const LineFileTable> files_;
+  std::vector<LineRow> rows_;
+  std::vector<Sequence> sequences_;
+
+  // max_end_[i] is the largest end address of sequences_[0] to sequences_[i]. The address lookup
+  // uses it to stop searching backward once no earlier sequence can contain the address.
+  std::vector<uint64_t> max_end_;
 };
 
 }  // namespace zxdb

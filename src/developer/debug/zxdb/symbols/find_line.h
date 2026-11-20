@@ -11,6 +11,7 @@
 #include <tuple>
 #include <vector>
 
+#include "lib/fit/function.h"
 #include "src/developer/debug/zxdb/symbols/lazy_symbol.h"
 
 namespace zxdb {
@@ -40,9 +41,15 @@ struct LineMatch {
   LazySymbol function;
 };
 
+// Returns the most specific function for a module-relative address, or an !is_valid() symbol if
+// there is none. Production code uses DwarfUnit::FunctionForRelativeAddress().
+using FunctionForAddress = fit::function<LazySymbol(uint64_t relative_address)>;
+
 // Searches the given line table for the given file/line. Finds the smallest line greater than or
-// equal to the input line and returns all instances of that line.
+// equal to the input line and returns all instances of that line. Rows without a function are
+// skipped.
 std::vector<LineMatch> GetAllLineTableMatchesInUnit(const LineTable& line_table,
+                                                    const FunctionForAddress& function_for_address,
                                                     const std::string& full_path, int line);
 
 // Recursively searches the given code block (normally a function for the first call) for inlined

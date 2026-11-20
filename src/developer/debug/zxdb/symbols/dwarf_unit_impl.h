@@ -9,7 +9,7 @@
 
 #include "src/developer/debug/zxdb/symbols/address_range_map.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
-#include "src/developer/debug/zxdb/symbols/line_table_impl.h"
+#include "src/developer/debug/zxdb/symbols/line_table.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
 
 namespace llvm {
@@ -39,7 +39,6 @@ class DwarfUnitImpl : public DwarfUnit {
   LazySymbol FunctionForRelativeAddress(uint64_t relative_address) const override;
   std::string GetCompilationDir() const override;
   const LineTable& GetLineTable() const override;
-  const llvm::DWARFDebugLine::LineTable* GetLLVMLineTable() const override;
   uint64_t GetDieCount() const override;
   llvm::DWARFDie GetLLVMDieAtIndex(uint64_t index) const override;
   llvm::DWARFDie GetLLVMDieAtOffset(DwarfDieRef die_ref) const override;
@@ -80,7 +79,7 @@ class DwarfUnitImpl : public DwarfUnit {
   mutable AddressRangeMap func_addr_to_die_offset_;
 
   // The line table. Computed lazily.
-  mutable std::optional<LineTableImpl> line_table_;
+  mutable std::optional<LineTable> line_table_;
 };
 
 llvm::DWARFUnit* GetUnitForOffset(const llvm::DWARFUnitVector& unit_vector, DwarfDieRef die_ref);
