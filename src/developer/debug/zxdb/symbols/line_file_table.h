@@ -11,21 +11,18 @@
 #include <string>
 #include <vector>
 
-#include "llvm/DebugInfo/DWARF/DWARFDebugLine.h"
+#include "src/developer/debug/zxdb/symbols/line_program.h"
 
 namespace zxdb {
 
 // Resolves one entry of a line table's file name table. Returns the normalized name relative to
-// the compilation directory, or nullopt if the index has no file.
+// the compilation directory, or nullopt if the index has no file or its name can't be decoded.
 //
-// All file names that the symbol code computes from line tables come from this function, so file
-// names from line rows, DW_AT_decl_file, and the file index always compare equal.
-std::optional<std::string> ResolveLineFileName(const llvm::DWARFDebugLine::Prologue& prologue,
-                                               uint64_t file_index);
-
-// Returns the number of entries in the file table of the prologue, indexed by the raw file register
-// value. See LineFileTable.
-size_t GetLineFileCount(const llvm::DWARFDebugLine::Prologue& prologue);
+// The result is the same as llvm::DWARFDebugLine::Prologue::getFileNameByIndex() with a relative
+// path kind, then NormalizePath(). All file names that the symbol code computes from line tables
+// come from this function, so file names from line rows, DW_AT_decl_file, and the file index always
+// compare equal.
+std::optional<std::string> ResolveLineFileName(LineFileEntries files, uint64_t file_index);
 
 // The resolved file name table of one line table.
 //
@@ -38,8 +35,8 @@ class LineFileTable {
   LineFileTable() = default;
   explicit LineFileTable(std::vector<std::string> names) : names_(std::move(names)) {}
 
-  // Resolves all entries of the given prologue.
-  static LineFileTable FromPrologue(const llvm::DWARFDebugLine::Prologue& prologue);
+  // Resolves all entries of the effective file table.
+  static LineFileTable FromEntries(LineFileEntries files);
 
   // Valid raw file register values are in [0, size()).
   size_t size() const { return names_.size(); }

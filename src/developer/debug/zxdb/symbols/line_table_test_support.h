@@ -25,6 +25,10 @@ LineRow MakeNonStatementRow(uint64_t address, uint32_t file, uint32_t line);
 LineRow MakePrologueEndRow(uint64_t address, uint32_t file, uint32_t line);
 LineRow MakeEndSequenceRow(uint64_t address, uint32_t file, uint32_t line);
 
+// The first code address of the binary for MakeLineTable(). A sequence that starts at address 0 is
+// below it, so it is stripped code.
+constexpr uint64_t kTestFirstCodeAddress = 1;
+
 // Makes a line table with DWARF 4 file numbering: files[0] is the name of file 1.
 LineTable MakeLineTable(std::vector<std::string> files, std::vector<LineRow> rows);
 

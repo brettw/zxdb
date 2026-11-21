@@ -34,6 +34,13 @@ struct LineRow {
   bool epilogue_begin() const { return flags & kEpilogueBegin; }
   bool basic_block() const { return flags & kBasicBlock; }
 
+  // The line for a FileLine, which uses int. The line register wraps like in LLVM, so a corrupt
+  // table can give a line above the int range. Such a line gives 0, which means no line.
+  int line_number() const {
+    return line <= static_cast<uint32_t>(std::numeric_limits<int>::max()) ? static_cast<int>(line)
+                                                                           : 0;
+  }
+
   bool operator==(const LineRow& other) const = default;
 
   // Module-relative address.
@@ -50,13 +57,6 @@ struct LineRow {
 };
 
 static_assert(sizeof(LineRow) == 24);
-
-// Returns true when a line sequence starting at the given address is for code that the linker
-// removed. Linkers set the start address of removed code to 0 or to a tombstone value of all ones.
-// Address 0 is never code in a loaded module because the ELF header is there.
-inline bool IsStrippedSequenceStart(uint64_t address) {
-  return address == 0 || address == std::numeric_limits<uint64_t>::max();
-}
 
 }  // namespace zxdb
 

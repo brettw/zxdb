@@ -127,5 +127,5 @@ Executing DAP request handlers produces these session and IPC side effects:
 
 Run these commands to build and test `zxdb/debug_adapter/handlers`:
 
-- Build: `fx build //src/developer/debug/zxdb/debug_adapter`
-- Test: `fx test zxdb_tests`
+- Build: `cmake --build build --target zxdb_debug_adapter`
+- Test: `cmake --build build --target zxdb_tests && ./build/zxdb_tests`

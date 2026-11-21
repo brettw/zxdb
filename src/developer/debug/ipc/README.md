@@ -130,5 +130,5 @@ for packages, options, and optional test fixtures.
 
 Run these commands to build and test `ipc`:
 
-- Build: `fx build //src/developer/debug/ipc`
-- Test: `fx test zxdb_tests`
+- Build: `cmake --build build --target debug_ipc`
+- Test: `cmake --build build --target zxdb_tests && ./build/zxdb_tests`

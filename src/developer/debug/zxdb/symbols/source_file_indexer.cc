@@ -8,27 +8,28 @@
 
 #include <algorithm>
 
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
+#include "src/developer/debug/zxdb/symbols/line_program_llvm.h"
 
 namespace zxdb {
 
 namespace {
 
-// The work runs during DIE indexing, which usually takes much longer. One worker is then enough to
-// hide it, and more workers only add startup cost. Large split-DWARF binaries have little DIE work
-// in the main binary, so they need more workers. The decoder handles about 300 bytes per
-// microsecond.
+// For most binaries the work runs during DIE indexing, which takes much longer, so the thread count
+// doesn't change the index time. A split-DWARF main binary has only skeleton units, so the index
+// waits for this work and more workers make it faster. On the split-DWARF build of zxdb (11 MB of
+// line tables), the work took 42 ms on the calling thread, 24 ms with two workers, and 16 ms with
+// six. The decoder handles about 300 bytes per microsecond on one thread.
 //
 // Below this many bytes of line tables (about 1 ms of work), the work runs on the calling thread.
-// Starting one thread costs tens of microseconds.
+// Starting threads costs more than the work.
 constexpr uint64_t kMinBytesForThreads = 256 * 1024;
 
-// Each worker after the first is for this many more bytes (about 25 ms of work).
-constexpr uint64_t kBytesPerExtraThread = 8 * 1024 * 1024;
+// Each worker after the first is for this many more bytes (about 7 ms of work).
+constexpr uint64_t kBytesPerExtraThread = 2 * 1024 * 1024;
 
 constexpr size_t kMaxThreads = 6;
 
@@ -42,91 +43,43 @@ size_t GetDefaultThreadCount(const std::vector<LineTableJob>& jobs) {
   return std::min<size_t>({1 + total / kBytesPerExtraThread, kMaxThreads, hardware});
 }
 
-// Returns the size of the line table at the offset from its unit length, or 0 if the section is
-// too short. This assumes little-endian data. It is only for the thread count.
-uint64_t GetLineTableSize(const llvm::DWARFSection& section, uint64_t offset) {
-  const uint8_t* data = reinterpret_cast<const uint8_t*>(section.Data.data());
-  uint64_t section_size = section.Data.size();
-  auto read = [&](uint64_t at, size_t bytes) {
-    uint64_t value = 0;
-    for (size_t i = 0; i < bytes; i++)
-      value |= static_cast<uint64_t>(data[at + i]) << (8 * i);
-    return value;
-  };
-
-  if (offset > section_size || section_size - offset < 4)
-    return 0;
-  uint64_t length = read(offset, 4);
-  uint64_t header = 4;
-  if (length == 0xffffffff) {
-    if (section_size - offset < 12)
-      return 0;
-    length = read(offset + 4, 8);
-    header = 12;
-  }
-  return std::min(length, section_size - offset - header) + header;
-}
-
-bool FormNeedsUnit(const llvm::DWARFFormValue& form) {
-  switch (form.getForm()) {
-    case llvm::dwarf::DW_FORM_strx:
-    case llvm::dwarf::DW_FORM_strx1:
-    case llvm::dwarf::DW_FORM_strx2:
-    case llvm::dwarf::DW_FORM_strx3:
-    case llvm::dwarf::DW_FORM_strx4:
-    case llvm::dwarf::DW_FORM_GNU_str_index:
-      return true;
-    default:
-      return false;
-  }
+// Returns the size of the line table at the offset from its unit length, or 0 if it is invalid.
+// This is only for the thread count.
+uint64_t GetLineTableSize(std::string_view section, uint64_t offset, bool little_endian) {
+  ErrOr<LineTableExtent> extent = ReadLineTableExtent(section, offset, little_endian);
+  return extent.ok() ? extent.value().end - offset : 0;
 }
 
 // Returns the string addresses that determine the name of a file table entry, or nullopt if the
-// entry has no name. This makes the same choices as
-// llvm::DWARFDebugLine::Prologue::getFileNameByIndex() for relative names:
-//   - A name that decodes to a null pointer is an empty name. That isn't the same as a name that
-//     can't be decoded, which means there is no name.
-//   - A directory that is absent or can't be decoded is an empty directory. Both have a null
-//     directory in the key.
-std::optional<std::pair<const char*, const char*>> GetFileNameKey(
-    const llvm::DWARFDebugLine::Prologue& prologue, uint64_t file_index) {
-  if (!prologue.hasFileAtIndex(file_index))
+// entry has no name. A directory that is absent or can't be decoded is an empty directory for
+// ResolveLineFileName(), so both have a null directory in the key. The strings are null-terminated
+// in the section data, so the address determines the string.
+std::optional<std::pair<const char*, const char*>> GetFileNameKey(LineFileEntries files,
+                                                                  uint64_t file_index) {
+  const LineFileEntry* entry = files.GetFileEntry(file_index);
+  if (!entry || !entry->name)
     return std::nullopt;
-  const llvm::DWARFDebugLine::FileNameEntry& entry = prologue.getFileNameEntry(file_index);
-
-  std::optional<const char*> name = llvm::dwarf::toString(entry.Name);
-  if (!name)
-    return std::nullopt;
-
-  const auto& dirs = prologue.IncludeDirectories;
-  std::optional<llvm::DWARFFormValue> dir_form;
-  if (prologue.getVersion() >= 5) {
-    // Directory 0 is the compilation directory, which relative names don't include.
-    if (entry.DirIdx != 0 && entry.DirIdx < dirs.size())
-      dir_form = dirs[entry.DirIdx];
-  } else {
-    if (entry.DirIdx > 0 && entry.DirIdx <= dirs.size())
-      dir_form = dirs[entry.DirIdx - 1];
-  }
-
-  const char* dir = dir_form ? llvm::dwarf::toString(dir_form, nullptr) : nullptr;
-  return std::make_pair(dir, *name);
+  std::optional<std::string_view> dir = files.GetFileDirectory(*entry);
+  return std::make_pair(dir ? dir->data() : nullptr, entry->name->data());
 }
 
 }  // namespace
 
-void AddLineTableJob(UnitIndex unit_index, llvm::DWARFUnit& unit, std::vector<LineTableJob>* jobs) {
-  std::optional<uint64_t> offset = LineProgram::GetUnitLineTableOffset(unit);
+void AddLineTableJob(UnitIndex unit_index, llvm::DWARFUnit& unit, uint64_t first_code_address,
+                     std::vector<LineTableJob>* jobs) {
+  std::optional<uint64_t> offset = GetUnitLineTableOffset(unit);
   if (!offset)
     return;
 
   LineTableJob& job = jobs->emplace_back();
   job.unit_index = unit_index;
-  job.section = &unit.getLineSection();
+  llvm::StringRef section = unit.getLineSection().Data;
+  job.section = std::string_view(section.data(), section.size());
   job.offset = *offset;
-  job.address_size = unit.getAddressByteSize();
-  job.size = GetLineTableSize(*job.section, job.offset);
-  job.unit = &unit;
+  job.little_endian = unit.isLittleEndian();
+  job.size = GetLineTableSize(job.section, job.offset, job.little_endian);
+  job.strings = GetLineStringSections(unit);
+  job.first_code_address = first_code_address;
 }
 
 std::vector<LineTableJob> CollectLineTableJobs(DwarfBinary& binary) {
@@ -137,7 +90,7 @@ std::vector<LineTableJob> CollectLineTableJobs(DwarfBinary& binary) {
       UnitIndex unit_index(is_dwo, i);
       fxl::RefPtr<DwarfUnit> unit = binary.GetUnitAtIndex(unit_index);
       if (llvm::DWARFUnit* llvm_unit = unit ? unit->GetLLVMUnit() : nullptr)
-        AddLineTableJob(unit_index, *llvm_unit, &jobs);
+        AddLineTableJob(unit_index, *llvm_unit, binary.GetFirstCodeAddress(), &jobs);
     }
   };
   add_units(false, binary.GetNormalUnitCount());
@@ -146,34 +99,20 @@ std::vector<LineTableJob> CollectLineTableJobs(DwarfBinary& binary) {
   return jobs;
 }
 
-bool LineNamesNeedUnit(const llvm::DWARFDebugLine::Prologue& prologue) {
-  for (const llvm::DWARFFormValue& dir : prologue.IncludeDirectories) {
-    if (FormNeedsUnit(dir))
-      return true;
-  }
-  for (const llvm::DWARFDebugLine::FileNameEntry& file : prologue.FileNames) {
-    if (FormNeedsUnit(file.Name))
-      return true;
-  }
-  return false;
-}
-
-const std::string* LineFilePathResolver::Resolve(const llvm::DWARFDebugLine::Prologue& prologue,
-                                                 uint64_t file_index) {
-  std::optional<std::pair<const char*, const char*>> key = GetFileNameKey(prologue, file_index);
+const std::string* LineFilePathResolver::Resolve(LineFileEntries files, uint64_t file_index) {
+  std::optional<std::pair<const char*, const char*>> key = GetFileNameKey(files, file_index);
   if (!key)
     return nullptr;
 
   auto [iter, inserted] = by_key_.try_emplace(*key);
   if (inserted)
-    iter->second = ResolveLineFileName(prologue, file_index).value_or(std::string());
+    iter->second = ResolveLineFileName(files, file_index).value_or(std::string());
   // An empty name means no file, like in LineFileTable.
   return iter->second.empty() ? nullptr : &iter->second;
 }
 
-SourceFileIndexer::SourceFileIndexer(const llvm::DWARFContext& context,
-                                     std::vector<LineTableJob> jobs, Options options)
-    : context_(context), jobs_(std::move(jobs)), results_(jobs_.size()) {
+SourceFileIndexer::SourceFileIndexer(std::vector<LineTableJob> jobs, Options options)
+    : jobs_(std::move(jobs)), results_(jobs_.size()) {
   size_t thread_count = options.thread_count ? *options.thread_count : GetDefaultThreadCount(jobs_);
   resolvers_.resize(thread_count);
   for (LineFilePathResolver& resolver : resolvers_)
@@ -199,19 +138,9 @@ void SourceFileIndexer::FinishInto(FileIndex* files) {
     threads_.clear();
   }
 
-  // The workers are done, so this thread can use the units for the jobs that need them.
-  for (size_t i = 0; i < jobs_.size(); i++) {
-    if (results_[i].needs_unit && jobs_[i].unit) {
-      // The string offsets table comes from the unit DIE. Index::CreateIndex() can have freed the
-      // unit's DIEs, so extract the unit DIE again.
-      jobs_[i].unit->getUnitDIE();
-      RunJob(i, resolver, jobs_[i].unit);
-    }
-  }
-
   for (size_t i = 0; i < jobs_.size(); i++) {
     UnitIndex unit_index = jobs_[i].unit_index;
-    for (const std::string* name : results_[i].names) {
+    for (const std::string* name : results_[i]) {
       std::vector<UnitIndex>& units = (*files)[*name];
       // Two file entries in one unit can have the same name.
       if (units.empty() || units.back() != unit_index)
@@ -229,33 +158,25 @@ void SourceFileIndexer::RunJobs(LineFilePathResolver& resolver) {
     size_t index = next_job_.fetch_add(1, std::memory_order_relaxed);
     if (index >= jobs_.size())
       return;
-    RunJob(index, resolver, nullptr);
+    RunJob(index, resolver);
   }
 }
 
-void SourceFileIndexer::RunJob(size_t index, LineFilePathResolver& resolver,
-                               const llvm::DWARFUnit* unit) {
+void SourceFileIndexer::RunJob(size_t index, LineFilePathResolver& resolver) {
   const LineTableJob& job = jobs_[index];
-  JobResult& result = results_[index];
-
-  // Workers don't pass the unit. The prologue parser uses it only for string forms that need the
-  // unit's string offsets table, and those jobs run again with the unit in FinishInto().
   ErrOr<LineProgram> program =
-      LineProgram::Parse(context_, *job.section, job.offset, job.address_size, unit);
+      LineProgram::Parse(job.section, job.offset, job.little_endian, job.strings);
   if (program.has_error())
     return;
-  if (!unit && LineNamesNeedUnit(program.value().prologue())) {
-    result.needs_unit = true;
-    return;
-  }
 
-  std::vector<uint32_t> file_indices;
-  program.value().ScanFiles(&file_indices);  // Keeps the files found before any error.
+  // Keep the complete live sequences found before any decode error.
+  LineProgram::FileScanResult scan = program.value().ScanFiles(job.first_code_address);
+  LineFileEntries files = program.value().files(scan.defined_files);
 
-  result.names.clear();
-  for (uint32_t file_index : file_indices) {
-    if (const std::string* name = resolver.Resolve(program.value().prologue(), file_index))
-      result.names.push_back(name);
+  JobResult& result = results_[index];
+  for (uint32_t file_index : scan.file_indices) {
+    if (const std::string* name = resolver.Resolve(files, file_index))
+      result.push_back(name);
   }
 }
 

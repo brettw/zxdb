@@ -79,5 +79,5 @@ These utilities produce the following OS and memory side effects:
 
 Run these commands to build and test `posix`:
 
-- Build: `fx build //src/developer/debug/debug_agent:lib`
-- Test: `fx test --host debug_agent_unit_tests`
+- Build: `cmake --build build --target debug_agent`
+- Test: `cmake --build build --target debug_agent_tests && ./build/src/developer/debug/zxdb/debug_agent_tests`

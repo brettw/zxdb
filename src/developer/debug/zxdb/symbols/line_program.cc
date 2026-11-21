@@ -9,12 +9,14 @@
 #include <algorithm>
 #include <cinttypes>
 
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
-#include "llvm/DebugInfo/DWARF/DWARFDataExtractor.h"
-#include "llvm/DebugInfo/DWARF/DWARFSection.h"
-#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
-#include "src/developer/debug/zxdb/symbols/line_file_table.h"
+#include "llvm/BinaryFormat/Dwarf.h"
+#include "src/developer/debug/zxdb/symbols/line_sequence.h"
 
+// The header parser reads the fields of the header in order (DWARF 5 section 6.2.4). Like LLVM, it
+// reads the fixed fields only inside the unit and the directory and file tables only up to the
+// end that header_length gives. An error in a fixed field fails the parse. An error in a table
+// keeps the entries before the error, as LLVM does.
+//
 // The line program decoder runs the DWARF line number state machine (DWARF 5 section 6.2) over
 // the program bytes. It is a template on a "sink" that receives the emitted rows. The sink declares
 // at compile time whether it needs the line, column, and flag registers. The file scan used by the
@@ -51,6 +53,9 @@ enum : uint8_t {
   kLneDefineFile = 3,
 };
 
+// The LEB128 readers fail for truncated values and for values that don't fit in 64 bits, like
+// LLVM's decodeULEB128() and decodeSLEB128(). Bytes past 64 bits are valid if they only extend the
+// value.
 bool ReadUleb(const uint8_t*& p, const uint8_t* end, uint64_t* out) {
   if (p < end && !(*p & 0x80)) {
     *out = *p++;
@@ -61,9 +66,13 @@ bool ReadUleb(const uint8_t*& p, const uint8_t* end, uint64_t* out) {
   unsigned shift = 0;
   while (p < end) {
     uint8_t byte = *p++;
-    if (shift < 64)
-      result |= static_cast<uint64_t>(byte & 0x7f) << shift;
-    shift += 7;
+    uint64_t slice = byte & 0x7f;
+    if (shift >= 63 && (shift == 63 ? slice > 1 : slice != 0))
+      return false;
+    if (shift < 64) {
+      result |= slice << shift;
+      shift += 7;
+    }
     if (!(byte & 0x80)) {
       *out = result;
       return true;
@@ -77,9 +86,16 @@ bool ReadSleb(const uint8_t*& p, const uint8_t* end, int64_t* out) {
   unsigned shift = 0;
   while (p < end) {
     uint8_t byte = *p++;
-    if (shift < 64)
-      result |= static_cast<uint64_t>(byte & 0x7f) << shift;
-    shift += 7;
+    uint64_t slice = byte & 0x7f;
+    if (shift >= 63) {
+      bool negative = static_cast<int64_t>(result) < 0;
+      if (shift == 63 ? slice != 0 && slice != 0x7f : slice != (negative ? 0x7f : 0))
+        return false;
+    }
+    if (shift < 64) {
+      result |= slice << shift;
+      shift += 7;
+    }
     if (!(byte & 0x80)) {
       if (shift < 64 && (byte & 0x40))
         result |= ~uint64_t{0} << shift;
@@ -90,18 +106,27 @@ bool ReadSleb(const uint8_t*& p, const uint8_t* end, int64_t* out) {
   return false;
 }
 
-bool SkipLeb(const uint8_t*& p, const uint8_t* end) {
-  while (p < end) {
-    if (!(*p++ & 0x80))
-      return true;
-  }
-  return false;
+// Skip a value with the same checks as the readers. Most values are one byte.
+bool SkipUleb(const uint8_t*& p, const uint8_t* end) {
+  uint64_t value;
+  return ReadUleb(p, end, &value);
 }
 
-uint64_t ReadLittleEndian(const uint8_t* p, size_t size) {
+bool SkipSleb(const uint8_t*& p, const uint8_t* end) {
+  if (p < end && !(*p & 0x80)) {
+    p++;
+    return true;
+  }
+  int64_t value;
+  return ReadSleb(p, end, &value);
+}
+
+uint64_t ReadFixed(const uint8_t* p, size_t size, bool little_endian) {
   uint64_t result = 0;
-  for (size_t i = 0; i < size; i++)
-    result |= static_cast<uint64_t>(p[i]) << (8 * i);
+  for (size_t i = 0; i < size; i++) {
+    size_t shift = little_endian ? i : size - 1 - i;
+    result |= static_cast<uint64_t>(p[i]) << (8 * shift);
+  }
   return result;
 }
 
@@ -109,11 +134,25 @@ uint64_t TombstoneForSize(size_t size) {
   return size >= 8 ? ~uint64_t{0} : (uint64_t{1} << (8 * size)) - 1;
 }
 
+// Reads the operands of DW_LNE_define_file. Like LLVM, this reads to the end of the unit, not to
+// the end of the opcode, and a failed read gives an empty name or a 0 directory.
+LineFileEntry ReadDefinedFile(const uint8_t* p, const uint8_t* end) {
+  LineFileEntry entry;
+  const uint8_t* nul = static_cast<const uint8_t*>(memchr(p, 0, end - p));
+  if (!nul) {
+    entry.name = std::string_view();
+    return entry;
+  }
+  entry.name = std::string_view(reinterpret_cast<const char*>(p), nul - p);
+  p = nul + 1;
+  if (!ReadUleb(p, end, &entry.dir_index))
+    entry.dir_index = 0;
+  return entry;
+}
+
 template <typename Sink>
 LineProgramStatus DecodeProgram(const LineProgramHeader& header, Sink& sink) {
-  // Multiple operations per instruction (VLIW) and big-endian data aren't supported.
-  if (!header.little_endian || header.max_ops_per_inst > 1)
-    return LineProgramStatus::kUnsupported;
+  const bool little_endian = header.little_endian;
 
   const uint8_t default_flags = header.default_is_stmt ? LineRow::kIsStmt : 0;
   const uint8_t opcode_base = header.opcode_base;
@@ -184,14 +223,14 @@ LineProgramStatus DecodeProgram(const LineProgramHeader& header, Sink& sink) {
           // The operand size comes from the opcode length, not from the header.
           size_t size = length - 1;
           if (size == 1 || size == 2 || size == 4 || size == 8) {
-            address = ReadLittleEndian(p + 1, size);
+            address = ReadFixed(p + 1, size, little_endian);
             tombstoned = address == TombstoneForSize(size);
           }
           break;
         }
         case kLneDefineFile:
-          // This adds to the file table. Let LLVM handle it.
-          return LineProgramStatus::kUnsupported;
+          sink.OnDefineFile(ReadDefinedFile(p + 1, end));
+          break;
         default:
           // DW_LNE_set_discriminator and unknown extended opcodes have no effect on stored rows.
           break;
@@ -220,7 +259,7 @@ LineProgramStatus DecodeProgram(const LineProgramHeader& header, Sink& sink) {
             return LineProgramStatus::kCorrupt;
           line += static_cast<uint32_t>(delta);
         } else {
-          if (!SkipLeb(p, end))
+          if (!SkipSleb(p, end))
             return LineProgramStatus::kCorrupt;
         }
         break;
@@ -238,7 +277,7 @@ LineProgramStatus DecodeProgram(const LineProgramHeader& header, Sink& sink) {
             return LineProgramStatus::kCorrupt;
           column = static_cast<uint16_t>(value);  // LLVM also truncates to 16 bits.
         } else {
-          if (!SkipLeb(p, end))
+          if (!SkipUleb(p, end))
             return LineProgramStatus::kCorrupt;
         }
         break;
@@ -254,7 +293,7 @@ LineProgramStatus DecodeProgram(const LineProgramHeader& header, Sink& sink) {
       case kLnsFixedAdvancePc:
         if (end - p < 2)
           return LineProgramStatus::kCorrupt;
-        address += ReadLittleEndian(p, 2);
+        address += ReadFixed(p, 2, little_endian);
         p += 2;
         break;
       case kLnsSetPrologueEnd:
@@ -264,13 +303,13 @@ LineProgramStatus DecodeProgram(const LineProgramHeader& header, Sink& sink) {
         flags |= LineRow::kEpilogueBegin;
         break;
       case kLnsSetIsa:
-        if (!SkipLeb(p, end))
+        if (!SkipUleb(p, end))
           return LineProgramStatus::kCorrupt;
         break;
       default:
         // An unknown standard opcode. The header gives its number of ULEB128 operands.
         for (uint8_t i = 0; i < header.standard_opcode_lengths[opcode - 1]; i++) {
-          if (!SkipLeb(p, end))
+          if (!SkipUleb(p, end))
             return LineProgramStatus::kCorrupt;
         }
         break;
@@ -284,240 +323,646 @@ class RowSink {
  public:
   static constexpr bool kNeedsDetails = true;
 
-  explicit RowSink(std::vector<LineRow>* rows) : rows_(rows) {}
+  RowSink(std::vector<LineRow>& rows, std::vector<LineFileEntry>& defined_files)
+      : rows_(rows), defined_files_(defined_files) {}
 
   void OnRow(uint64_t address, uint32_t file, uint32_t line, uint16_t column, uint8_t flags) {
-    rows_->emplace_back(address, file, line, column, flags);
+    rows_.emplace_back(address, file, line, column, flags);
   }
 
+  void OnDefineFile(LineFileEntry entry) { defined_files_.push_back(entry); }
+
  private:
-  std::vector<LineRow>* rows_;
+  std::vector<LineRow>& rows_;
+  std::vector<LineFileEntry>& defined_files_;
 };
 
 // Collects the files of live sequences. A sequence is the group of rows up to and including an
 // end_sequence row, as LineTable groups them. The files of a sequence are pending until its end
 // row shows whether it is live.
+//
+// The result matches the rows that a full decode gives, resolved with the completed file table. A
+// row can reference a file index before the DW_LNE_define_file that adds it. Such an index is kept
+// until the end of the program, when the size of the table is known.
 class FileScanSink {
  public:
   static constexpr bool kNeedsDetails = false;
 
-  explicit FileScanSink(size_t file_count) : state_(file_count, kUnseen) {}
+  FileScanSink(const LineProgramHeader& header, uint64_t first_code_address,
+               std::vector<LineFileEntry>& defined_files)
+      : version_(header.version),
+        first_code_address_(first_code_address),
+        file_entries_(header.files.size()),
+        state_(LineFileEntries(header).size(), kUnseen),
+        defined_files_(defined_files) {}
+
+  // A defined file can be referenced after this, so the state needs a slot for it.
+  void OnDefineFile(LineFileEntry entry) {
+    file_entries_++;
+    // DWARF 2 to 4 file indices start at 1.
+    state_.resize(version_ >= 5 ? file_entries_ : file_entries_ + 1, kUnseen);
+    // The last file can be the new index, which the next row must record in its slot.
+    last_file_ = kNoFile;
+    defined_files_.push_back(entry);
+  }
 
   void OnRow(uint64_t address, uint32_t file, uint32_t, uint16_t, uint8_t flags) {
-    if (!in_sequence_) {
-      in_sequence_ = true;
-      sequence_start_ = address;
-      last_file_ = kNoFile;
-    }
+    sequence_.AddAddress(address);
 
     // Most rows have the same file as the previous row, so check that first.
     if (file != last_file_) {
       last_file_ = file;
-      if (file < state_.size() && state_[file] == kUnseen) {
+      if (file >= state_.size()) {
+        pending_.push_back(file);  // Not in the table yet. See EndSequence().
+      } else if (state_[file] == kUnseen) {
         state_[file] = kPending;
         pending_.push_back(file);
       }
     }
 
-    if (flags & LineRow::kEndSequence) {
-      uint8_t new_state = IsStrippedSequenceStart(sequence_start_) ? kUnseen : kLive;
-      for (uint32_t pending_file : pending_)
-        state_[pending_file] = new_state;
-      pending_.clear();
-      in_sequence_ = false;
-    }
+    if (flags & LineRow::kEndSequence)
+      EndSequence();
   }
 
-  void TakeFiles(std::vector<uint32_t>* files) {
-    files->clear();
+  std::vector<uint32_t> TakeFiles() {
+    for (uint32_t file : late_files_) {
+      if (file < state_.size())
+        state_[file] = kLive;
+    }
+
+    std::vector<uint32_t> files;
     for (size_t i = 0; i < state_.size(); i++) {
       if (state_[i] == kLive)
-        files->push_back(static_cast<uint32_t>(i));
+        files.push_back(static_cast<uint32_t>(i));
     }
+    return files;
   }
 
  private:
   enum : uint8_t { kUnseen, kPending, kLive };
   static constexpr uint32_t kNoFile = UINT32_MAX;
 
+  void EndSequence() {
+    bool live = sequence_.Finish(first_code_address_);
+    for (uint32_t file : pending_) {
+      if (file >= state_.size()) {
+        // A later DW_LNE_define_file can still add this index.
+        if (live)
+          late_files_.push_back(file);
+      } else if (live) {
+        state_[file] = kLive;
+      } else if (state_[file] == kPending) {
+        state_[file] = kUnseen;
+      }
+    }
+    pending_.clear();
+    last_file_ = kNoFile;
+  }
+
+  uint16_t version_;
+  uint64_t first_code_address_;
+  size_t file_entries_;
   std::vector<uint8_t> state_;
+  std::vector<LineFileEntry>& defined_files_;
   std::vector<uint32_t> pending_;
-  bool in_sequence_ = false;
-  uint64_t sequence_start_ = 0;
+  std::vector<uint32_t> late_files_;  // Live references outside the table when they were seen.
+  LineSequenceValidator sequence_;
   uint32_t last_file_ = kNoFile;
 };
 
-void IgnoreLLVMError(llvm::Error err) { llvm::consumeError(std::move(err)); }
+// Reads fixed-size and variable-size values from section data, inside a limit. Every read past the
+// limit fails the reader, and later reads return 0.
+class DataReader {
+ public:
+  DataReader(std::string_view data, uint64_t offset, uint64_t limit, bool little_endian)
+      : data_(reinterpret_cast<const uint8_t*>(data.data())),
+        offset_(offset),
+        limit_(std::min<uint64_t>(limit, data.size())),
+        little_endian_(little_endian) {}
+
+  bool ok() const { return ok_; }
+  uint64_t offset() const { return offset_; }
+  void set_limit(uint64_t limit) { limit_ = std::min(limit, limit_); }
+
+  uint64_t Fixed(size_t size) {
+    if (!Check(size))
+      return 0;
+    uint64_t result = ReadFixed(data_ + offset_, size, little_endian_);
+    offset_ += size;
+    return result;
+  }
+
+  uint64_t Uleb() {
+    const uint8_t* p = data_ + offset_;
+    uint64_t result = 0;
+    if (!ok_ || offset_ > limit_ || !ReadUleb(p, data_ + limit_, &result)) {
+      ok_ = false;
+      return 0;
+    }
+    offset_ = p - data_;
+    return result;
+  }
+
+  void SkipUleb() { Uleb(); }
+
+  void SkipSleb() {
+    const uint8_t* p = data_ + offset_;
+    if (!ok_ || offset_ > limit_ || !zxdb::SkipSleb(p, data_ + limit_)) {
+      ok_ = false;
+      return;
+    }
+    offset_ = p - data_;
+  }
+
+  void Skip(uint64_t size) {
+    if (Check(size))
+      offset_ += size;
+  }
+
+  // Reads a null-terminated string.
+  std::string_view CString() {
+    if (!ok_ || offset_ >= limit_) {
+      ok_ = false;
+      return std::string_view();
+    }
+    const void* nul = memchr(data_ + offset_, 0, limit_ - offset_);
+    if (!nul) {
+      ok_ = false;
+      return std::string_view();
+    }
+    size_t length = static_cast<const uint8_t*>(nul) - (data_ + offset_);
+    std::string_view result(reinterpret_cast<const char*>(data_ + offset_), length);
+    offset_ += length + 1;
+    return result;
+  }
+
+ private:
+  bool Check(uint64_t size) {
+    if (!ok_ || offset_ > limit_ || limit_ - offset_ < size) {
+      ok_ = false;
+      return false;
+    }
+    return true;
+  }
+
+  const uint8_t* data_;
+  uint64_t offset_;
+  uint64_t limit_;
+  bool little_endian_;
+  bool ok_ = true;
+};
+
+// Returns the null-terminated string at the offset of the section, or nullopt if there is none.
+std::optional<std::string_view> StringAt(std::string_view section, uint64_t offset) {
+  if (offset >= section.size())
+    return std::nullopt;
+  const void* nul = memchr(section.data() + offset, 0, section.size() - offset);
+  if (!nul)
+    return std::nullopt;
+  return std::string_view(section.data() + offset,
+                          static_cast<const char*>(nul) - (section.data() + offset));
+}
+
+std::optional<std::string_view> IndexedString(const LineStringSections& strings, uint64_t index,
+                                              bool little_endian) {
+  if (!strings.str_offsets_base)
+    return std::nullopt;
+  // Check the index against the number of entries, so the entry offset can't overflow.
+  uint64_t base = *strings.str_offsets_base;
+  uint64_t size = strings.str_offset_size;
+  if (size == 0 || base > strings.str_offsets.size() ||
+      index >= (strings.str_offsets.size() - base) / size)
+    return std::nullopt;
+  uint64_t entry = base + index * size;
+  uint64_t offset = ReadFixed(reinterpret_cast<const uint8_t*>(strings.str_offsets.data()) + entry,
+                              size, little_endian);
+  return StringAt(strings.str, offset);
+}
+
+// The value of one attribute of a DWARF 5 directory or file entry.
+struct FormValue {
+  // The string of a string form. Nullopt for other forms and for strings that can't be decoded.
+  std::optional<std::string_view> string;
+
+  // The value that llvm::DWARFFormValue::getAsUnsignedConstant() gives for a constant or flag
+  // form. LLVM has no value for the other forms, so they give 0.
+  uint64_t constant = 0;
+
+  // The size of a block form, for DW_LNCT_MD5. 0 for the other forms.
+  uint64_t block_size = 0;
+};
+
+// Reads a value of the form. Fails if the reader fails or the form is unknown. The forms are the
+// ones that llvm::DWARFFormValue::extractValue() accepts.
+ErrOr<FormValue> ReadForm(DataReader& reader, uint64_t form, size_t offset_size,
+                          uint8_t address_size, const LineStringSections& strings,
+                          bool little_endian) {
+  using namespace llvm::dwarf;
+
+  // DW_FORM_indirect gives the actual form in the data. LLVM follows any number of them.
+  while (form == DW_FORM_indirect && reader.ok())
+    form = reader.Uleb();
+  if (!reader.ok())
+    return Err("The form value is truncated.");
+
+  FormValue value;
+  switch (form) {
+    case DW_FORM_implicit_const:
+      // The value is in an abbreviation, which line tables don't have. LLVM reads nothing and
+      // uses 0.
+      break;
+    case DW_FORM_string:
+      value.string = reader.CString();
+      break;
+    case DW_FORM_line_strp:
+      value.string = StringAt(strings.line_str, reader.Fixed(offset_size));
+      break;
+    case DW_FORM_strp:
+      value.string = StringAt(strings.str, reader.Fixed(offset_size));
+      break;
+    case DW_FORM_strx:
+    case DW_FORM_GNU_str_index:
+      value.string = IndexedString(strings, reader.Uleb(), little_endian);
+      break;
+    case DW_FORM_strx1:
+    case DW_FORM_strx2:
+    case DW_FORM_strx3:
+    case DW_FORM_strx4:
+      value.string = IndexedString(strings, reader.Fixed(form - DW_FORM_strx1 + 1), little_endian);
+      break;
+    case DW_FORM_strp_sup:
+    case DW_FORM_GNU_strp_alt:
+      // Strings in a supplementary file can't be decoded.
+      reader.Skip(offset_size);
+      break;
+    case DW_FORM_data1:
+    case DW_FORM_flag:
+      value.constant = reader.Fixed(1);
+      break;
+    case DW_FORM_data2:
+      value.constant = reader.Fixed(2);
+      break;
+    case DW_FORM_data4:
+      value.constant = reader.Fixed(4);
+      break;
+    case DW_FORM_data8:
+      value.constant = reader.Fixed(8);
+      break;
+    case DW_FORM_udata:
+      value.constant = reader.Uleb();
+      break;
+    case DW_FORM_flag_present:
+      value.constant = 1;
+      break;
+    case DW_FORM_data16:
+      // LLVM treats this as a constant and as a 16-byte block. The constant is the block size.
+      reader.Skip(16);
+      value.constant = 16;
+      value.block_size = 16;
+      break;
+    case DW_FORM_block1:
+      value.block_size = reader.Fixed(1);
+      reader.Skip(value.block_size);
+      break;
+    case DW_FORM_block2:
+      value.block_size = reader.Fixed(2);
+      reader.Skip(value.block_size);
+      break;
+    case DW_FORM_block4:
+      value.block_size = reader.Fixed(4);
+      reader.Skip(value.block_size);
+      break;
+    case DW_FORM_block:
+    case DW_FORM_exprloc:
+      value.block_size = reader.Uleb();
+      reader.Skip(value.block_size);
+      break;
+    // The forms below have no constant, string, or block value in LLVM. This includes the
+    // reference forms, which aren't constants even though their encodings are.
+    case DW_FORM_ref1:
+      reader.Skip(1);
+      break;
+    case DW_FORM_ref2:
+      reader.Skip(2);
+      break;
+    case DW_FORM_ref4:
+    case DW_FORM_ref_sup4:
+      reader.Skip(4);
+      break;
+    case DW_FORM_ref8:
+    case DW_FORM_ref_sig8:
+    case DW_FORM_ref_sup8:
+      reader.Skip(8);
+      break;
+    case DW_FORM_sdata:
+      reader.SkipSleb();
+      break;
+    case DW_FORM_ref_udata:
+    case DW_FORM_addrx:
+    case DW_FORM_loclistx:
+    case DW_FORM_rnglistx:
+    case DW_FORM_GNU_addr_index:
+      reader.SkipUleb();
+      break;
+    case DW_FORM_addr:
+      reader.Skip(address_size);
+      break;
+    case DW_FORM_sec_offset:
+    case DW_FORM_ref_addr:
+    case DW_FORM_GNU_ref_alt:
+      reader.Skip(offset_size);
+      break;
+    case DW_FORM_addrx1:
+    case DW_FORM_addrx2:
+    case DW_FORM_addrx3:
+    case DW_FORM_addrx4:
+      reader.Skip(form - DW_FORM_addrx1 + 1);
+      break;
+    case DW_FORM_LLVM_addrx_offset:
+      reader.SkipUleb();
+      reader.Skip(4);
+      break;
+    default:
+      return Err("Unknown form 0x%" PRIx64 ".", form);
+  }
+  if (!reader.ok())
+    return Err("The form value is truncated.");
+  return value;
+}
+
+struct EntryFormat {
+  uint64_t content_type;
+  uint64_t form;
+};
+
+// Reads the entry format of a DWARF 5 directory or file table. Fails if it has no path.
+ErrOr<std::vector<EntryFormat>> ReadEntryFormat(DataReader& reader) {
+  std::vector<EntryFormat> format;
+  uint64_t count = reader.Fixed(1);
+  bool has_path = false;
+  for (uint64_t i = 0; i < count && reader.ok(); i++) {
+    EntryFormat& entry = format.emplace_back();
+    entry.content_type = reader.Uleb();
+    entry.form = reader.Uleb();
+    if (entry.content_type == llvm::dwarf::DW_LNCT_path)
+      has_path = true;
+  }
+  if (!reader.ok())
+    return Err("The entry format is truncated.");
+  if (!has_path)
+    return Err("The entry format has no path.");
+  return format;
+}
+
+// Checks the count of a table whose entries read no data. Such an entry format has only forms like
+// DW_FORM_implicit_const. Every entry is the same and has no name, and the count can be very large
+// for a small table. LLVM makes every entry. The parser makes them too, so the indices of later
+// files are the same, but it fails the header when the count is larger than the size of the
+// header. Then the entries use memory in proportion to the input.
+Err CheckEmptyEntryCount(uint64_t count, uint64_t header_length) {
+  if (count > header_length)
+    return Err("has a table of empty entries with a count larger than the header.");
+  return Err();
+}
+
+// Reads the DWARF 5 directory and file tables. Stops at the first error, keeping the entries
+// before it. Fails only for the count that CheckEmptyEntryCount() rejects.
+Err ReadV5Tables(DataReader& reader, size_t offset_size, uint8_t address_size,
+                 uint64_t header_length, const LineStringSections& strings,
+                 LineProgramHeader* header) {
+  ErrOr<std::vector<EntryFormat>> dir_format = ReadEntryFormat(reader);
+  if (dir_format.has_error())
+    return Err();
+  uint64_t dir_count = reader.Uleb();
+  for (uint64_t i = 0; i < dir_count && reader.ok(); i++) {
+    uint64_t entry_begin = reader.offset();
+    std::optional<std::string_view> dir;
+    for (const EntryFormat& format : dir_format.value()) {
+      ErrOr<FormValue> value = ReadForm(reader, format.form, offset_size, address_size, strings,
+                                        header->little_endian);
+      if (value.has_error())
+        return Err();
+      if (format.content_type == llvm::dwarf::DW_LNCT_path)
+        dir = value.value().string;
+    }
+    if (i == 0 && reader.offset() == entry_begin) {
+      if (Err err = CheckEmptyEntryCount(dir_count, header_length); err.has_error())
+        return err;
+      // Entries that read no data are identical. Keep every slot for directory indices.
+      header->include_dirs.assign(dir_count, dir);
+      break;
+    }
+    header->include_dirs.push_back(dir);
+  }
+
+  ErrOr<std::vector<EntryFormat>> file_format = ReadEntryFormat(reader);
+  if (file_format.has_error())
+    return Err();
+  uint64_t file_count = reader.Uleb();
+  for (uint64_t i = 0; i < file_count && reader.ok(); i++) {
+    uint64_t entry_begin = reader.offset();
+    LineFileEntry file;
+    for (const EntryFormat& format : file_format.value()) {
+      ErrOr<FormValue> value = ReadForm(reader, format.form, offset_size, address_size, strings,
+                                        header->little_endian);
+      if (value.has_error())
+        return Err();
+      switch (format.content_type) {
+        case llvm::dwarf::DW_LNCT_path:
+          file.name = value.value().string;
+          break;
+        case llvm::dwarf::DW_LNCT_directory_index:
+          file.dir_index = value.value().constant;
+          break;
+        case llvm::dwarf::DW_LNCT_MD5:
+          // LLVM rejects an MD5 that isn't a 16-byte block.
+          if (value.value().block_size != 16)
+            return Err();
+          break;
+        default:
+          break;
+      }
+    }
+    if (i == 0 && reader.offset() == entry_begin) {
+      if (Err err = CheckEmptyEntryCount(file_count, header_length); err.has_error())
+        return err;
+      // Keep every slot so files added by DW_LNE_define_file retain their indices.
+      header->files.assign(file_count, file);
+      break;
+    }
+    header->files.push_back(file);
+  }
+  return Err();
+}
+
+// Reads the DWARF 2 to 4 directory and file tables. Each table ends with an empty string. Stops at
+// the first error, keeping the entries before it.
+void ReadV2Tables(DataReader& reader, LineProgramHeader* header) {
+  for (;;) {
+    std::string_view dir = reader.CString();
+    if (!reader.ok() || dir.empty())
+      break;
+    header->include_dirs.push_back(dir);
+  }
+  if (!reader.ok())
+    return;
+
+  for (;;) {
+    std::string_view name = reader.CString();
+    if (!reader.ok() || name.empty())
+      return;
+    LineFileEntry file;
+    file.name = name;
+    file.dir_index = reader.Uleb();
+    reader.SkipUleb();  // Modification time.
+    reader.SkipUleb();  // Length.
+    if (!reader.ok())
+      return;
+    header->files.push_back(file);
+  }
+}
+
+ErrOr<LineProgramHeader> ParseLineProgramHeader(std::string_view line_section, uint64_t offset,
+                                                bool little_endian,
+                                                const LineStringSections& strings) {
+  ErrOr<LineTableExtent> extent = ReadLineTableExtent(line_section, offset, little_endian);
+  if (extent.has_error())
+    return extent.err();
+  uint64_t unit_end = extent.value().end;
+  size_t offset_size = extent.value().offset_size;
+
+  LineProgramHeader header;
+  header.little_endian = little_endian;
+  DataReader reader(line_section, extent.value().begin, unit_end, little_endian);
+
+  header.version = static_cast<uint16_t>(reader.Fixed(2));
+  if (reader.ok() && (header.version < 2 || header.version > 5))
+    return Err("Line table at 0x%" PRIx64 " has unsupported version %u.", offset, header.version);
+  uint8_t address_size = 8;
+  if (header.version >= 5) {
+    address_size = static_cast<uint8_t>(reader.Fixed(1));
+    reader.Fixed(1);  // Segment selector size.
+  }
+  uint64_t header_length = reader.Fixed(offset_size);
+  if (!reader.ok())
+    return Err("Line table header at 0x%" PRIx64 " is truncated.", offset);
+
+  if (header_length > unit_end - reader.offset())
+    return Err("Line table header at 0x%" PRIx64 " is longer than its unit.", offset);
+  uint64_t program_begin = reader.offset() + header_length;
+  reader.set_limit(program_begin);
+
+  header.min_inst_length = static_cast<uint8_t>(reader.Fixed(1));
+  if (header.version >= 4) {
+    // DWARF 2 and 3 have no field. Like LLVM, treat 0 as 1.
+    uint8_t max_ops_per_inst = static_cast<uint8_t>(reader.Fixed(1));
+    if (reader.ok() && max_ops_per_inst > 1) {
+      return Err("Line table at 0x%" PRIx64
+                 " has more than one operation per instruction, which isn't supported.",
+                 offset);
+    }
+  }
+  header.default_is_stmt = reader.Fixed(1) != 0;
+  header.line_base = static_cast<int8_t>(reader.Fixed(1));
+  header.line_range = static_cast<uint8_t>(reader.Fixed(1));
+  header.opcode_base = static_cast<uint8_t>(reader.Fixed(1));
+  for (int opcode = 1; opcode < header.opcode_base; opcode++)
+    header.standard_opcode_lengths[opcode - 1] = static_cast<uint8_t>(reader.Fixed(1));
+  if (!reader.ok())
+    return Err("Line table header at 0x%" PRIx64 " is truncated.", offset);
+
+  if (header.version >= 5) {
+    if (Err err = ReadV5Tables(reader, offset_size, address_size, header_length, strings, &header);
+        err.has_error())
+      return Err("Line table at 0x%" PRIx64 " %s", offset, err.msg().c_str());
+  } else {
+    ReadV2Tables(reader, &header);
+  }
+
+  header.program = std::span<const uint8_t>(
+      reinterpret_cast<const uint8_t*>(line_section.data()) + program_begin,
+      unit_end - program_begin);
+  return header;
+}
 
 }  // namespace
 
-LineProgramStatus DecodeLineProgramRows(const LineProgramHeader& header,
-                                        std::vector<LineRow>* rows) {
-  rows->clear();
-  RowSink sink(rows);
-  return DecodeProgram(header, sink);
+size_t LineFileEntries::size() const {
+  size_t count = header_.files.size() + defined_files_.size();
+  return header_.version >= 5 || count == 0 ? count : count + 1;
 }
 
-LineProgramStatus ScanLineProgramFiles(const LineProgramHeader& header, size_t file_count,
-                                       std::vector<uint32_t>* files) {
-  FileScanSink sink(file_count);
-  LineProgramStatus status = DecodeProgram(header, sink);
-  sink.TakeFiles(files);
-  return status;
-}
-
-std::vector<uint32_t> GetLiveRowFiles(std::span<const LineRow> rows, size_t file_count) {
-  std::vector<bool> live(file_count);
-
-  size_t sequence_begin = 0;
-  for (size_t i = 0; i < rows.size(); i++) {
-    if (!rows[i].end_sequence())
-      continue;
-    if (!IsStrippedSequenceStart(rows[sequence_begin].address)) {
-      for (size_t row = sequence_begin; row <= i; row++) {
-        if (rows[row].file < file_count)
-          live[rows[row].file] = true;
-      }
-    }
-    sequence_begin = i + 1;
+const LineFileEntry* LineFileEntries::GetFileEntry(uint64_t file_index) const {
+  if (header_.version < 5) {
+    if (file_index == 0)
+      return nullptr;
+    file_index--;
   }
-
-  std::vector<uint32_t> result;
-  for (size_t i = 0; i < file_count; i++) {
-    if (live[i])
-      result.push_back(static_cast<uint32_t>(i));
-  }
-  return result;
+  if (file_index < header_.files.size())
+    return &header_.files[file_index];
+  file_index -= header_.files.size();
+  return file_index < defined_files_.size() ? &defined_files_[file_index] : nullptr;
 }
 
-std::vector<LineRow> LineRowsFromLLVM(const llvm::DWARFDebugLine::LineTable& table) {
-  std::vector<LineRow> result;
-  result.reserve(table.Rows.size());
-  for (const auto& row : table.Rows) {
-    uint8_t flags = 0;
-    if (row.IsStmt)
-      flags |= LineRow::kIsStmt;
-    if (row.EndSequence)
-      flags |= LineRow::kEndSequence;
-    if (row.PrologueEnd)
-      flags |= LineRow::kPrologueEnd;
-    if (row.EpilogueBegin)
-      flags |= LineRow::kEpilogueBegin;
-    if (row.BasicBlock)
-      flags |= LineRow::kBasicBlock;
-    result.emplace_back(row.Address.Address, row.File, row.Line, row.Column, flags);
-  }
-  return result;
+std::optional<std::string_view> LineFileEntries::GetFileDirectory(
+    const LineFileEntry& entry) const {
+  uint64_t dir = entry.dir_index;
+  const auto& dirs = header_.include_dirs;
+  if (header_.version >= 5)
+    return dir != 0 && dir < dirs.size() ? dirs[dir] : std::nullopt;
+  return dir > 0 && dir <= dirs.size() ? dirs[dir - 1] : std::nullopt;
 }
 
-// static
-ErrOr<LineProgram> LineProgram::Parse(const llvm::DWARFContext& context,
-                                      const llvm::DWARFSection& section, uint64_t offset,
-                                      uint8_t address_size, const llvm::DWARFUnit* unit) {
-  llvm::DWARFDataExtractor data(context.getDWARFObj(), section, context.isLittleEndian(),
-                                address_size);
-  if (!data.isValidOffset(offset))
+ErrOr<LineTableExtent> ReadLineTableExtent(std::string_view line_section, uint64_t offset,
+                                           bool little_endian) {
+  if (offset >= line_section.size())
     return Err("Line table offset 0x%" PRIx64 " is outside the section.", offset);
 
+  LineTableExtent extent;
+  DataReader reader(line_section, offset, line_section.size(), little_endian);
+  uint64_t unit_length = reader.Fixed(4);
+  if (unit_length == 0xffffffff) {
+    unit_length = reader.Fixed(8);
+    extent.offset_size = 8;
+  } else if (unit_length >= 0xfffffff0) {
+    return Err("Line table at 0x%" PRIx64 " has a reserved unit length.", offset);
+  }
+  if (!reader.ok())
+    return Err("Line table at 0x%" PRIx64 " is truncated.", offset);
+
+  // A unit length larger than the section means the rest of the section, like in LLVM.
+  extent.begin = reader.offset();
+  extent.end = unit_length < line_section.size() - extent.begin ? extent.begin + unit_length
+                                                                 : line_section.size();
+  return extent;
+}
+
+// static
+ErrOr<LineProgram> LineProgram::Parse(std::string_view line_section, uint64_t offset,
+                                      bool little_endian, const LineStringSections& strings) {
+  ErrOr<LineProgramHeader> header =
+      ParseLineProgramHeader(line_section, offset, little_endian, strings);
+  if (header.has_error())
+    return header.err();
+
   LineProgram result;
-  result.context_ = &context;
-  result.section_ = &section;
-  result.unit_ = unit;
-  result.offset_ = offset;
-  result.address_size_ = address_size;
-
-  uint64_t cur = offset;
-  if (llvm::Error err = result.prologue_.parse(data, &cur, IgnoreLLVMError, context, unit))
-    return Err("Can't parse line table header: " + llvm::toString(std::move(err)));
-
-  const llvm::DWARFDebugLine::Prologue& prologue = result.prologue_;
-
-  // The unit length can be larger than the section. LLVM uses the rest of the section then.
-  uint64_t program_end = offset + prologue.TotalLength + prologue.sizeofTotalLength();
-  program_end = std::min<uint64_t>(program_end, section.Data.size());
-  uint64_t program_begin = offset + prologue.getLength();
-  if (program_begin > program_end)
-    return Err("Line table header at 0x%" PRIx64 " is longer than its unit.", offset);
-
-  LineProgramHeader& header = result.header_;
-  header.min_inst_length = prologue.MinInstLength;
-  // DWARF 2 and 3 have no maximum_operations_per_instruction field and LLVM reports 0.
-  header.max_ops_per_inst = std::max<uint8_t>(prologue.MaxOpsPerInst, 1);
-  header.default_is_stmt = prologue.DefaultIsStmt;
-  header.line_base = prologue.LineBase;
-  header.line_range = prologue.LineRange;
-  header.opcode_base = prologue.OpcodeBase;
-  header.little_endian = context.isLittleEndian();
-  size_t length_count =
-      std::min(prologue.StandardOpcodeLengths.size(), header.standard_opcode_lengths.size());
-  std::copy_n(prologue.StandardOpcodeLengths.begin(), length_count,
-              header.standard_opcode_lengths.begin());
-  header.program = std::span<const uint8_t>(
-      reinterpret_cast<const uint8_t*>(section.Data.data()) + program_begin,
-      program_end - program_begin);
-
+  result.header_ = header.take_value();
   return result;
 }
 
-// static
-std::optional<uint64_t> LineProgram::GetUnitLineTableOffset(llvm::DWARFUnit& unit) {
-  llvm::DWARFDie unit_die = unit.getUnitDIE();
-  if (!unit_die)
-    return std::nullopt;
-  std::optional<uint64_t> stmt_list =
-      llvm::dwarf::toSectionOffset(unit_die.find(llvm::dwarf::DW_AT_stmt_list));
-  if (!stmt_list)
-    return std::nullopt;
-  return *stmt_list + unit.getLineTableOffset();
+LineProgram::DecodeResult LineProgram::DecodeRows() const {
+  DecodeResult result;
+  RowSink sink(result.rows, result.defined_files);
+  result.status = DecodeProgram(header_, sink);
+  return result;
 }
 
-// static
-ErrOr<LineProgram> LineProgram::ParseForUnit(llvm::DWARFUnit& unit) {
-  std::optional<uint64_t> offset = GetUnitLineTableOffset(unit);
-  if (!offset)
-    return Err("The unit has no line table.");
-  return ParseForUnit(unit, *offset);
-}
-
-// static
-ErrOr<LineProgram> LineProgram::ParseForUnit(llvm::DWARFUnit& unit, uint64_t offset) {
-  return Parse(unit.getContext(), unit.getLineSection(), offset, unit.getAddressByteSize(), &unit);
-}
-
-size_t LineProgram::GetFileCount() const { return GetLineFileCount(prologue_); }
-
-LineProgramStatus LineProgram::DecodeRows(std::vector<LineRow>* rows) {
-  LineProgramStatus status = DecodeLineProgramRows(header_, rows);
-  if (status == LineProgramStatus::kUnsupported)
-    return ParseWithLLVM(rows);
-  return status;
-}
-
-LineProgramStatus LineProgram::ScanFiles(std::vector<uint32_t>* files) {
-  LineProgramStatus status = ScanLineProgramFiles(header_, GetFileCount(), files);
-  if (status == LineProgramStatus::kUnsupported) {
-    std::vector<LineRow> rows;
-    status = ParseWithLLVM(&rows);
-    *files = GetLiveRowFiles(rows, GetFileCount());
-  }
-  return status;
-}
-
-LineProgramStatus LineProgram::ParseWithLLVM(std::vector<LineRow>* rows) {
-  llvm::DWARFDataExtractor data(context_->getDWARFObj(), *section_, context_->isLittleEndian(),
-                                address_size_);
-  llvm::DWARFDebugLine::LineTable table;
-  uint64_t cur = offset_;
-  llvm::Error err = table.parse(data, &cur, *context_, unit_, IgnoreLLVMError);
-
-  *rows = LineRowsFromLLVM(table);
-  prologue_ = table.Prologue;
-
-  if (err) {
-    llvm::consumeError(std::move(err));
-    return LineProgramStatus::kCorrupt;
-  }
-  return LineProgramStatus::kOk;
+LineProgram::FileScanResult LineProgram::ScanFiles(uint64_t first_code_address) const {
+  FileScanResult result;
+  FileScanSink sink(header_, first_code_address, result.defined_files);
+  result.status = DecodeProgram(header_, sink);
+  result.file_indices = sink.TakeFiles();
+  return result;
 }
 
 }  // namespace zxdb

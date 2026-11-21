@@ -44,19 +44,9 @@ checked out. See the Google-internal checkout instructions for how to do this.
 
 ### Enabling the zxdb large tests
 
-There is a GN build flag `include_zxdb_large_tests` which defaults to `false`. This controls whether
-the target `out/<arch>/host_x64/zxdb_large_tests` are compiled. To set this to true, run this,
-substituting `<arch>` with your build directory:
-
-```
-fx gn args out/<arch>
-```
-
-and add a line to the bottom of the file:
-
-```
-include_zxdb_large_tests = true
-```
+The CMake build doesn't build the large tests in
+`module_symbols_impl_largetest.cc`. The upstream GN build had a
+`include_zxdb_large_tests` flag for them.
 
 ## Adding to the large test data
 
@@ -109,12 +99,12 @@ cipd set-tag fuchsia_internal/test_data/debug/large_test_data -version FZIh6hPkZ
 ## Adding to or updating rust test data
 
 Adding files or updating the binaries contained in the rust directory is exactly the same as for the
-large test data described above, except use the `rust_test_data.yaml` file instead. New executables
-can be added to the CIPD package with additional rust targets in the rust directory, make sure to
-update the `dep` in the `rust_symbols` target.
+large test data described above, except use the `rust_test_data.yaml` file instead.
 
-If a binary in this package needs to be updated, you'll need to uncomment the dep in the
-`rust_symbols` target in `//src/developer/debug/zxdb/symbols/BUILD.gn`.
+`rust/rust_symbol_test.rs` is the source of the `rust_symbol_test` binary in the CIPD package. The
+CMake build doesn't compile it. Pass the binary to CMake with
+`-DZXDB_RUST_TEST_BINARY=/path/to/rust_symbol_test`. The tests use line numbers from this source,
+so keep the source and the binary in sync.
 
 ## Fetch configuration
 

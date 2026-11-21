@@ -121,5 +121,5 @@ Callers and implementations must preserve these invariants:
 
 Run these commands to build and test `zxdb/console`:
 
-- Build: `fx build //src/developer/debug/zxdb/console`
-- Test: `fx test zxdb_tests`
+- Build: `cmake --build build --target zxdb_console`
+- Test: `cmake --build build --target zxdb_tests && ./build/zxdb_tests`

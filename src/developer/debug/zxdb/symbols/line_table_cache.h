@@ -34,11 +34,15 @@ class LineTableCache {
  public:
   // Returns a file table of the unit's line table that has the given file index if the table has
   // that index at all. Returns null if the unit has no line table or its header can't be parsed.
+  // Each result is an immutable snapshot. A later request can replace the cached snapshot with
+  // one that includes program-defined files; earlier results remain valid.
   std::shared_ptr<const LineFileTable> GetFileTable(llvm::DWARFUnit& unit, uint64_t file_index);
 
   // Decodes the whole line table of the unit. The result uses the cached file table. Returns an
-  // empty table if the unit has no line table or its header can't be parsed.
-  LineTable DecodeLineTable(llvm::DWARFUnit& unit);
+  // empty table if the unit has no line table or its header can't be parsed. first_code_address is
+  // the lowest address of a code section of the binary, which finds the stripped sequences (see
+  // LineTable).
+  LineTable DecodeLineTable(llvm::DWARFUnit& unit, uint64_t first_code_address);
 
   void Clear() { entries_.clear(); }
 
@@ -46,15 +50,15 @@ class LineTableCache {
   struct Entry {
     std::shared_ptr<const LineFileTable> files;
 
-    // Set when the program was decoded, so the file table has the files that the program adds.
-    bool complete = false;
+    // Set after a decode attempt. No more files can be obtained, even if parsing failed.
+    bool exhausted = false;
   };
 
   // Identifies a line table. Units of a main binary and DWO units use different line sections.
   using Key = std::pair<const void*, uint64_t>;
 
   // Decodes the parsed program and makes the entry complete. Returns the rows.
-  std::vector<LineRow> Complete(LineProgram& program, Entry& entry);
+  std::vector<LineRow> Complete(const LineProgram& program, Entry& entry);
 
   std::map<Key, Entry> entries_;
 };

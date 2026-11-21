@@ -332,7 +332,9 @@ LineDetails ModuleSymbolsImpl::LineDetailsForAddress(const SymbolContext& symbol
   std::string compilation_dir =
       build_dir_.empty() ? found_unit.details_unit->GetCompilationDir() : build_dir_;
   return found_unit.main_binary_unit->GetLineTable().GetLineDetails(
-      symbol_context, absolute_address, greedy, compilation_dir);
+      symbol_context, absolute_address,
+      greedy ? LineTable::LineExtentMode::kIncludeLineZero : LineTable::LineExtentMode::kSameLine,
+      compilation_dir);
 }
 
 std::vector<std::string> ModuleSymbolsImpl::FindFileMatches(std::string_view name) const {
@@ -739,7 +741,8 @@ std::optional<Location> ModuleSymbolsImpl::DwarfLocationForAddress(
       if (maybe_row) {
         const LineRow& row = *maybe_row;
         std::optional<std::string> file_name;
-        if (row.line) {
+        int line = row.line_number();
+        if (line) {
           if (const std::string* name = line_table.GetFileNameForRow(row))
             file_name = *name;
         } else {
@@ -747,15 +750,15 @@ std::optional<Location> ModuleSymbolsImpl::DwarfLocationForAddress(
                                    << std::hex << absolute_address;
         }
         if (file_name) {
-          // It's important this only gets called when row.line > 0. FileLine will assert for line 0
-          // if a file name or build directory is given to ensure that all "no code" locations
-          // compare identically. This is guaranteed here because file_name will only be set when
-          // the line is nonzero.
+          // It's important this only gets called when the line is > 0. FileLine will assert for
+          // line 0 if a file name or build directory is given to ensure that all "no code"
+          // locations compare identically. This is guaranteed here because file_name will only be
+          // set when the line is nonzero.
           if (build_dir_.empty()) {
             file_line = FileLine(std::move(*file_name),
-                                 found_unit.details_unit->GetCompilationDir(), row.line);
+                                 found_unit.details_unit->GetCompilationDir(), line);
           } else {
-            file_line = FileLine(std::move(*file_name), build_dir_, row.line);
+            file_line = FileLine(std::move(*file_name), build_dir_, line);
           }
         }
         column = row.column;

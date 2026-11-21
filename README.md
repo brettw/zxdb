@@ -111,8 +111,9 @@ microseconds. It indexes only the selected binary, without its shared libraries.
 The index time includes the source file index, which runs on worker threads.
 The benchmark also reports the source file work alone on one thread.
 The benchmark is omitted when `ZXDB_INDEX_BENCHMARK_BINARY` is unset. When it is
-set, `LineProgramBinary.BenchmarkBinaryMatchesLLVM` also compares every line
-table of that binary with LLVM.
+set, `LineProgramBinary.BenchmarkBinary` also decodes every line table of that
+binary and checks that the file scan and the source file index agree with the
+rows.
 For comparisons, use the same input binary, finish compilation first, and run
 both versions on the same CPU with warm filesystem caches. For example:
 
@@ -140,7 +141,9 @@ includes, and for source-root RapidJSON includes. Builds use only this
 repository and installed packages; they do not read a neighboring Fuchsia
 checkout or fetch dependencies from the network.
 
-CMake source lists follow the upstream Linux GN/Bazel selections. The
+CMake is the only build. Its source lists started from the upstream Linux
+GN and Bazel selections, and this repository doesn't have GN or Bazel files.
+The
 `debug::shared` target preserves `alwayslink` for shared and logging with
 whole-archive linking. Fuchsia-only launchers, FIDL runtimes, packaging, and
 `ffx` integration are outside this host build.
@@ -152,7 +155,7 @@ portability issues: filesystem timestamps now use the system clock epoch,
 and callback result storage retains stable addresses during synchronous
 completion. A regression test covers the callback case. LLVM 19's ScopedPrinter header needs
 the DWARF reader and its test helper compiled as C++20; the remaining build
-uses C++23. Upstream GN and Bazel files are unchanged.
+uses C++23.
 
 ## Linux debugging behavior
 

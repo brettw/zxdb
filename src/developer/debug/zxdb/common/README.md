@@ -112,5 +112,5 @@ These utilities produce the following disk, network, and thread side effects:
 
 Run these commands to build and test `zxdb/common`:
 
-- Build: `fx build //src/developer/debug/zxdb/common`
-- Test: `fx test zxdb_tests`
+- Build: `cmake --build build --target zxdb_common`
+- Test: `cmake --build build --target zxdb_tests && ./build/zxdb_tests`

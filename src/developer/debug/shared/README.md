@@ -119,10 +119,10 @@ ctest --test-dir build --output-on-failure
 ```
 
 The CMake target `debug::shared` propagates the required support libraries and
-include paths. The Linux source selection matches `BUILD.bazel`. See the root
+include paths. It builds the Linux sources only. See the root
 `README.md` for prerequisites and imported dependency details.
 
 Run these commands to build and test `shared`:
 
-- Build: `fx build //src/developer/debug/shared`
-- Test: `fx test zxdb_tests`
+- Build: `cmake --build build --target debug_shared`
+- Test: `cmake --build build --target zxdb_tests && ./build/zxdb_tests`

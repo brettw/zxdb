@@ -10,7 +10,7 @@
 #include "src/developer/debug/zxdb/symbols/test_symbol_module.h"
 
 // This file contains the tests for ModuleSymbolsImpl that use the large optional test data. See
-// zxdb/BUILD.gn for more.
+// test_data/README.md. The CMake build doesn't build these tests.
 
 namespace zxdb {
 

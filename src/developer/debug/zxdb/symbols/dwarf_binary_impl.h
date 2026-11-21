@@ -23,11 +23,19 @@ class MemoryBuffer;
 
 namespace object {
 class Binary;
+class ObjectFile;
 }  // namespace object
 
 }  // namespace llvm
 
 namespace zxdb {
+
+// Returns the lowest address of the sections of the object file that have code, or 0 if there are
+// none. This matches the first code address of LLDB (InitializeFirstCodeAddress() in
+// SymbolFileDWARF.cpp). LLDB uses the code sections of the module. A separate debug file has the
+// same addresses and flags for its code sections even though they have no data, so the result is
+// the same for it.
+uint64_t GetFirstCodeAddress(const llvm::object::ObjectFile& object);
 
 class DwarfBinaryImpl final : public DwarfBinary {
  public:
@@ -62,6 +70,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
   const llvm::DWARFDebugNames* GetDebugNames() const override;
   std::shared_ptr<const LineFileTable> GetLineFileTable(llvm::DWARFUnit* unit,
                                                         uint64_t file_index) const override;
+  uint64_t GetFirstCodeAddress() const override { return first_code_address_; }
   void ClearLLVMCache() override;
 
   // Decodes the whole line table of the unit. The file table is shared with GetLineFileTable().
@@ -104,6 +113,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
   mutable LineTableCache line_tables_;
 
   uint64_t mapped_length_ = 0;
+  uint64_t first_code_address_ = 0;  // Set when the file is loaded.
 
   fxl::WeakPtrFactory<DwarfBinaryImpl> weak_factory_;
 };

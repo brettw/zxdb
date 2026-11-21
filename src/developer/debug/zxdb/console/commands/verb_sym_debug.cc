@@ -242,7 +242,7 @@ OutputBuffer DumpLineTable(ProcessSymbols* process_symbols, uint64_t address,
 
   const LineTable& line_table = found_unit.main_binary_unit->GetLineTable();
   std::span<const LineRow> sequence =
-      line_table.GetRowSequenceForAddress(symbol_context, address);
+      line_table.GetSequenceForAddress(symbol_context, address).rows_with_end_marker();
   if (sequence.empty())
     return OutputBuffer("No row sequence covers " + to_hex_string(address) + ".\n");
 

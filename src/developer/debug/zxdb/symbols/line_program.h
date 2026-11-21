@@ -10,125 +10,162 @@
 #include <array>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
-#include "llvm/DebugInfo/DWARF/DWARFDebugLine.h"
 #include "src/developer/debug/zxdb/common/err_or.h"
 #include "src/developer/debug/zxdb/symbols/line_row.h"
 
-namespace llvm {
-class DWARFContext;
-class DWARFUnit;
-struct DWARFSection;
-}  // namespace llvm
-
 namespace zxdb {
 
-// The zxdb line program decoder.
+// The zxdb line table parser.
 //
-// LLVM parses the header of each line table, which includes the file name table. zxdb decodes the
-// line number program that follows the header. The decoder doesn't build intermediate structures,
-// so the indexer can find the referenced files of a unit much faster than a full LLVM parse.
+// zxdb parses the header of each line table, including the directory and file tables, and decodes
+// the line number program that follows it. Neither part uses LLVM's line table parser, so worker
+// threads can parse line tables from section data alone. The decoder doesn't build intermediate
+// structures, so the indexer can find the referenced files of a unit much faster than a full LLVM
+// parse.
 //
-// The decoder follows the row emission rules of llvm::DWARFDebugLine::LineTable::parse(). When it
-// finds a construct that it doesn't support, it reports kUnsupported and the callers parse the
-// table with LLVM instead.
+// The parser follows llvm::DWARFDebugLine::Prologue::parse() and the decoder follows the row
+// emission rules of llvm::DWARFDebugLine::LineTable::parse(). Line tables with more than one
+// operation per instruction (VLIW) aren't supported, and their headers fail to parse.
 
-// The parameters of a line program, copied from its header.
+// The string sections that the names in a line table can reference. Strings are views into these
+// sections. Collect them on the thread that owns the DWARFContext. After that they don't change,
+// so any thread can use them. See line_program_llvm.h for the LLVM adapter.
+struct LineStringSections {
+  std::string_view line_str;  // .debug_line_str, for DW_FORM_line_strp.
+  std::string_view str;       // The unit's string section, for DW_FORM_strp and DW_FORM_strx.
+
+  // The unit's string offsets table, for DW_FORM_strx. Unset if the unit has none.
+  std::string_view str_offsets;
+  std::optional<uint64_t> str_offsets_base;
+  uint8_t str_offset_size = 4;  // 4 for DWARF32 and 8 for DWARF64 contributions.
+};
+
+// One entry of a file name table. The name views section data. A name that can't be decoded is
+// nullopt, which isn't the same as an empty name.
+struct LineFileEntry {
+  std::optional<std::string_view> name;
+  uint64_t dir_index = 0;
+};
+
+// A parsed line table header.
 struct LineProgramHeader {
+  uint16_t version = 0;
+  bool little_endian = true;
+
   uint8_t min_inst_length = 1;
-  uint8_t max_ops_per_inst = 1;
   bool default_is_stmt = true;
   int8_t line_base = 0;
   uint8_t line_range = 0;
   uint8_t opcode_base = 0;
-  bool little_endian = true;
 
   // Indexed by (opcode - 1). Entries at or above opcode_base - 1 are unused.
   std::array<uint8_t, 256> standard_opcode_lengths{};
+
+  // The tables in header order. In DWARF 5, directory 0 and file 0 are the first entries. In
+  // DWARF 2 to 4, indices start at 1, so directory index d is include_dirs[d - 1] and file index f
+  // is files[f - 1]. A directory that can't be decoded is nullopt.
+  std::vector<std::optional<std::string_view>> include_dirs;
+  std::vector<LineFileEntry> files;
 
   // The opcodes that follow the header, up to the end of the unit.
   std::span<const uint8_t> program;
 };
 
+// A view of the effective file entries: the header's entries followed by files defined by the
+// program. This avoids copying the header tables for each decode. The header, defined entries,
+// and section data must outlive the view.
+class LineFileEntries {
+ public:
+  explicit LineFileEntries(const LineProgramHeader& header,
+                           std::span<const LineFileEntry> defined_files = {})
+      : header_(header), defined_files_(defined_files) {}
+
+  // The range of raw file register values. In DWARF 2 to 4, index 0 has no file.
+  size_t size() const;
+  // Returns null for an out-of-range index or the unused DWARF 2 to 4 index 0.
+  const LineFileEntry* GetFileEntry(uint64_t file_index) const;
+
+  // Returns the directory of the entry that relative names use, or nullopt if the entry has no
+  // directory or the directory can't be decoded. For DWARF 5, directory 0 is the compilation
+  // directory, which relative names don't include.
+  std::optional<std::string_view> GetFileDirectory(const LineFileEntry& entry) const;
+
+ private:
+  const LineProgramHeader& header_;
+  std::span<const LineFileEntry> defined_files_;
+};
+
+// The bounds of a line table in its section, from the unit length at its offset.
+struct LineTableExtent {
+  uint64_t begin = 0;  // The offset after the unit length.
+
+  // The end of the unit. A unit length past the end of the section gives the section end, like in
+  // LLVM.
+  uint64_t end = 0;
+
+  uint8_t offset_size = 4;  // 4 for DWARF32 and 8 for DWARF64.
+};
+
+// Reads the unit length of the line table at the offset of the line section.
+ErrOr<LineTableExtent> ReadLineTableExtent(std::string_view line_section, uint64_t offset,
+                                           bool little_endian);
+
 enum class LineProgramStatus {
   kOk,
 
-  // The program uses a construct that the zxdb decoder doesn't handle. Parse it with LLVM.
-  kUnsupported,
-
-  // The program is truncated. The output has the rows that were decoded before the error.
+  // An operand is truncated or malformed. The result keeps the output and file definitions
+  // decoded before the error.
   kCorrupt,
 };
 
-// Decodes the rows of a line program. The rows are in program order, with the same contents as
-// llvm::DWARFDebugLine::LineTable::Rows.
-LineProgramStatus DecodeLineProgramRows(const LineProgramHeader& header,
-                                        std::vector<LineRow>* rows);
-
-// Finds the file register values that rows of live sequences reference. A live sequence ends with
-// an end_sequence row and its start address isn't a stripped address (see
-// IsStrippedSequenceStart()). Values at or above file_count are ignored. The output is sorted.
-LineProgramStatus ScanLineProgramFiles(const LineProgramHeader& header, size_t file_count,
-                                       std::vector<uint32_t>* files);
-
-// Computes the result of ScanLineProgramFiles() from decoded rows.
-std::vector<uint32_t> GetLiveRowFiles(std::span<const LineRow> rows, size_t file_count);
-
-// Converts rows from an LLVM-parsed line table.
-std::vector<LineRow> LineRowsFromLLVM(const llvm::DWARFDebugLine::LineTable& table);
-
 // One line table in a .debug_line section, with its parsed header.
 //
-// This class reads only immutable section data. Worker threads can use it while other threads use
-// the same DWARFContext, provided that the unit argument to Parse() is null. See
-// SourceFileIndexer.
+// This class uses only section data, not LLVM objects. Worker threads can use it while other
+// threads use the same DWARFContext. See SourceFileIndexer.
 class LineProgram {
  public:
-  // Parses the header of the line table at the given section offset. The context and section must
-  // outlive this object. The unit is used to decode string forms that need the unit's string
-  // offsets table and can be null.
-  static ErrOr<LineProgram> Parse(const llvm::DWARFContext& context,
-                                  const llvm::DWARFSection& section, uint64_t offset,
-                                  uint8_t address_size, const llvm::DWARFUnit* unit);
+  // Parses the header of the line table at the given section offset. The section data must outlive
+  // this object.
+  static ErrOr<LineProgram> Parse(std::string_view line_section, uint64_t offset,
+                                  bool little_endian, const LineStringSections& strings);
 
-  // Returns the effective line table offset of the unit, or nullopt if the unit has no line
-  // table. This matches the offset that DWARFContext::getLineTableForUnit() uses.
-  //
-  // This reads the unit DIE, which can change the state of the LLVM unit. Call it only on the
-  // thread that owns the context.
-  static std::optional<uint64_t> GetUnitLineTableOffset(llvm::DWARFUnit& unit);
+  struct DecodeResult {
+    LineProgramStatus status = LineProgramStatus::kOk;
+    std::vector<LineRow> rows;
+    std::vector<LineFileEntry> defined_files;
+  };
 
-  // Parses the line table header of a unit. Call it only on the thread that owns the context. The
-  // second version takes the offset from GetUnitLineTableOffset().
-  static ErrOr<LineProgram> ParseForUnit(llvm::DWARFUnit& unit);
-  static ErrOr<LineProgram> ParseForUnit(llvm::DWARFUnit& unit, uint64_t offset);
+  struct FileScanResult {
+    LineProgramStatus status = LineProgramStatus::kOk;
+    std::vector<uint32_t> file_indices;
+    std::vector<LineFileEntry> defined_files;
+  };
 
-  const llvm::DWARFDebugLine::Prologue& prologue() const { return prologue_; }
+  // The parsed header never changes. Program-defined files belong to the decode result.
   const LineProgramHeader& header() const { return header_; }
 
-  // Number of entries in the file table, indexed by the raw file register value.
-  size_t GetFileCount() const;
+  LineFileEntries header_files() const { return LineFileEntries(header_); }
 
-  // Decode the program. When the zxdb decoder doesn't support the program, these use LLVM to parse
-  // it. A DW_LNE_define_file opcode adds entries to the file table, so after a fallback,
-  // prologue() returns the prologue from the LLVM parse.
-  LineProgramStatus DecodeRows(std::vector<LineRow>* rows);
-  LineProgramStatus ScanFiles(std::vector<uint32_t>* files);
+  // Views the effective file entries for a decode result. The program and the result must
+  // outlive the returned view. Header entries are borrowed, never copied.
+  LineFileEntries files(std::span<const LineFileEntry> defined_files) const {
+    return LineFileEntries(header_, defined_files);
+  }
+
+  // Rows are in program order, including end markers and incomplete trailing sequences. A corrupt
+  // program keeps the rows and file definitions before the error. Names still view section data.
+  [[nodiscard]] DecodeResult DecodeRows() const;
+
+  // Finds sorted, unique file indices in complete, live sequences. The scan uses the same
+  // sequence-validity rule as LineTable and includes program-defined files, even when a row refers
+  // to one before its definition. A corrupt program keeps results from before the error.
+  [[nodiscard]] FileScanResult ScanFiles(uint64_t first_code_address) const;
 
  private:
   LineProgram() = default;
-
-  // Parses the whole table with LLVM. Replaces prologue_ with the result.
-  LineProgramStatus ParseWithLLVM(std::vector<LineRow>* rows);
-
-  const llvm::DWARFContext* context_ = nullptr;
-  const llvm::DWARFSection* section_ = nullptr;
-  const llvm::DWARFUnit* unit_ = nullptr;
-  uint64_t offset_ = 0;
-  uint8_t address_size_ = 0;
-
-  llvm::DWARFDebugLine::Prologue prologue_;
   LineProgramHeader header_;
 };
 

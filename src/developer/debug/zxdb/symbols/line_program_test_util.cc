@@ -5,11 +5,12 @@
 #include "src/developer/debug/zxdb/symbols/line_program_test_util.h"
 
 #include <lib/syslog/cpp/macros.h>
+#include <algorithm>
 
 #include "llvm/ADT/StringMap.h"
-#include "llvm/DebugInfo/DWARF/DWARFDataExtractor.h"
 #include "llvm/DebugInfo/DWARF/DWARFObject.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "src/developer/debug/zxdb/symbols/line_program_llvm.h"
 
 namespace zxdb {
 
@@ -34,16 +35,6 @@ constexpr uint32_t kStrOffsetsBase = 8;
 // Operand counts of the standard opcodes 1 to 12.
 constexpr uint8_t kStandardLengths[12] = {0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1};
 
-void AppendUleb(std::vector<uint8_t>& out, uint64_t value) {
-  do {
-    uint8_t byte = value & 0x7f;
-    value >>= 7;
-    if (value)
-      byte |= 0x80;
-    out.push_back(byte);
-  } while (value);
-}
-
 void AppendSleb(std::vector<uint8_t>& out, int64_t value) {
   bool more = true;
   while (more) {
@@ -57,11 +48,6 @@ void AppendSleb(std::vector<uint8_t>& out, int64_t value) {
   }
 }
 
-void AppendLittleEndian(std::vector<uint8_t>& out, uint64_t value, size_t size) {
-  for (size_t i = 0; i < size; i++)
-    out.push_back(static_cast<uint8_t>(value >> (8 * i)));
-}
-
 void AppendCString(std::vector<uint8_t>& out, const std::string& str) {
   out.insert(out.end(), str.begin(), str.end());
   out.push_back(0);
@@ -70,6 +56,23 @@ void AppendCString(std::vector<uint8_t>& out, const std::string& str) {
 void IgnoreError(llvm::Error err) { llvm::consumeError(std::move(err)); }
 
 }  // namespace
+
+void AppendUleb(std::vector<uint8_t>& out, uint64_t value) {
+  do {
+    uint8_t byte = value & 0x7f;
+    value >>= 7;
+    if (value)
+      byte |= 0x80;
+    out.push_back(byte);
+  } while (value);
+}
+
+void AppendInteger(std::vector<uint8_t>& out, uint64_t value, size_t size, bool little_endian) {
+  for (size_t i = 0; i < size; i++) {
+    size_t shift = little_endian ? i : size - 1 - i;
+    out.push_back(static_cast<uint8_t>(value >> (8 * shift)));
+  }
+}
 
 std::ostream& operator<<(std::ostream& out, const LineRow& row) {
   out << "{0x" << std::hex << row.address << std::dec << ", file " << row.file << ", line "
@@ -87,8 +90,46 @@ std::ostream& operator<<(std::ostream& out, const LineRow& row) {
   return out << "}";
 }
 
+std::vector<uint32_t> GetLiveRowFiles(std::span<const LineRow> rows, size_t file_count,
+                                      uint64_t first_code_address) {
+  std::vector<bool> live(file_count);
+
+  size_t sequence_begin = 0;
+  for (size_t i = 0; i < rows.size(); i++) {
+    if (!rows[i].end_sequence())
+      continue;
+    bool ordered = std::is_sorted(rows.begin() + sequence_begin, rows.begin() + i + 1,
+                                  [](const LineRow& a, const LineRow& b) {
+                                    return a.address < b.address;
+                                  });
+    if (ordered && rows[sequence_begin].address >= first_code_address) {
+      for (size_t row = sequence_begin; row <= i; row++) {
+        if (rows[row].file < file_count)
+          live[rows[row].file] = true;
+      }
+    }
+    sequence_begin = i + 1;
+  }
+
+  std::vector<uint32_t> result;
+  for (size_t i = 0; i < file_count; i++) {
+    if (live[i])
+      result.push_back(static_cast<uint32_t>(i));
+  }
+  return result;
+}
+
 LineTableBuilder::LineTableBuilder(uint16_t version, Format format)
     : version_(version), format_(format) {}
+
+void LineTableBuilder::set_big_endian(bool big_endian) {
+  FX_CHECK(program_.empty());
+  big_endian_ = big_endian;
+}
+
+void LineTableBuilder::Put(std::vector<uint8_t>& out, uint64_t value, size_t size) const {
+  AppendInteger(out, value, size, !big_endian_);
+}
 
 uint64_t LineTableBuilder::AddDirectory(std::string name) {
   dirs_.push_back(std::move(name));
@@ -102,7 +143,7 @@ uint64_t LineTableBuilder::AddFile(std::string name, uint64_t dir_index) {
 
 void LineTableBuilder::SetAddress(uint64_t address, uint8_t size) {
   std::vector<uint8_t> bytes = {2};  // DW_LNE_set_address.
-  AppendLittleEndian(bytes, address, size);
+  Put(bytes, address, size);
   Extended(bytes.size(), bytes);
 }
 
@@ -135,7 +176,7 @@ void LineTableBuilder::ConstAddPc() { program_.push_back(8); }
 
 void LineTableBuilder::FixedAdvancePc(uint16_t delta) {
   program_.push_back(9);
-  AppendLittleEndian(program_, delta, 2);
+  Put(program_, delta, 2);
 }
 
 void LineTableBuilder::SetPrologueEnd() { program_.push_back(10); }
@@ -191,12 +232,12 @@ void LineTableBuilder::WriteString(std::vector<uint8_t>& out, StringForm form,
       AppendCString(out, str);
       break;
     case StringForm::kLineStrp:
-      AppendLittleEndian(
+      Put(
           out, sections.AddString(sections.line_str_, sections.line_str_offsets_, str),
           offset_size);
       break;
     case StringForm::kStrp:
-      AppendLittleEndian(out, sections.AddString(sections.str_, sections.str_offsets_map_, str),
+      Put(out, sections.AddString(sections.str_, sections.str_offsets_map_, str),
                          offset_size);
       break;
     case StringForm::kStrx1:
@@ -225,7 +266,9 @@ std::vector<uint8_t> LineTableBuilder::Build(LineTableTestSections& sections) co
     params.push_back(length);
   }
 
-  if (version_ < 5) {
+  if (raw_tables_) {
+    params.insert(params.end(), raw_tables_->begin(), raw_tables_->end());
+  } else if (version_ < 5) {
     for (const std::string& dir : dirs_)
       AppendCString(params, dir);
     params.push_back(0);
@@ -287,10 +330,10 @@ std::vector<uint8_t> LineTableBuilder::Build(LineTableTestSections& sections) co
           AppendUleb(params, file.dir_index);
           break;
         case DirIndexForm::kData1:
-          AppendLittleEndian(params, file.dir_index, 1);
+          Put(params, file.dir_index, 1);
           break;
         case DirIndexForm::kData2:
-          AppendLittleEndian(params, file.dir_index, 2);
+          Put(params, file.dir_index, 2);
           break;
       }
       if (include_md5_) {
@@ -302,24 +345,24 @@ std::vector<uint8_t> LineTableBuilder::Build(LineTableTestSections& sections) co
 
   // Everything after the unit_length field.
   std::vector<uint8_t> body;
-  AppendLittleEndian(body, version_, 2);
+  Put(body, version_, 2);
   if (version_ >= 5) {
     body.push_back(address_size_);
     body.push_back(0);  // Segment selector size.
   }
-  AppendLittleEndian(body, params.size() + header_length_adjust_, offset_size);
+  Put(body, params.size() + header_length_adjust_, offset_size);
   body.insert(body.end(), params.begin(), params.end());
   body.insert(body.end(), program_.begin(), program_.end());
 
   std::vector<uint8_t> result;
   uint64_t unit_length = body.size() + unit_length_adjust_;
   if (raw_unit_length_) {
-    AppendLittleEndian(result, *raw_unit_length_, 4);
+    Put(result, *raw_unit_length_, 4);
   } else if (dwarf64) {
-    AppendLittleEndian(result, 0xffffffff, 4);
-    AppendLittleEndian(result, unit_length, 8);
+    Put(result, 0xffffffff, 4);
+    Put(result, unit_length, 8);
   } else {
-    AppendLittleEndian(result, unit_length, 4);
+    Put(result, unit_length, 4);
   }
   result.insert(result.end(), body.begin(), body.end());
   FX_CHECK(truncate_bytes_ <= result.size());
@@ -358,35 +401,39 @@ uint8_t LineTableTestSections::AddStrOffset(const std::string& str) {
   return static_cast<uint8_t>(str_offsets_.size() - 1);
 }
 
-void LineTableTestSections::AddCompileUnit(uint16_t version, uint64_t line_offset,
+void LineTableTestSections::AddCompileUnit(uint16_t version, std::optional<uint64_t> line_offset,
                                            const std::vector<uint64_t>& decl_files) {
   FX_CHECK(!context_);
   std::vector<uint8_t> body;
-  AppendLittleEndian(body, version, 2);
+  AppendInteger(body, version, 2);
   if (version >= 5) {
     body.push_back(1);  // DW_UT_compile.
     body.push_back(8);  // Address size.
-    AppendLittleEndian(body, 0, 4);  // Abbreviation offset.
+    AppendInteger(body, 0, 4);  // Abbreviation offset.
   } else {
-    AppendLittleEndian(body, 0, 4);
+    AppendInteger(body, 0, 4);
     body.push_back(8);
   }
-  AppendUleb(body, 1);  // The compile unit abbreviation.
-  AppendLittleEndian(body, line_offset, 4);
-  AppendLittleEndian(body, kStrOffsetsBase, 4);
+  if (line_offset) {
+    AppendUleb(body, 1);  // The compile unit abbreviation.
+    AppendInteger(body, *line_offset, 4);
+  } else {
+    AppendUleb(body, 3);  // The compile unit abbreviation without DW_AT_stmt_list.
+  }
+  AppendInteger(body, kStrOffsetsBase, 4);
   for (uint64_t decl_file : decl_files) {
     AppendUleb(body, 2);  // The subprogram abbreviation.
     AppendUleb(body, decl_file);
   }
   body.push_back(0);  // End of the children.
 
-  AppendLittleEndian(info_, body.size(), 4);
+  AppendInteger(info_, body.size(), 4);
   info_.insert(info_.end(), body.begin(), body.end());
 }
 
-void LineTableTestSections::Finish(uint8_t address_size) {
+void LineTableTestSections::Finish(uint8_t address_size, bool little_endian) {
   FX_CHECK(!context_);
-  address_size_ = address_size;
+  little_endian_ = little_endian;
 
   auto make_buffer = [](const std::vector<uint8_t>& data, const char* name) {
     return llvm::MemoryBuffer::getMemBufferCopy(
@@ -400,16 +447,18 @@ void LineTableTestSections::Finish(uint8_t address_size) {
       0, 0,                    //
       2, 0x2e, 0,              // 2: DW_TAG_subprogram without children.
       0x3a, kFormUdata, 0, 0,  // DW_AT_decl_file.
+      3, 0x11, 1,              // 3: DW_TAG_compile_unit without DW_AT_stmt_list.
+      0x72, 0x17, 0, 0,        // DW_AT_str_offsets_base, DW_FORM_sec_offset.
       0,
   };
 
   // A DWARF 5 string offsets table for the kStrx1 strings.
   std::vector<uint8_t> str_offsets;
-  AppendLittleEndian(str_offsets, 4 + 4 * str_offsets_.size(), 4);
-  AppendLittleEndian(str_offsets, 5, 2);  // Version.
-  AppendLittleEndian(str_offsets, 0, 2);  // Padding.
+  AppendInteger(str_offsets, 4 + 4 * str_offsets_.size(), 4);
+  AppendInteger(str_offsets, 5, 2);  // Version.
+  AppendInteger(str_offsets, 0, 2);  // Padding.
   for (const std::string& str : str_offsets_)
-    AppendLittleEndian(str_offsets, AddString(str_, str_offsets_map_, str), 4);
+    AppendInteger(str_offsets, AddString(str_, str_offsets_map_, str), 4);
 
   buffers_["debug_line"] = make_buffer(line_, "debug_line");
   buffers_["debug_info"] = make_buffer(info_, "debug_info");
@@ -417,7 +466,8 @@ void LineTableTestSections::Finish(uint8_t address_size) {
   buffers_["debug_str_offsets"] = make_buffer(str_offsets, "debug_str_offsets");
   buffers_["debug_line_str"] = make_buffer(line_str_, "debug_line_str");
   buffers_["debug_str"] = make_buffer(str_, "debug_str");
-  context_ = llvm::DWARFContext::create(buffers_, address_size, true, IgnoreError, IgnoreError);
+  context_ = llvm::DWARFContext::create(buffers_, address_size, little_endian, IgnoreError,
+                                        IgnoreError);
 }
 
 const llvm::DWARFSection& LineTableTestSections::line_section() const {
@@ -425,21 +475,9 @@ const llvm::DWARFSection& LineTableTestSections::line_section() const {
 }
 
 ErrOr<LineProgram> LineTableTestSections::Parse(uint64_t offset) const {
-  return LineProgram::Parse(*context_, line_section(), offset, address_size_, nullptr);
-}
-
-LineTableTestSections::LLVMResult LineTableTestSections::ParseWithLLVM(uint64_t offset) const {
-  llvm::DWARFDataExtractor data(context_->getDWARFObj(), line_section(), true, address_size_);
-  llvm::DWARFDebugLine::LineTable table;
-  uint64_t cur = offset;
-  llvm::Error err = table.parse(data, &cur, *context_, nullptr, IgnoreError);
-
-  LLVMResult result;
-  result.ok = !err;
-  llvm::consumeError(std::move(err));
-  result.rows = LineRowsFromLLVM(table);
-  result.prologue = table.Prologue;
-  return result;
+  llvm::StringRef section = line_section().Data;
+  return LineProgram::Parse(std::string_view(section.data(), section.size()), offset,
+                            little_endian_, GetLineStringSections(*context_));
 }
 
 }  // namespace zxdb

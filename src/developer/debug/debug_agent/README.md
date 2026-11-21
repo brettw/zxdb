@@ -180,6 +180,5 @@ run in an environment that allows tracing child processes.
 
 Run these commands to build and test `debug_agent`:
 
-- Build: `fx build //src/developer/debug/debug_agent`
-- Test: `fx test debug_agent_unit_tests.cm debug_agent_launcher_unit_tests
-  debug_agent_integration_tests`
+- Build: `cmake --build build --target debug_agent`
+- Test: `cmake --build build --target debug_agent_tests && ./build/src/developer/debug/zxdb/debug_agent_tests`

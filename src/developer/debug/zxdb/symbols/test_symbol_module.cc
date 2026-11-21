@@ -35,7 +35,7 @@ const uint64_t TestSymbolModule::kPltFunctionOffset = 0x1520;
 // to get the new one.
 //
 // NOTE WHEN UPDATING: the build also needs to be updated to put the file into this directory. See
-// the "dot_buildid" rule in BUILD.gn
+// the copy of libsymbol_test_so.targetso into build_id/.build-id in zxdb/Tests.cmake.
 const char TestSymbolModule::kCheckedInBuildId[] = "9eb335ffa35de20c";
 
 namespace {

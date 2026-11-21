@@ -429,7 +429,7 @@ TEST(Index, BenchmarkIndexing) {
   for (std::optional<size_t> thread_count : std::vector<std::optional<size_t>>{
            std::nullopt, 0, 1, 2, 4, 6}) {
     int64_t source_files_begin_us = GetTickMicroseconds();
-    SourceFileIndexer source_files(*binary.GetLLVMContext(), CollectLineTableJobs(binary),
+    SourceFileIndexer source_files(CollectLineTableJobs(binary),
                                    {.thread_count = thread_count});
     size_t workers = source_files.worker_count();
     SourceFileIndexer::FileIndex files;

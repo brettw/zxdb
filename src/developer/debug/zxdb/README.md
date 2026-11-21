@@ -103,5 +103,5 @@ for packages, options, and optional test fixtures.
 
 Run these commands to build and test `zxdb`:
 
-- Build: `fx build //src/developer/debug/zxdb`
-- Test: `fx test zxdb_tests`
+- Build: `cmake --build build --target zxdb`
+- Test: `cmake --build build --target zxdb_tests && ./build/zxdb_tests`

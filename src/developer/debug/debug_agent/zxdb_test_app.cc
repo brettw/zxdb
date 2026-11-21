@@ -7,10 +7,8 @@
 #include <unistd.h>
 #include <zircon/syscalls.h>
 
-// This is a simple app for testing various aspects of the debugger. To build,
-// set include_test_app to true in the BUILD.gn file in this directory.
-
-// The binary will end up in /system/test/zxdb_test_app.
+// This is a simple app for testing various aspects of the debugger on Fuchsia. The upstream GN
+// build made it. The CMake build of this repository doesn't build it.
 
 void DebugBreak() {
 #if defined(__x86_64__)

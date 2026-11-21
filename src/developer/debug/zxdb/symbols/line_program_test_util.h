@@ -11,12 +11,14 @@
 #include <memory>
 #include <ostream>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
 #include "llvm/ADT/StringMap.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
 #include "src/developer/debug/zxdb/symbols/line_row.h"
 
@@ -24,8 +26,20 @@ namespace zxdb {
 
 class LineTableTestSections;
 
+// Appends an unsigned LEB128 value to raw test data.
+void AppendUleb(std::vector<uint8_t>& out, uint64_t value);
+
+// Appends a fixed-size integer in the requested byte order.
+void AppendInteger(std::vector<uint8_t>& out, uint64_t value, size_t size,
+                   bool little_endian = true);
+
 // For test failure messages.
 std::ostream& operator<<(std::ostream& out, const LineRow& row);
+
+// Computes the result of LineProgram::ScanFiles() from decoded rows, independently of the scan.
+// file_count is the size of the completed file table.
+std::vector<uint32_t> GetLiveRowFiles(std::span<const LineRow> rows, size_t file_count,
+                                      uint64_t first_code_address);
 
 // Writes one DWARF line table for tests. The header defaults match what Clang writes for x86-64.
 //
@@ -43,6 +57,10 @@ class LineTableBuilder {
   enum class DirIndexForm { kUdata, kData1, kData2 };
 
   explicit LineTableBuilder(uint16_t version, Format format = Format::kDwarf32);
+
+  // Writes big-endian data. Call it before adding opcodes. LineTableTestSections::Finish() must
+  // use the same byte order.
+  void set_big_endian(bool big_endian);
 
   // Header parameters.
   void set_address_size(uint8_t s) { address_size_ = s; }  // DWARF 5 header field.
@@ -71,6 +89,9 @@ class LineTableBuilder {
 
   // Sets the unit length to a raw 32-bit value, for reserved and invalid values.
   void set_raw_unit_length(uint32_t v) { raw_unit_length_ = v; }
+
+  // Replaces the directory and file tables with these bytes, for invalid tables.
+  void set_raw_tables(std::vector<uint8_t> tables) { raw_tables_ = std::move(tables); }
 
   // Directory and file tables. Directory entry 0 must be the compilation directory in DWARF 5. In
   // DWARF 2 to 4, the first added directory gets index 1 and the compilation directory isn't in
@@ -123,8 +144,12 @@ class LineTableBuilder {
   void WriteString(std::vector<uint8_t>& out, StringForm form, const std::string& str,
                    LineTableTestSections& sections) const;
 
+  // Appends a fixed-size value in the byte order of this builder.
+  void Put(std::vector<uint8_t>& out, uint64_t value, size_t size) const;
+
   uint16_t version_;
   Format format_;
+  bool big_endian_ = false;
   uint8_t address_size_ = 8;
   uint8_t min_inst_length_ = 1;
   uint8_t max_ops_per_inst_ = 1;
@@ -140,6 +165,7 @@ class LineTableBuilder {
   int64_t unit_length_adjust_ = 0;
   int64_t header_length_adjust_ = 0;
   std::optional<uint32_t> raw_unit_length_;
+  std::optional<std::vector<uint8_t>> raw_tables_;
   size_t truncate_bytes_ = 0;
 
   std::vector<std::string> dirs_;
@@ -160,14 +186,17 @@ class LineTableTestSections {
   // Appends raw bytes to the line section.
   uint64_t AddRaw(const std::vector<uint8_t>& bytes);
 
-  // Adds a compile unit to .debug_info. Its DW_AT_stmt_list is the given line table offset, and it
-  // has DW_AT_str_offsets_base for the kStrx1 strings. It has one DW_TAG_subprogram child for each
-  // value in decl_files, with that DW_AT_decl_file.
-  void AddCompileUnit(uint16_t version, uint64_t line_offset,
+  size_t line_size() const { return line_.size(); }
+
+  // Adds a compile unit to .debug_info. Its DW_AT_stmt_list is the given line table offset. A null
+  // offset makes a unit without a line table. The unit has DW_AT_str_offsets_base for the kStrx1
+  // strings. It has one DW_TAG_subprogram child for each value in decl_files, with that
+  // DW_AT_decl_file.
+  void AddCompileUnit(uint16_t version, std::optional<uint64_t> line_offset,
                       const std::vector<uint64_t>& decl_files);
 
   // Creates the context. Call once, after all tables are added.
-  void Finish(uint8_t address_size = 8);
+  void Finish(uint8_t address_size = 8, bool little_endian = true);
 
   const llvm::DWARFContext& context() const { return *context_; }
   llvm::DWARFContext& mutable_context() { return *context_; }
@@ -176,15 +205,8 @@ class LineTableTestSections {
   llvm::DWARFUnit* unit(size_t index) { return context_->getUnitAtIndex(index); }
   const llvm::DWARFSection& line_section() const;
 
+  // Parses the table without a unit, so DW_FORM_strx names don't resolve.
   ErrOr<LineProgram> Parse(uint64_t offset) const;
-
-  // Parses the table with LLVM. Returns the rows, or nullopt if LLVM returns an error.
-  struct LLVMResult {
-    bool ok = false;
-    std::vector<LineRow> rows;
-    llvm::DWARFDebugLine::Prologue prologue;
-  };
-  LLVMResult ParseWithLLVM(uint64_t offset) const;
 
  private:
   friend class LineTableBuilder;
@@ -200,7 +222,7 @@ class LineTableTestSections {
   std::vector<std::string> str_offsets_;  // Strings for kStrx1, by index.
   std::map<std::string, uint64_t> line_str_offsets_;
   std::map<std::string, uint64_t> str_offsets_map_;
-  uint8_t address_size_ = 8;
+  bool little_endian_ = true;
 
   // The context references these buffers, so they must outlive it.
   llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers_;

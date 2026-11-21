@@ -19,10 +19,6 @@ This directory partitions the debugger into these subsystems:
   watchpoints, filters, `ProcessLimbo`, stack unwinding, and `debug_ipc`/FIDL
   servers. Low-level POSIX/Linux helpers live in
   [debug_agent/posix](./debug_agent/posix/README.md).
-- [ffx_zxdb](./ffx_zxdb/README.md): Host Rust crate that integrates `zxdb` with
-  `ffx debug`. Provides command builders, process management, and UNIX domain
-  socket to FDomain FIDL socket forwarding
-  ([ffx_zxdb/src](./ffx_zxdb/src/README.md)).
 - [ipc](./ipc/README.md): Binary wire protocol (`debug_ipc`) shared between
   `zxdb` and `debug_agent`. Defines request/reply and notification records,
   versioned serialization (`MessageReader`, `MessageWriter`), filter matching,
@@ -40,9 +36,6 @@ This directory partitions the debugger into these subsystems:
   ([commands](./zxdb/console/commands/README.md)), and
   [zxdb/debug_adapter](./zxdb/debug_adapter/README.md)
   ([handlers](./zxdb/debug_adapter/handlers/README.md)).
-- [e2e_tests](./e2e_tests/README.md): Host-driven `.script` end-to-end tests
-  (`zxdb_e2e_tests`) and Debug Adapter Protocol (DAP) integration suites
-  (`dap_integration_tests`).
 - [skills/fuchsia-debugger](./skills/fuchsia-debugger/SKILL.md): Agent skill
   instructions for debugging Fuchsia test failures with `fx debug cli`.
 - [.agents/skills/editing_zxdb](./.agents/skills/editing_zxdb/SKILL.md): Agent
@@ -67,9 +60,8 @@ All components under `//src/developer/debug` enforce these invariants:
   `DebuggedThread`, `FormatNode`) across asynchronous callbacks. Use
   `fxl::WeakPtr` for transient objects and `fxl::RefPtr` for reference-counted
   symbol or expression nodes.
-- **Dual Bazel/GN Build Definitions**: Do not manually edit `BUILD.gn` files
-  below `# BAZEL2GN SENTINEL` markers. Edit the matching `BUILD.bazel` file and
-  run `fx bazel2gn`.
+- **CMake Build Only**: CMake is the only build. Add sources to the matching
+  `CMakeLists.txt` or `zxdb/Tests.cmake`. There are no GN or Bazel files.
 
 ## Global Side Effects
 
@@ -90,6 +82,6 @@ Running the debugger produces these target and host side effects:
 
 Run these commands to build and test all debugger components:
 
-- Build: `fx build //src/developer/debug //src/developer/debug/zxdb`
-- Test: `fx test zxdb_tests debug_agent_unit_tests
-  debug_agent_launcher_unit_tests debug_agent_integration_tests`
+- Build: `cmake --build build`
+- Test: `ctest --test-dir build --output-on-failure`. The `local_*` tests
+  need permission to trace child processes.

@@ -275,8 +275,8 @@ set_target_properties(zxdb_symbol_test PROPERTIES
 add_dependencies(zxdb_tests zxdb_symbol_test)
 
 # Line table fixtures. The same small source builds with different compilers, DWARF versions, and
-# linkers. line_program_binary_unittest.cc compares the zxdb line table decoder with LLVM on each
-# one. GCC and LLD fixtures are optional.
+# linkers. line_program_binary_unittest.cc decodes each one and checks the rows for the lines of the
+# fixture source. GCC and LLD fixtures are optional.
 set(line_table_fixture_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/line_table")
 set(line_table_fixture_sources
   "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/line_table/line_table_fixture.cc"
@@ -312,10 +312,24 @@ if(ZXDB_GXX)
   zxdb_add_line_table_fixture(gcc_dwarf4_gc "${ZXDB_GXX}" -gdwarf-4 -O2 -Wl,--gc-sections)
   zxdb_add_line_table_fixture(gcc_dwarf5 "${ZXDB_GXX}" -gdwarf-5 -O0)
 endif()
+# A .dwo file with a type unit that references the .debug_line.dwo table. Only the .dwo goes into the
+# fixture directory: the object file has relocations that the comparison test doesn't apply.
+set(line_table_split_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/line_table_split")
+set(line_table_split_source
+  "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/line_table/line_table_split.cc")
+add_custom_command(
+  OUTPUT "${line_table_fixture_dir}/clang_split.dwo"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${line_table_split_dir}" "${line_table_fixture_dir}"
+  COMMAND "${CMAKE_CXX_COMPILER}" -c -g -gdwarf-5 -gsplit-dwarf -fdebug-types-section
+    "-fdebug-prefix-map=${PROJECT_SOURCE_DIR}=../.." -o "${line_table_split_dir}/clang_split.o"
+    "${line_table_split_source}"
+  COMMAND "${CMAKE_COMMAND}" -E copy "${line_table_split_dir}/clang_split.dwo"
+    "${line_table_fixture_dir}/clang_split.dwo"
+  DEPENDS "${line_table_split_source}"
+  VERBATIM)
+list(APPEND line_table_fixture_outputs "${line_table_fixture_dir}/clang_split.dwo")
 add_custom_target(zxdb_line_table_fixtures DEPENDS ${line_table_fixture_outputs})
 add_dependencies(zxdb_tests zxdb_line_table_fixtures)
-# Only this build makes the fixtures. Other builds run the binary tests on the checked-in data only.
-target_compile_definitions(zxdb_tests PRIVATE ZXDB_LINE_TABLE_FIXTURES)
 
 set(data_dir "${PROJECT_BINARY_DIR}/test_data/zxdb")
 file(MAKE_DIRECTORY "${data_dir}/build_id/.build-id/9e" "${data_dir}/fake_home/.fuchsia/debug")

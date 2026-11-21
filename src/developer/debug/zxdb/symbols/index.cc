@@ -653,9 +653,8 @@ void RecursiveFindExact(const IndexNode* node, const Identifier& input, size_t i
 void Index::CreateIndex(DwarfBinary& binary, int32_t dwo_index, bool force_slow_path) {
   // Start the source file work first so it runs on worker threads during DIE indexing.
   std::optional<SourceFileIndexer> source_files;
-  if (llvm::DWARFContext* context = binary.GetLLVMContext()) {
-    source_files.emplace(*context, CollectLineTableJobs(binary));
-  }
+  if (binary.GetLLVMContext())
+    source_files.emplace(CollectLineTableJobs(binary));
 
   size_t unit_count = binary.GetNormalUnitCount();
   for (size_t i = 0; i < unit_count; i++) {

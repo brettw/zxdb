@@ -4,37 +4,38 @@
 
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 
+#include "llvm/ADT/SmallString.h"
+#include "llvm/Support/Path.h"
 #include "src/developer/debug/zxdb/common/file_util.h"
 
 namespace zxdb {
 
-std::optional<std::string> ResolveLineFileName(const llvm::DWARFDebugLine::Prologue& prologue,
-                                               uint64_t file_index) {
-  // Pass an empty compilation directory so names stay relative to it. The debugger joins them
-  // with the build directory later.
-  std::string name;
-  if (!prologue.getFileNameByIndex(file_index, "",
-                                   llvm::DILineInfoSpecifier::FileLineInfoKind::RelativeFilePath,
-                                   name)) {
+std::optional<std::string> ResolveLineFileName(LineFileEntries files, uint64_t file_index) {
+  const LineFileEntry* entry = files.GetFileEntry(file_index);
+  if (!entry || !entry->name)
     return std::nullopt;
-  }
-  return NormalizePath(name);
-}
+  std::string_view name = *entry->name;
 
-size_t GetLineFileCount(const llvm::DWARFDebugLine::Prologue& prologue) {
-  // DWARF 2 to 4 count file entries from 1 so the table needs one extra slot.
-  size_t count = prologue.FileNames.size();
-  if (prologue.getVersion() < 5 && count > 0)
-    count++;
-  return count;
+  // Debug info can come from any OS, so an absolute name is absolute for either path style. LLVM
+  // returns such names without a directory.
+  if (llvm::sys::path::is_absolute(name, llvm::sys::path::Style::posix) ||
+      llvm::sys::path::is_absolute(name, llvm::sys::path::Style::windows))
+    return NormalizePath(std::string(name));
+
+  // Relative names don't include the compilation directory, so the directory can be empty.
+  // llvm::sys::path::append() skips empty components.
+  std::string_view dir = files.GetFileDirectory(*entry).value_or(std::string_view());
+  llvm::SmallString<128> path;
+  llvm::sys::path::append(path, dir, name);
+  return NormalizePath(path.str().str());
 }
 
 // static
-LineFileTable LineFileTable::FromPrologue(const llvm::DWARFDebugLine::Prologue& prologue) {
-  size_t count = GetLineFileCount(prologue);
+LineFileTable LineFileTable::FromEntries(LineFileEntries files) {
+  size_t count = files.size();
   std::vector<std::string> names(count);
   for (size_t i = 0; i < count; i++) {
-    if (std::optional<std::string> name = ResolveLineFileName(prologue, i))
+    if (std::optional<std::string> name = ResolveLineFileName(files, i))
       names[i] = std::move(*name);
   }
   return LineFileTable(std::move(names));

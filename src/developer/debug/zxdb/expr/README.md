@@ -145,5 +145,5 @@ Evaluating expressions produces these target and tree side effects:
 
 Run these commands to build and test `zxdb/expr`:
 
-- Build: `fx build //src/developer/debug/zxdb/expr`
-- Test: `fx test zxdb_tests`
+- Build: `cmake --build build --target zxdb_expr`
+- Test: `cmake --build build --target zxdb_tests && ./build/zxdb_tests`

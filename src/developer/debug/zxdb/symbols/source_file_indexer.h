@@ -17,13 +17,11 @@
 #include <utility>
 #include <vector>
 
-#include "llvm/DebugInfo/DWARF/DWARFDebugLine.h"
+#include "src/developer/debug/zxdb/symbols/line_program.h"
 #include "src/developer/debug/zxdb/symbols/unit_index.h"
 
 namespace llvm {
-class DWARFContext;
 class DWARFUnit;
-struct DWARFSection;
 }  // namespace llvm
 
 namespace zxdb {
@@ -34,39 +32,37 @@ class DwarfBinary;
 // to find the units for a file name.
 //
 // The work for each unit is independent, so it runs on worker threads. Workers read only immutable
-// section data and the LLVM line table header parser, and they don't use the LLVM unit objects.
-// The DWARFContext of a binary isn't thread-safe, so the thread that owns the context collects the
-// line table locations first (CollectLineTableJobs()). It can then continue to use the context
-// while the workers run.
-//
-// Some string forms (DW_FORM_strx and similar) need the unit's string offsets table, which LLVM
-// can change while the owning thread uses the unit. Workers skip the tables that use these forms.
-// FinishInto() does them on the owning thread with the unit.
+// section data, and they don't use LLVM objects. The DWARFContext of a binary isn't thread-safe,
+// so the thread that owns the context collects the line table locations and string sections first
+// (CollectLineTableJobs()). This includes the string offsets base of each unit for
+// DW_FORM_strx. The thread can then continue to use the context while the workers run.
 
 // The location of the line table of one unit.
 struct LineTableJob {
   UnitIndex unit_index;
-  const llvm::DWARFSection* section = nullptr;
+  std::string_view section;  // The line section data.
   uint64_t offset = 0;
-  uint8_t address_size = 0;
+  bool little_endian = true;
 
   // Bytes of the line table, used to decide how many threads to start.
   uint64_t size = 0;
 
-  // Used only on the thread that owns the context, for string forms that need the unit.
-  llvm::DWARFUnit* unit = nullptr;
+  // The string sections of the unit, for the names in the line table.
+  LineStringSections strings;
+
+  // The lowest address of a code section of the binary. Sequences that start below it are for
+  // removed code, and their files aren't indexed. See IsStrippedSequenceStart().
+  uint64_t first_code_address = 0;
 };
 
 // Adds a job for the unit's line table, if it has one. Call it on the thread that owns the
-// context.
-void AddLineTableJob(UnitIndex unit_index, llvm::DWARFUnit& unit, std::vector<LineTableJob>* jobs);
+// context. first_code_address is DwarfBinary::GetFirstCodeAddress().
+void AddLineTableJob(UnitIndex unit_index, llvm::DWARFUnit& unit, uint64_t first_code_address,
+                     std::vector<LineTableJob>* jobs);
 
 // Finds the line table of every unit of the binary. Call it on the thread that owns the binary's
 // DWARFContext.
 std::vector<LineTableJob> CollectLineTableJobs(DwarfBinary& binary);
-
-// Returns true if the names in the prologue use string forms that need the unit to resolve.
-bool LineNamesNeedUnit(const llvm::DWARFDebugLine::Prologue& prologue);
 
 // Resolves file table entries to normalized file names and caches the result.
 //
@@ -76,9 +72,9 @@ bool LineNamesNeedUnit(const llvm::DWARFDebugLine::Prologue& prologue);
 // still correct.
 class LineFilePathResolver {
  public:
-  // Returns null if the entry has no name or an empty name. The pointer is valid for the lifetime of
-  // this object.
-  const std::string* Resolve(const llvm::DWARFDebugLine::Prologue& prologue, uint64_t file_index);
+  // Returns null if the entry has no name or an empty name. The pointer is valid for the lifetime
+  // of this object.
+  const std::string* Resolve(LineFileEntries files, uint64_t file_index);
 
   // For testing.
   size_t cache_size() const { return by_key_.size(); }
@@ -107,9 +103,8 @@ class SourceFileIndexer {
     std::optional<size_t> thread_count;
   };
 
-  // Starts the work for the jobs. The context must outlive this object.
-  SourceFileIndexer(const llvm::DWARFContext& context, std::vector<LineTableJob> jobs,
-                    Options options = Options());
+  // Starts the work for the jobs. The section data of the jobs must outlive this object.
+  explicit SourceFileIndexer(std::vector<LineTableJob> jobs, Options options = Options());
 
   // Waits for any workers that are still running.
   ~SourceFileIndexer();
@@ -124,17 +119,11 @@ class SourceFileIndexer {
  private:
   // Resolved file names for one job. The pointers point into a worker resolver in resolvers_ or
   // into the local resolver of FinishInto(). Both live until FinishInto() merges the results.
-  struct JobResult {
-    std::vector<const std::string*> names;
-
-    // The names need the unit, so FinishInto() must do the job.
-    bool needs_unit = false;
-  };
+  using JobResult = std::vector<const std::string*>;
 
   void RunJobs(LineFilePathResolver& resolver);
-  void RunJob(size_t index, LineFilePathResolver& resolver, const llvm::DWARFUnit* unit);
+  void RunJob(size_t index, LineFilePathResolver& resolver);
 
-  const llvm::DWARFContext& context_;
   bool finished_ = false;
 
   std::vector<LineTableJob> jobs_;

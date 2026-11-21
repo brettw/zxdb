@@ -124,6 +124,11 @@ class DwarfBinary {
   virtual std::shared_ptr<const LineFileTable> GetLineFileTable(llvm::DWARFUnit* unit,
                                                                 uint64_t file_index) const = 0;
 
+  // Returns the lowest address of a code section of the binary, or 0 if it has none. Line table
+  // sequences that start below it are for code that the linker removed. See
+  // IsStrippedSequenceStart().
+  virtual uint64_t GetFirstCodeAddress() const = 0;
+
   // Purges cached per-unit DIE arrays, line tables, type signature maps, and unit wrappers so
   // transient parse structures can be reclaimed and re-populated lazily on demand.
   virtual void ClearLLVMCache() = 0;

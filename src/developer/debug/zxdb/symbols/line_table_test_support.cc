@@ -26,7 +26,8 @@ LineRow MakeEndSequenceRow(uint64_t address, uint32_t file, uint32_t line) {
 
 LineTable MakeLineTable(std::vector<std::string> files, std::vector<LineRow> rows) {
   files.insert(files.begin(), std::string());  // File 0 has no name in DWARF 4.
-  return LineTable(std::make_shared<LineFileTable>(std::move(files)), std::move(rows));
+  return LineTable(std::make_shared<LineFileTable>(std::move(files)), std::move(rows),
+                   kTestFirstCodeAddress);
 }
 
 FunctionForAddress MockFunctionMap::GetCallback() const {

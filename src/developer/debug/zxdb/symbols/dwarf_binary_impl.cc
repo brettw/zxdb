@@ -188,6 +188,16 @@ bool DwarfBinaryImpl::HasBinary() const {
   return false;
 }
 
+uint64_t GetFirstCodeAddress(const llvm::object::ObjectFile& object) {
+  std::optional<uint64_t> first;
+  for (const llvm::object::SectionRef& section : object.sections()) {
+    // For ELF, a text section is one with SHF_EXECINSTR.
+    if (section.isText())
+      first = std::min(first.value_or(std::numeric_limits<uint64_t>::max()), section.getAddress());
+  }
+  return first.value_or(0);
+}
+
 Err DwarfBinaryImpl::Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
                           DwarfSymbolFactory::FileType file_type) {
   symbol_factory_ = fxl::MakeRefCounted<DwarfSymbolFactory>(weak_factory_.GetWeakPtr(),
@@ -219,6 +229,8 @@ Err DwarfBinaryImpl::Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
   auto binary_pair = bin_or_err->takeBinary();
   binary_buffer_ = std::move(binary_pair.second);
   binary_ = std::move(binary_pair.first);
+
+  first_code_address_ = zxdb::GetFirstCodeAddress(*GetLLVMObjectFile());
 
   // Overwrite the default Error handler object, but leave everything else default.
   context_ = llvm::DWARFContext::create(*GetLLVMObjectFile(),
@@ -368,7 +380,7 @@ std::shared_ptr<const LineFileTable> DwarfBinaryImpl::GetLineFileTable(
 LineTable DwarfBinaryImpl::DecodeLineTable(llvm::DWARFUnit* unit) const {
   if (!unit)
     return LineTable();
-  return line_tables_.DecodeLineTable(*unit);
+  return line_tables_.DecodeLineTable(*unit, first_code_address_);
 }
 
 void DwarfBinaryImpl::ClearLLVMCache() {

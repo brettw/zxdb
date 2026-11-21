@@ -41,6 +41,7 @@ add_library(zxdb_symbols STATIC
   line_details.cc
   line_file_table.cc
   line_program.cc
+  line_program_llvm.cc
   line_table.cc
   line_table_cache.cc
   loaded_module_symbols.cc

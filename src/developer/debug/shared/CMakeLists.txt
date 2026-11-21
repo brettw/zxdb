@@ -5,7 +5,7 @@ add_library(debug_logging STATIC
 )
 target_link_libraries(debug_logging PUBLIC fuchsia_headers PRIVATE syslog fxl files)
 
-# Keep this source list aligned with BUILD.bazel's shared target on Linux.
+# The Linux sources of the shared library.
 add_library(debug_shared STATIC
   address_range.cc
   arch.cc

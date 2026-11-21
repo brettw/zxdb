@@ -59,7 +59,13 @@ Public headers expose these symbol classes, factories, and evaluators:
   made of `zxdb::LineRow` rows (`line_row.h`) and a `zxdb::LineFileTable`
   (`line_file_table.h`). Tests construct it directly with
   `line_table_test_support.h`. `zxdb::LineProgram` (`line_program.h`) parses
-  a line table header with LLVM and decodes the program with the zxdb decoder.
+  a line table header and decodes its program without LLVM's line table
+  parser. Its header remains immutable. Decode and scan results carry status,
+  output, and program-defined files. `LineFileEntries` views the effective
+  file entries without copying the header. `line_program_llvm.h` contains
+  the adapter functions that must run on the LLVM context thread.
+  `LineTable::SequenceView` separates ordinary rows from the end marker.
+  `StatementSelection` and `LineExtentMode` name the lookup policies.
   `zxdb::SourceFileIndexer` (`source_file_indexer.h`) finds the source files
   of each unit for the `Index`. See `line_tables.md` for the design and the
   required test coverage.
@@ -109,21 +115,29 @@ Callers and implementations must preserve these invariants:
   (https://fxbug.dev/583730372).
 - All file names from line tables come from `ResolveLineFileName()`, so names
   from line rows, `DW_AT_decl_file`, and the file index compare equal.
-- `IsStrippedSequenceStart()` is the only rule for removed code. `LineTable`
-  drops those sequences, and the file index ignores their files.
-- The line program decoder must produce the same rows as
-  `llvm::DWARFDebugLine::LineTable::parse()`, except for the differences that
-  `line_tables.md` lists. `line_program_binary_unittest.cc` checks this
-  on real binaries.
+- `IsStrippedSequenceStart()` is the only rule for removed code: a sequence
+  that starts below `DwarfBinary::GetFirstCodeAddress()`. This matches LLDB.
+  `LineTable` drops those sequences, and the file index ignores their files.
+  Both use `LineSequenceValidator` to also reject decreasing addresses and
+  commit only complete sequences. Equal addresses and zero-length sequences
+  are permitted.
+- The line table parser and decoder follow the DWARF standard and the rules in
+  `line_tables.md`. Their tests check expected values. Don't add tests that
+  compare zxdb's results with LLVM's: zxdb is reducing its dependency on LLVM.
 - `SourceFileIndexer` workers read only immutable section data. They must not
   call LLVM APIs that change the `DWARFContext` or a `DWARFUnit` (for example
-  `getUnitDIE()` or `getLineTableForUnit()`), and they pass a null unit to the
-  header parser. Line tables with string forms that need the unit
-  (`DW_FORM_strx` and similar) are resolved in `FinishInto()` on the thread
-  that owns the context.
+  `getUnitDIE()` or `getLineTableForUnit()`). The thread that owns the context
+  collects each unit's `LineStringSections`, including its string offsets
+  base for `DW_FORM_strx`, before the workers start.
 - `DW_LNE_define_file` can add files that the line table header doesn't have.
   File lookups go through `LineTableCache`, which decodes the program when an
   index is past the header's entries.
+- zxdb doesn't use LLVM's line table parser. Line tables with more than one
+  operation per instruction (VLIW) aren't supported and fail to parse.
+- The line table parser and decoder read untrusted data. They must check each
+  length by subtraction before they add it, and their memory use must stay
+  in proportion to the input. Don't reserve memory from a count in the data.
+  See "Malformed input" in `line_tables.md`.
 - Index fallback: when `.debug_names` is absent or empty, or when
   `force_slow_index` is set, `ModuleSymbolsImpl` falls back to the full-DIE
   `Index`.
@@ -143,7 +157,7 @@ Using `zxdb/symbols` produces these disk, cache, and IPC side effects:
   Both share the file tables in the binary's `LineTableCache`.
   `DwarfBinary::ClearLLVMCache()` clears the cache.
 - `Index::CreateIndex()` starts worker threads for the source file index when
-  the binary has 256 KB or more of line tables: one, plus one for each 8 MB,
+  the binary has 256 KB or more of line tables: one, plus one for each 2 MB,
   up to six.
 - `ElfSymbolRecord::GetUnmangledName()` demangles and caches the name on demand.
   Loading a module builds its ELF name and address indices without demangling
@@ -161,5 +175,5 @@ Using `zxdb/symbols` produces these disk, cache, and IPC side effects:
 
 Run these commands to build and test `zxdb/symbols`:
 
-- Build: `fx build //src/developer/debug/zxdb/symbols`
-- Test: `fx test zxdb_tests`
+- Build: `cmake --build build --target zxdb_symbols`
+- Test: `cmake --build build --target zxdb_tests && ./build/zxdb_tests`

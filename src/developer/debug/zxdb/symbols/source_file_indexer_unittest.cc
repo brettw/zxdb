@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
+#include "src/developer/debug/zxdb/symbols/line_program_llvm.h"
 #include "src/developer/debug/zxdb/symbols/line_program_test_util.h"
 
 namespace zxdb {
@@ -37,10 +38,11 @@ Builder MakeTable(const std::vector<std::string>& files,
 LineTableJob MakeJob(const LineTableTestSections& sections, uint32_t unit, uint64_t offset) {
   LineTableJob job;
   job.unit_index = UnitIndex(false, unit);
-  job.section = &sections.line_section();
+  llvm::StringRef section = sections.line_section().Data;
+  job.section = std::string_view(section.data(), section.size());
   job.offset = offset;
-  job.address_size = 8;
   job.size = 100;
+  job.strings = GetLineStringSections(sections.context());
   return job;
 }
 
@@ -65,10 +67,10 @@ TEST(LineFilePathResolver, CachesMergedStrings) {
   ErrOr<LineProgram> program2 = sections.Parse(second);
   ASSERT_TRUE(program1.ok() && program2.ok());
 
-  const std::string* a1 = resolver.Resolve(program1.value().prologue(), 0);
-  const std::string* b1 = resolver.Resolve(program1.value().prologue(), 1);
-  const std::string* b2 = resolver.Resolve(program2.value().prologue(), 0);
-  const std::string* a2 = resolver.Resolve(program2.value().prologue(), 1);
+  const std::string* a1 = resolver.Resolve(program1.value().header_files(), 0);
+  const std::string* b1 = resolver.Resolve(program1.value().header_files(), 1);
+  const std::string* b2 = resolver.Resolve(program2.value().header_files(), 0);
+  const std::string* a2 = resolver.Resolve(program2.value().header_files(), 1);
   ASSERT_TRUE(a1 && b1);
   EXPECT_EQ("src/a.cc", *a1);
   EXPECT_EQ("src/b.h", *b1);
@@ -77,7 +79,7 @@ TEST(LineFilePathResolver, CachesMergedStrings) {
   EXPECT_EQ(2u, resolver.cache_size());
 
   // Entries outside the table have no name.
-  EXPECT_FALSE(resolver.Resolve(program1.value().prologue(), 2));
+  EXPECT_FALSE(resolver.Resolve(program1.value().header_files(), 2));
 }
 
 TEST(LineFilePathResolver, MatchesLineFileTable) {
@@ -117,14 +119,14 @@ TEST(LineFilePathResolver, MatchesLineFileTable) {
     sections.Finish();
     ErrOr<LineProgram> program = sections.Parse(offset);
     ASSERT_TRUE(program.ok());
-    const llvm::DWARFDebugLine::Prologue& prologue = program.value().prologue();
-    LineFileTable table = LineFileTable::FromPrologue(prologue);
+    const LineProgramHeader& header = program.value().header();
+    LineFileTable table = LineFileTable::FromEntries(LineFileEntries(header));
 
     LineFilePathResolver resolver;
     for (uint64_t i = 0; i <= table.size(); i++) {  // One past the end is invalid.
       SCOPED_TRACE(i);
       const std::string* expected = table.GetFileName(i);
-      const std::string* resolved = resolver.Resolve(prologue, i);
+      const std::string* resolved = resolver.Resolve(LineFileEntries(header), i);
       ASSERT_EQ(!!expected, !!resolved);
       if (expected)
         EXPECT_EQ(*expected, *resolved);
@@ -155,9 +157,9 @@ TEST(LineFilePathResolver, SameNameDifferentDirectory) {
   ASSERT_TRUE(program.ok());
 
   LineFilePathResolver resolver;
-  EXPECT_EQ("one/same.h", *resolver.Resolve(program.value().prologue(), 0));
-  EXPECT_EQ("two/same.h", *resolver.Resolve(program.value().prologue(), 1));
-  EXPECT_EQ("same.h", *resolver.Resolve(program.value().prologue(), 2));
+  EXPECT_EQ("one/same.h", *resolver.Resolve(program.value().header_files(), 0));
+  EXPECT_EQ("two/same.h", *resolver.Resolve(program.value().header_files(), 1));
+  EXPECT_EQ("same.h", *resolver.Resolve(program.value().header_files(), 2));
 }
 
 TEST(LineFilePathResolver, InlineStrings) {
@@ -183,8 +185,8 @@ TEST(LineFilePathResolver, InlineStrings) {
     LineFilePathResolver resolver;
     ErrOr<LineProgram> program1 = sections.Parse(first_offset);
     ErrOr<LineProgram> program2 = sections.Parse(second_offset);
-    EXPECT_EQ("inc/x.h", *resolver.Resolve(program1.value().prologue(), file));
-    EXPECT_EQ("inc/x.h", *resolver.Resolve(program2.value().prologue(), file));
+    EXPECT_EQ("inc/x.h", *resolver.Resolve(program1.value().header_files(), file));
+    EXPECT_EQ("inc/x.h", *resolver.Resolve(program2.value().header_files(), file));
     EXPECT_EQ(2u, resolver.cache_size());
   }
 }
@@ -212,7 +214,7 @@ TEST_P(SourceFileIndexerTest, MergesInJobOrder) {
   for (size_t i = offsets.size(); i > 0; i--)
     jobs.push_back(MakeJob(sections, static_cast<uint32_t>(i - 1), offsets[i - 1]));
 
-  SourceFileIndexer indexer(sections.context(), std::move(jobs),
+  SourceFileIndexer indexer(std::move(jobs),
                             {.thread_count = threads ? 2 : 0});
   EXPECT_EQ(threads ? 2u : 0u, indexer.worker_count());
 
@@ -237,7 +239,7 @@ TEST(SourceFileIndexer, NoJobs) {
   LineTableTestSections sections;
   sections.Finish();
 
-  SourceFileIndexer indexer(sections.context(), {});
+  SourceFileIndexer indexer({});
   EXPECT_EQ(0u, indexer.worker_count());
 
   SourceFileIndexer::FileIndex files;
@@ -253,7 +255,7 @@ TEST(SourceFileIndexer, AddsToExistingIndex) {
   SourceFileIndexer::FileIndex files;
   files["src/a.cc"].push_back(UnitIndex(true, 7));
 
-  SourceFileIndexer indexer(sections.context(), {MakeJob(sections, 1, offset)});
+  SourceFileIndexer indexer({MakeJob(sections, 1, offset)});
   indexer.FinishInto(&files);
 
   ASSERT_EQ(2u, files["src/a.cc"].size());
@@ -273,7 +275,7 @@ TEST(SourceFileIndexer, DestroyWithoutFinish) {
   for (size_t i = 0; i < offsets.size(); i++)
     jobs.push_back(MakeJob(sections, static_cast<uint32_t>(i), offsets[i]));
 
-  SourceFileIndexer indexer(sections.context(), std::move(jobs), {.thread_count = 2});
+  SourceFileIndexer indexer(std::move(jobs), {.thread_count = 2});
 }
 
 TEST(SourceFileIndexer, DefaultThreadCount) {
@@ -289,21 +291,21 @@ TEST(SourceFileIndexer, DefaultThreadCount) {
     jobs.push_back(MakeJob(sections, static_cast<uint32_t>(i), offsets[i]));
     EXPECT_GT(jobs.back().size, 0u);
   }
-  SourceFileIndexer small(sections.context(), jobs);
+  SourceFileIndexer small(jobs);
   EXPECT_EQ(0u, small.worker_count());
 
   // The thread count depends on the bytes of line table data. Pretend the tables are large.
   if (std::thread::hardware_concurrency() >= 2) {
     for (LineTableJob& job : jobs)
       job.size = 1024 * 1024;
-    SourceFileIndexer large(sections.context(), jobs);
+    SourceFileIndexer large(jobs);
     EXPECT_GE(large.worker_count(), 2u);
     EXPECT_LE(large.worker_count(), 6u);
   }
 }
 
-// DW_FORM_strx names need the unit's string offsets table, which workers can't use. FinishInto()
-// resolves these tables with the unit on the calling thread.
+// DW_FORM_strx names need the unit's string offsets table. The jobs have the string offsets base,
+// so the workers resolve the names.
 class SourceFileIndexerStrxTest : public ::testing::TestWithParam<bool> {};
 
 TEST_P(SourceFileIndexerStrxTest, ResolvesWithUnit) {
@@ -327,15 +329,17 @@ TEST_P(SourceFileIndexerStrxTest, ResolvesWithUnit) {
   sections.Finish();
 
   std::vector<LineTableJob> jobs;
-  AddLineTableJob(UnitIndex(false, 0), *sections.unit(0), &jobs);
-  AddLineTableJob(UnitIndex(false, 1), *sections.unit(1), &jobs);
+  AddLineTableJob(UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs);
+  AddLineTableJob(UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs);
   ASSERT_EQ(2u, jobs.size());
+  EXPECT_EQ(0x1000u, jobs[0].first_code_address);
 
+  // Without the unit, the names don't resolve.
   ErrOr<LineProgram> program = sections.Parse(strx_offset);
   ASSERT_TRUE(program.ok());
-  EXPECT_TRUE(LineNamesNeedUnit(program.value().prologue()));
+  EXPECT_FALSE(LineFileTable::FromEntries(program.value().header_files()).GetFileName(0));
 
-  SourceFileIndexer indexer(sections.context(), std::move(jobs),
+  SourceFileIndexer indexer(std::move(jobs),
                             {.thread_count = threads ? 2 : 0});
 
   // Index::CreateIndex() extracts and frees each unit's DIEs while the workers run. Do the same,
@@ -354,5 +358,58 @@ TEST_P(SourceFileIndexerStrxTest, ResolvesWithUnit) {
 }
 
 INSTANTIATE_TEST_SUITE_P(SourceFileIndexer, SourceFileIndexerStrxTest, ::testing::Bool());
+
+TEST(SourceFileIndexer, StrippedBelowFirstCode) {
+  // The workers use the first code address of the job. A sequence that starts below it is stripped
+  // code, so its file isn't indexed.
+  Builder builder(5);
+  builder.AddDirectory("/build");
+  uint64_t dead = builder.AddFile("dead.cc", 0);
+  uint64_t live = builder.AddFile("live.cc", 0);
+  builder.SetAddress(0x20);
+  builder.SetFile(dead);
+  builder.Copy();
+  builder.AdvancePc(4);
+  builder.EndSequence();
+  builder.SetAddress(0x1000);
+  builder.SetFile(live);
+  builder.Copy();
+  builder.AdvancePc(4);
+  builder.EndSequence();
+  LineTableTestSections sections;
+  uint64_t offset = sections.Add(builder);
+  sections.Finish();
+
+  for (uint64_t first_code_address : {0, 0x1000}) {
+    SCOPED_TRACE(first_code_address);
+    LineTableJob job = MakeJob(sections, 0, offset);
+    job.first_code_address = first_code_address;
+    SourceFileIndexer indexer({job}, {.thread_count = 1});
+    SourceFileIndexer::FileIndex files;
+    indexer.FinishInto(&files);
+    EXPECT_EQ(first_code_address == 0, files.contains("dead.cc"));
+    EXPECT_TRUE(files.contains("live.cc"));
+  }
+}
+
+TEST(SourceFileIndexer, UnitWithoutLineTable) {
+  // A unit without DW_AT_stmt_list gets no job. The other units are indexed.
+  LineTableTestSections sections;
+  uint64_t offset = sections.Add(MakeTable({"a.cc"}));
+  sections.AddCompileUnit(5, std::nullopt, {});
+  sections.AddCompileUnit(5, offset, {});
+  sections.Finish();
+
+  std::vector<LineTableJob> jobs;
+  AddLineTableJob(UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs);
+  EXPECT_TRUE(jobs.empty());
+  AddLineTableJob(UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs);
+  ASSERT_EQ(1u, jobs.size());
+
+  SourceFileIndexer indexer(std::move(jobs));
+  SourceFileIndexer::FileIndex files;
+  indexer.FinishInto(&files);
+  EXPECT_EQ((std::vector<uint32_t>{1}), UnitNumbers(files["src/a.cc"]));
+}
 
 }  // namespace zxdb

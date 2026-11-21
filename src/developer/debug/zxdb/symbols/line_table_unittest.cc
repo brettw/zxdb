@@ -6,10 +6,11 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "src/developer/debug/zxdb/symbols/line_details.h"
 #include "src/developer/debug/zxdb/symbols/line_table_test_support.h"
 #include "src/developer/debug/zxdb/symbols/symbol_context.h"
-
 
 namespace zxdb {
 
@@ -49,21 +50,21 @@ TEST(LineTable, GetRowForAddress) {
   // equivalent.
   result = table.GetRowForAddress(context, 0x1001);
   ASSERT_FALSE(result.empty());
-  EXPECT_EQ(5u, result.sequence.size());
+  EXPECT_EQ(5u, result.sequence.rows_with_end_marker().size());
   EXPECT_EQ(0u, result.symbolizable_index);
   EXPECT_EQ(result.symbolizable_index, result.statement_index);
 
   // Should be covered by the previous entry since there isn't a specific one for this address.
   result = table.GetRowForAddress(context, 0x1002);
   ASSERT_FALSE(result.empty());
-  EXPECT_EQ(5u, result.sequence.size());
+  EXPECT_EQ(5u, result.sequence.rows_with_end_marker().size());
   EXPECT_EQ(0u, result.symbolizable_index);
   EXPECT_EQ(result.symbolizable_index, result.statement_index);
 
   // Should find the first of the two dupes.
   result = table.GetRowForAddress(context, 0x1005);
   ASSERT_FALSE(result.empty());
-  EXPECT_EQ(5u, result.sequence.size());
+  EXPECT_EQ(5u, result.sequence.rows_with_end_marker().size());
   EXPECT_EQ(2u, result.symbolizable_index);
   EXPECT_EQ(result.symbolizable_index, result.statement_index);
 
@@ -96,16 +97,14 @@ TEST(LineTable, GetRowForAddress) {
   result = table.GetRowForAddress(context, 0x1001);
   ASSERT_FALSE(result.empty());
   EXPECT_EQ(0u, result.symbolizable_index);
-  EXPECT_EQ(0x1u, result.sequence[result.symbolizable_index].address);
+  EXPECT_EQ(0x1u, result.sequence.rows_with_end_marker()[result.symbolizable_index].address);
   EXPECT_EQ(result.symbolizable_index, result.statement_index);
 
   // Valid query for sequence added later.
   result = table.GetRowForAddress(context, 0x1104);
   ASSERT_FALSE(result.empty());
   EXPECT_EQ(1u, result.symbolizable_index);  // Index within newer sequence.
-  EXPECT_EQ(
-      0x103u,
-      result.sequence[result.symbolizable_index].address);  // Line before queried addr.
+  EXPECT_EQ(0x103u, result.get_symbolizable().address);  // Line before queried address.
   EXPECT_EQ(result.symbolizable_index, result.statement_index);
 
   // Query in between the two valid sequences
@@ -134,7 +133,8 @@ TEST(LineTable, GetRowForAddress_Line0) {
   LineTable table = MakeLineTable(files, rows);
 
   // Exact match query for the "line 0" address should return it.
-  auto result = table.GetRowForAddress(context, 0x1003, LineTable::kExactMatch);
+  auto result =
+      table.GetRowForAddress(context, 0x1003, LineTable::StatementSelection::kKeepMatchedRow);
   ASSERT_FALSE(result.empty());
   EXPECT_EQ(0x3u, result.get_statement().address);
   EXPECT_EQ(0u, result.get_statement().line);
@@ -143,7 +143,7 @@ TEST(LineTable, GetRowForAddress_Line0) {
 
   // Exact match query for the address immediately following 0x7 should also be covered by that
   // entry.
-  result = table.GetRowForAddress(context, 0x1008, LineTable::kExactMatch);
+  result = table.GetRowForAddress(context, 0x1008, LineTable::StatementSelection::kKeepMatchedRow);
   ASSERT_FALSE(result.empty());
   EXPECT_EQ(0x7u, result.get_statement().address);
   EXPECT_EQ(0u, result.get_statement().line);
@@ -151,7 +151,7 @@ TEST(LineTable, GetRowForAddress_Line0) {
   EXPECT_EQ(3u, result.get_symbolizable().line);
 
   // Querying the first "line 0" entry with skipping should yield the next address.
-  result = table.GetRowForAddress(context, 0x1003, LineTable::kSkipCompilerGenerated);
+  result = table.GetRowForAddress(context, 0x1003, LineTable::StatementSelection::kNextStatement);
   ASSERT_FALSE(result.empty());
   EXPECT_EQ(0x5u, result.get_statement().address);
   EXPECT_EQ(3u, result.get_statement().line);
@@ -161,7 +161,7 @@ TEST(LineTable, GetRowForAddress_Line0) {
   // Query the address immediately following 0x7. Since this is the last real entry in the table
   // (the end sequence marker doesn't count), the line should not be advanced and the "line 0"
   // entry should be returned.
-  result = table.GetRowForAddress(context, 0x1008, LineTable::kSkipCompilerGenerated);
+  result = table.GetRowForAddress(context, 0x1008, LineTable::StatementSelection::kNextStatement);
   ASSERT_FALSE(result.empty());
   EXPECT_EQ(0x7u, result.get_statement().address);
   EXPECT_EQ(0u, result.get_statement().line);
@@ -191,7 +191,8 @@ TEST(LineTable, GetRowForAddressLine0Bounds) {
   // Exact match query for the "line 0" address should return it. The symbolizable address can't
   // back up to find a better candidate so it just returns what we have. It's unclear if the
   // symbolizable address should also slide forward in this case to match the statement address.
-  auto result = table.GetRowForAddress(context, 0x1001, LineTable::kExactMatch);
+  auto result =
+      table.GetRowForAddress(context, 0x1001, LineTable::StatementSelection::kKeepMatchedRow);
   ASSERT_FALSE(result.empty());
   EXPECT_EQ(0x1u, result.get_statement().address);
   EXPECT_EQ(0u, result.get_statement().line);
@@ -200,7 +201,7 @@ TEST(LineTable, GetRowForAddressLine0Bounds) {
 
   // Exact match query for the address immediately following 0x7 should also be covered by that
   // entry, since we have nowhere to slide down to.
-  result = table.GetRowForAddress(context, 0x1008, LineTable::kExactMatch);
+  result = table.GetRowForAddress(context, 0x1008, LineTable::StatementSelection::kKeepMatchedRow);
   ASSERT_FALSE(result.empty());
   EXPECT_EQ(0x7u, result.get_statement().address);
   EXPECT_EQ(0u, result.get_statement().line);
@@ -209,7 +210,7 @@ TEST(LineTable, GetRowForAddressLine0Bounds) {
 
   // Querying the first "line 0" entry with skipping should yield the next address for the statement
   // and the first address for the symbolizable location since we have nowhere to slide up to.
-  result = table.GetRowForAddress(context, 0x1001, LineTable::kSkipCompilerGenerated);
+  result = table.GetRowForAddress(context, 0x1001, LineTable::StatementSelection::kNextStatement);
   ASSERT_FALSE(result.empty());
   EXPECT_EQ(0x3u, result.get_statement().address);
   EXPECT_EQ(2u, result.get_statement().line);
@@ -219,7 +220,7 @@ TEST(LineTable, GetRowForAddressLine0Bounds) {
   // Query the address immediately following 0x7. Since this is the last real entry in the table
   // (the end sequence marker doesn't count), the line should not be advanced and the "line 0"
   // entry should be returned. The symbolizable address will slide up to find a non-zero line.
-  result = table.GetRowForAddress(context, 0x1008, LineTable::kSkipCompilerGenerated);
+  result = table.GetRowForAddress(context, 0x1008, LineTable::StatementSelection::kNextStatement);
   ASSERT_FALSE(result.empty());
   EXPECT_EQ(0x7u, result.get_statement().address);
   EXPECT_EQ(0u, result.get_statement().line);
@@ -245,7 +246,8 @@ TEST(LineTable, GetRowForAddress_EndSequence) {
   rows.push_back(MakeEndSequenceRow(0xa, 1, 4));
 
   LineTable table = MakeLineTable(files, rows);
-  auto found = table.GetRowForAddress(context, 0x1008, LineTable::kSkipCompilerGenerated);
+  auto found =
+      table.GetRowForAddress(context, 0x1008, LineTable::StatementSelection::kNextStatement);
   ASSERT_FALSE(found.empty());
   EXPECT_EQ(0x8u, found.get_statement().address);
   EXPECT_EQ(3u, found.get_statement().line);  // This is the non-end-sequence row at this address.
@@ -256,11 +258,11 @@ TEST(LineTable, Sequences) {
       // A sequence after the next one in address order.
       MakeStatementRow(0x200, 1, 20),
       MakeEndSequenceRow(0x210, 1, 20),
-      // Stripped sequences, with start address 0 and the all-ones tombstone.
+      // A stripped sequence, with start address 0, which is below the first code address. The
+      // decoder doesn't emit rows at a tombstone address (LineProgram.Tombstones), so a sequence
+      // can't start there.
       MakeStatementRow(0x0, 1, 1),
       MakeEndSequenceRow(0x8, 1, 1),
-      MakeStatementRow(UINT64_MAX, 1, 1),
-      MakeEndSequenceRow(UINT64_MAX, 1, 1),
       // Addresses that go backwards are corrupt.
       MakeStatementRow(0x500, 1, 1),
       MakeEndSequenceRow(0x400, 1, 1),
@@ -273,23 +275,54 @@ TEST(LineTable, Sequences) {
   LineTable table = MakeLineTable({"file.cc"}, rows);
 
   ASSERT_EQ(2u, table.GetNumSequences());
-  EXPECT_EQ(AddressRange(0x100, 0x110), table.sequences()[0].addresses);
-  EXPECT_EQ(AddressRange(0x200, 0x210), table.sequences()[1].addresses);
+  EXPECT_EQ(AddressRange(0x100, 0x110), table.GetSequenceAt(0).addresses());
+  EXPECT_EQ(AddressRange(0x200, 0x210), table.GetSequenceAt(1).addresses());
 
   // The rows are copied into address order.
-  ASSERT_EQ(5u, table.rows().size());
-  EXPECT_EQ(0x100u, table.rows()[0].address);
-  EXPECT_EQ(0x200u, table.rows()[3].address);
+  ASSERT_EQ(5u, table.rows_with_end_markers().size());
+  EXPECT_EQ(0x100u, table.rows_with_end_markers()[0].address);
+  EXPECT_EQ(0x200u, table.rows_with_end_markers()[3].address);
 
-  // GetSequenceAt() doesn't include the end_sequence row.
-  ASSERT_EQ(2u, table.GetSequenceAt(0).size());
-  EXPECT_EQ(0x104u, table.GetSequenceAt(0)[1].address);
+  // The view exposes ordinary rows separately from the end marker.
+  ASSERT_EQ(2u, table.GetSequenceAt(0).rows().size());
+  EXPECT_EQ(0x104u, table.GetSequenceAt(0).rows()[1].address);
 
   SymbolContext context = SymbolContext::ForRelativeAddresses();
-  EXPECT_EQ(3u, table.GetRowSequenceForAddress(context, 0x105).size());
-  EXPECT_TRUE(table.GetRowSequenceForAddress(context, 0x4).empty());
-  EXPECT_TRUE(table.GetRowSequenceForAddress(context, 0x450).empty());
-  EXPECT_TRUE(table.GetRowSequenceForAddress(context, 0x300).empty());
+  EXPECT_EQ(3u, table.GetSequenceForAddress(context, 0x105).rows_with_end_marker().size());
+  EXPECT_TRUE(table.GetSequenceForAddress(context, 0x4).empty());
+  EXPECT_TRUE(table.GetSequenceForAddress(context, 0x450).empty());
+  EXPECT_TRUE(table.GetSequenceForAddress(context, 0x300).empty());
+}
+
+TEST(LineTable, SequenceViews) {
+  // A marker-only sequence is present but cannot cover an address. A default view is absent.
+  LineTable table = MakeLineTable({"file.cc"}, {MakeEndSequenceRow(0x100, 1, 1),
+                                               MakeStatementRow(0x200, 1, 2),
+                                               MakeEndSequenceRow(0x210, 1, 2)});
+  auto marker_only = table.GetSequenceAt(0);
+  EXPECT_FALSE(marker_only.empty());
+  EXPECT_TRUE(marker_only.rows().empty());
+  ASSERT_EQ(1u, marker_only.rows_with_end_marker().size());
+  EXPECT_EQ(0x100u, marker_only.end_address());
+  EXPECT_TRUE(table.GetSequenceForRelativeAddress(0x100).empty());
+
+  auto indexed = table.GetSequenceAt(1);
+  auto relative = table.GetSequenceForRelativeAddress(0x205);
+  auto absolute = table.GetSequenceForAddress(SymbolContext(0x1000), 0x1205);
+  for (auto view : {indexed, relative, absolute}) {
+    ASSERT_FALSE(view.empty());
+    ASSERT_EQ(1u, view.rows().size());
+    EXPECT_EQ(0x200u, view.rows().front().address);
+    ASSERT_EQ(2u, view.rows_with_end_marker().size());
+    EXPECT_TRUE(view.rows_with_end_marker().back().end_sequence());
+    EXPECT_EQ(0x210u, view.end_address());
+    EXPECT_EQ(AddressRange(0x200, 0x210), view.addresses());
+    EXPECT_EQ(indexed.rows().data(), view.rows().data());
+  }
+  auto missing = table.GetSequenceForRelativeAddress(0x210);
+  EXPECT_TRUE(missing.empty());
+  EXPECT_TRUE(missing.rows().empty());
+  EXPECT_TRUE(missing.rows_with_end_marker().empty());
 }
 
 TEST(LineTable, SequencesInOrderKeepRows) {
@@ -300,7 +333,8 @@ TEST(LineTable, SequencesInOrderKeepRows) {
       MakeEndSequenceRow(0x210, 1, 20),
   };
   LineTable table = MakeLineTable({"file.cc"}, rows);
-  EXPECT_EQ(rows, table.rows());
+  auto stored = table.rows_with_end_markers();
+  EXPECT_TRUE(std::equal(rows.begin(), rows.end(), stored.begin(), stored.end()));
 }
 
 TEST(LineTable, EmptySequenceAtSameAddress) {
@@ -336,7 +370,8 @@ TEST(LineTable, EmptySequenceInsideLiveSequence) {
   ASSERT_FALSE(found.empty());
   EXPECT_EQ(11u, found.get_statement().line);
 
-  LineDetails details = table.GetLineDetails(context, 0x1018, false, "/build");
+  LineDetails details =
+      table.GetLineDetails(context, 0x1018, LineTable::LineExtentMode::kSameLine, "/build");
   EXPECT_EQ(FileLine("file.cc", "/build", 11), details.file_line());
   EXPECT_EQ(AddressRange(0x1010, 0x1030), details.GetExtent());
 }
@@ -383,7 +418,7 @@ TEST(LineTable, FileNames) {
 
   // A default table and a table without files have an empty file table.
   EXPECT_EQ(0u, LineTable().files().size());
-  EXPECT_EQ(0u, LineTable(nullptr, {}).files().size());
+  EXPECT_EQ(0u, LineTable(nullptr, {}, 0).files().size());
 }
 
 TEST(LineTable, GetLineDetails) {
@@ -403,31 +438,37 @@ TEST(LineTable, GetLineDetails) {
                                    MakeEndSequenceRow(0x120, 1, 8),
                                });
 
-  LineDetails details = table.GetLineDetails(context, 0x10106, false, "/build");
+  LineDetails details =
+      table.GetLineDetails(context, 0x10106, LineTable::LineExtentMode::kSameLine, "/build");
   EXPECT_EQ(FileLine("file.cc", "/build", 5), details.file_line());
   ASSERT_EQ(2u, details.entries().size());
   EXPECT_EQ(AddressRange(0x10100, 0x10104), details.entries()[0].range);
   EXPECT_EQ(AddressRange(0x10104, 0x10108), details.entries()[1].range);
 
   // Greedy mode continues across the line 0 row.
-  details = table.GetLineDetails(context, 0x10106, true, "/build");
+  details =
+      table.GetLineDetails(context, 0x10106, LineTable::LineExtentMode::kIncludeLineZero, "/build");
   ASSERT_EQ(4u, details.entries().size());
   EXPECT_EQ(AddressRange(0x10100, 0x10110), details.GetExtent());
 
   // A line 0 row has no file.
-  details = table.GetLineDetails(context, 0x10108, false, "/build");
+  details = table.GetLineDetails(context, 0x10108, LineTable::LineExtentMode::kSameLine, "/build");
   EXPECT_EQ(FileLine(), details.file_line());
   EXPECT_EQ(AddressRange(0x10108, 0x1010c), details.GetExtent());
 
-  details = table.GetLineDetails(context, 0x10110, false, "/build");
+  details = table.GetLineDetails(context, 0x10110, LineTable::LineExtentMode::kSameLine, "/build");
   EXPECT_EQ(FileLine("file.cc", "/build", 8), details.file_line());
   EXPECT_EQ(AddressRange(0x10110, 0x10118), details.GetExtent());
 
-  details = table.GetLineDetails(context, 0x1011a, false, "/build");
+  details = table.GetLineDetails(context, 0x1011a, LineTable::LineExtentMode::kSameLine, "/build");
   EXPECT_EQ(AddressRange(0x10118, 0x10120), details.GetExtent());
 
-  EXPECT_FALSE(table.GetLineDetails(context, 0x100fc, false, "/build").is_valid());
-  EXPECT_FALSE(table.GetLineDetails(context, 0x10120, false, "/build").is_valid());
+  EXPECT_FALSE(
+      table.GetLineDetails(context, 0x100fc, LineTable::LineExtentMode::kSameLine, "/build")
+          .is_valid());
+  EXPECT_FALSE(
+      table.GetLineDetails(context, 0x10120, LineTable::LineExtentMode::kSameLine, "/build")
+          .is_valid());
 }
 
 TEST(LineTable, GetLineDetailsMissingFile) {
@@ -436,8 +477,27 @@ TEST(LineTable, GetLineDetailsMissingFile) {
                                                    MakeStatementRow(0x100, 9, 5),
                                                    MakeEndSequenceRow(0x104, 9, 5),
                                                });
-  LineDetails details = table.GetLineDetails(context, 0x100, false, "/build");
+  LineDetails details =
+      table.GetLineDetails(context, 0x100, LineTable::LineExtentMode::kSameLine, "/build");
   EXPECT_EQ(FileLine("", "/build", 5), details.file_line());
+}
+
+TEST(LineTable, GetLineDetailsLineOutsideIntRange) {
+  // The line register wraps, so a corrupt table can have lines that don't fit in the int of a
+  // FileLine. They are line 0, which has no file. FileLine checks that line 0 has no file.
+  SymbolContext context = SymbolContext::ForRelativeAddresses();
+  for (uint32_t line : {0x80000000u, 0xffffffffu}) {
+    SCOPED_TRACE(line);
+    LineTable table = MakeLineTable({"file.cc"}, {
+                                                     MakeStatementRow(0x100, 1, line),
+                                                     MakeEndSequenceRow(0x104, 1, line),
+                                                 });
+    LineDetails details =
+        table.GetLineDetails(context, 0x100, LineTable::LineExtentMode::kSameLine, "/build");
+    EXPECT_EQ(FileLine(), details.file_line());
+    EXPECT_EQ(0, table.rows_with_end_markers()[0].line_number());
+  }
+  EXPECT_EQ(0x7fffffff, LineRow(0, 1, 0x7fffffff, 0, 0).line_number());
 }
 
 }  // namespace zxdb

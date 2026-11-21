@@ -249,5 +249,5 @@ integration test checks breakpoint resolution across same-image exec.
 
 Run these commands to build and test `zxdb/client`:
 
-- Build: `fx build //src/developer/debug/zxdb/client`
-- Test: `fx test zxdb_tests`
+- Build: `cmake --build build --target zxdb_client`
+- Test: `cmake --build build --target zxdb_tests && ./build/zxdb_tests`

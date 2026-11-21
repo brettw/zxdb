@@ -28,34 +28,45 @@ class SymbolContext;
 // more than one thread.
 class LineTable {
  public:
-  // The line table can contain lines marked with a line number of 0. These entries indicate code
-  // that is compiler-generated and not associated with any source line.
-  enum SkipMode {
-    // Return the exact row entry for the address, even if it's marked compiler-generated.
-    kExactMatch,
-
-    // If a line query matches a compiler generated line, advances to the next
-    // non-compiler-generated line. This usually makes more sense to the user since compiler
-    // generated instructions will normally be associated with some code.
-    //
-    // This mode can still return compiler generated line entries if there is no "next" row to
-    // advance to.
-    kSkipCompilerGenerated,
+  // Selects only the breakpoint candidate. Symbolization always searches backward over line 0.
+  enum class StatementSelection {
+    kKeepMatchedRow,
+    // Advance to a nonzero is_stmt row, or the last nonterminal row if none follows.
+    kNextStatement,
   };
 
-  // A row from the line table, as found by GetRowForAddress(). It contains the sequence of rows
-  // with two important indices (which may be equal to each other):
-  //
-  // symbolizable_index and get_symbolizable() correspond to the best entry in the sequence that
-  // is suitable for symbolizing with a valid file and line number.
-  //
-  // statement_index and get_statement() correspond to the best entry in the row for setting
-  // breakpoints.
-  //
-  // Other entries are likely irrelevant for the requested address but may be inspected anyway.
+  enum class LineExtentMode {
+    kSameLine,
+    kIncludeLineZero,
+  };
+
+  // A borrowed view of a complete sequence. All addresses are module-relative. A default view
+  // means no sequence was found. A marker-only sequence is present, but rows() is empty.
+  class SequenceView {
+   public:
+    SequenceView() = default;
+    bool empty() const { return rows_.empty(); }
+    std::span<const LineRow> rows() const {
+      return empty() ? rows_ : rows_.first(rows_.size() - 1);
+    }
+    std::span<const LineRow> rows_with_end_marker() const { return rows_; }
+    AddressRange addresses() const {
+      return empty() ? AddressRange() : AddressRange(rows_.front().address, end_address());
+    }
+    uint64_t end_address() const { return empty() ? 0 : rows_.back().address; }
+
+   private:
+    friend class LineTable;
+    explicit SequenceView(std::span<const LineRow> rows) : rows_(rows) {}
+    std::span<const LineRow> rows_;
+  };
+
+  // Candidate rows from GetRowForAddress(). Both indices refer to sequence.rows(). Symbolization
+  // searches backward over line 0; statement selection follows StatementSelection. Either candidate
+  // can have line 0 or an unresolved file. Check these before constructing FileLine.
   struct FoundRow {
     FoundRow() = default;
-    FoundRow(std::span<const LineRow> seq, size_t symbolizable_index, size_t statement_index)
+    FoundRow(SequenceView seq, size_t symbolizable_index, size_t statement_index)
         : sequence(seq), symbolizable_index(symbolizable_index), statement_index(statement_index) {}
 
     bool empty() const { return sequence.empty(); }
@@ -63,13 +74,11 @@ class LineTable {
     // Returns the entry associated with the corresponding index. Call only when !empty(). If this
     // FoundRow is for finding an address to place a line-based breakpoint, use get_statement().
     // Otherwise, use get_symbolizable().
-    const LineRow& get_symbolizable() const { return sequence[symbolizable_index]; }
-    const LineRow& get_statement() const { return sequence[statement_index]; }
+    const LineRow& get_symbolizable() const { return sequence.rows()[symbolizable_index]; }
+    const LineRow& get_statement() const { return sequence.rows()[statement_index]; }
 
-    // The sequence of rows associated with the address. These will be contiguous addresses. This
-    // will be empty if nothing was matched. If nonempty, the last row will always be marked with an
-    // end_sequence flag.
-    std::span<const LineRow> sequence;
+    // The containing sequence. It borrows this table and is empty when no address was matched.
+    SequenceView sequence;
 
     // Index within the sequence of the found row to use for symbolization of this address. Valid
     // when !empty().
@@ -80,28 +89,15 @@ class LineTable {
     size_t statement_index = 0;
   };
 
-  // A block of rows with contiguous addresses, ending with an end_sequence row.
-  struct Sequence {
-    Sequence() = default;
-    Sequence(const AddressRange& a, size_t r_begin, size_t r_end)
-        : addresses(a), row_begin(r_begin), row_end(r_end) {}
-
-    AddressRange addresses;
-
-    // Index into rows() of the first row.
-    size_t row_begin = 0;
-
-    // Index into rows() of the end_sequence row.
-    size_t row_end = 0;
-  };
-
   // An empty line table.
   LineTable();
 
   // The rows are in DWARF program order. Rows after the last end_sequence row are dropped because
-  // they don't form a complete sequence. Sequences that start at a stripped address (see
-  // IsStrippedSequenceStart()) are also dropped.
-  LineTable(std::shared_ptr<const LineFileTable> files, std::vector<LineRow> rows);
+  // they don't form a complete sequence. Sequences that start at a stripped address are also
+  // dropped. That is an address below first_code_address, the lowest address of a code section of
+  // the binary. Sequences with decreasing addresses are discarded. See LineSequenceValidator.
+  LineTable(std::shared_ptr<const LineFileTable> files, std::vector<LineRow> rows,
+            uint64_t first_code_address);
 
   const LineFileTable& files() const { return *files_; }
 
@@ -111,45 +107,54 @@ class LineTable {
   }
 
   // The rows of all live sequences, in address order of the sequences.
-  const std::vector<LineRow>& rows() const { return rows_; }
+  std::span<const LineRow> rows_with_end_markers() const { return rows_; }
 
   // Sequences consist of a contiguous range of addresses and are sorted by address.
-  const std::vector<Sequence>& sequences() const { return sequences_; }
   size_t GetNumSequences() const { return sequences_.size(); }
 
-  // Returns the rows of the given sequence, excluding the end_sequence row.
-  std::span<const LineRow> GetSequenceAt(size_t index) const;
+  // Returns a view valid for the lifetime of this table.
+  SequenceView GetSequenceAt(size_t index) const;
 
-  // Returns the sequence of rows (contiguous addresses ending in an end_sequence row) containing
-  // the address. The returned array will be empty if the address was not found. See
-  // GetRowForAddress().
-  //
-  // Watch out: the addresses in the returned rows will all be module-relative.
-  std::span<const LineRow> GetRowSequenceForAddress(const SymbolContext& address_context,
-                                                    TargetPointer absolute_address) const;
+  // Returns an empty view when no sequence covers the address. All view addresses remain
+  // module-relative. Overlapping sequences select the one with the latest start address.
+  SequenceView GetSequenceForAddress(const SymbolContext& address_context,
+                                     TargetPointer absolute_address) const;
+  SequenceView GetSequenceForRelativeAddress(TargetPointer relative_address) const;
 
   // Finds the row in the line table that covers the given address. If there is no match, the
   // returned sequence will be empty. When more than one row has the address, this returns the
-  // first one.
+  // first one before applying symbolization and statement selection.
   //
   // Watch out: the addresses in the returned rows will all be module-relative.
-  FoundRow GetRowForAddress(const SymbolContext& address_context, TargetPointer absolute_address,
-                            SkipMode skip_mode = kSkipCompilerGenerated) const;
+  FoundRow GetRowForAddress(
+      const SymbolContext& address_context, TargetPointer absolute_address,
+      StatementSelection statement_selection = StatementSelection::kNextStatement) const;
 
-  // Computes the extent of the line containing the given address. In greedy mode, the extent
-  // continues across adjacent "line 0" rows.
+  // Computes the extent of the line containing the address. kIncludeLineZero extends across
+  // adjacent line 0 rows. A query on line 0 itself does not absorb adjacent source lines.
   //
   // When more than one row has the address, this uses the last one, which is what LLVM does. The
   // compilation_dir is used for the FileLine of the result.
   LineDetails GetLineDetails(const SymbolContext& symbol_context, TargetPointer absolute_address,
-                             bool greedy, const std::string& compilation_dir) const;
-
-  // Returns null if no sequence contains the address. Sequences can overlap in corrupt or unusual
-  // tables. Then this returns the containing sequence with the latest start address.
-  const Sequence* GetSequenceForRelativeAddress(TargetPointer relative_address) const;
+                             LineExtentMode extent_mode, const std::string& compilation_dir) const;
 
  private:
-  std::span<const LineRow> GetRowsWithEnd(const Sequence& seq) const;
+  // Storage offsets are private. row_end is the exclusive end, including the terminal marker.
+  struct Sequence {
+    Sequence() = default;
+    Sequence(const AddressRange& a, size_t r_begin, size_t r_end)
+        : addresses(a), row_begin(r_begin), row_end(r_end) {}
+
+    AddressRange addresses;
+
+    // Index of the first row in rows_.
+    size_t row_begin = 0;
+
+    // Exclusive end of the sequence in rows_.
+    size_t row_end = 0;
+  };
+
+  SequenceView ViewSequence(const Sequence& sequence) const;
 
   // Fills rows_ and sequences_ with copies of the found sequences, in the order given.
   void CopySequences(const std::vector<LineRow>& rows, const std::vector<Sequence>& found);

@@ -123,5 +123,5 @@ Server tests assert that console output stays on the main thread. Repeated
 
 Run these commands to build and test `zxdb/debug_adapter`:
 
-- Build: `fx build //src/developer/debug/zxdb/debug_adapter`
-- Test: `fx test zxdb_tests`
+- Build: `cmake --build build --target zxdb_debug_adapter`
+- Test: `cmake --build build --target zxdb_tests && ./build/zxdb_tests`

@@ -96,5 +96,5 @@ These formatting functions produce the following I/O and tree side effects:
 
 Run these commands to build and test `zxdb/format`:
 
-- Build: `fx build //src/developer/debug/zxdb/format`
-- Test: `fx test zxdb_tests`
+- Build: `cmake --build build --target zxdb_format`
+- Test: `cmake --build build --target zxdb_tests && ./build/zxdb_tests`

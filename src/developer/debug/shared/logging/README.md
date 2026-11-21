@@ -89,4 +89,4 @@ shared tests. See the root `README.md` for configuration and prerequisites.
 
 Run this command to build `shared/logging`:
 
-- Build: `fx build //src/developer/debug/shared/logging`
+- Build: `cmake --build build --target debug_logging`

@@ -9,6 +9,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 #include "src/developer/debug/zxdb/symbols/line_program_test_util.h"
+#include "src/developer/debug/zxdb/symbols/line_table_test_support.h"
 
 namespace zxdb {
 
@@ -76,10 +77,10 @@ TEST(LineTableCache, HeaderOnlyUntilNeeded) {
   EXPECT_EQ(files, cache.GetFileTable(unit, 100));
 
   // A decoded line table shares the file table.
-  LineTable table = cache.DecodeLineTable(unit);
+  LineTable table = cache.DecodeLineTable(unit, kTestFirstCodeAddress);
   EXPECT_EQ(files.get(), &table.files());
   ASSERT_EQ(1u, table.GetNumSequences());
-  EXPECT_EQ("inc/defined.h", *table.GetFileNameForRow(table.rows()[1]));
+  EXPECT_EQ("inc/defined.h", *table.GetFileNameForRow(table.rows_with_end_markers()[1]));
 }
 
 TEST(LineTableCache, DecodeFirst) {
@@ -91,7 +92,7 @@ TEST(LineTableCache, DecodeFirst) {
   llvm::DWARFUnit& unit = *sections.unit(0);
 
   LineTableCache cache;
-  LineTable table = cache.DecodeLineTable(unit);
+  LineTable table = cache.DecodeLineTable(unit, kTestFirstCodeAddress);
   EXPECT_EQ(3u, table.files().size());
   EXPECT_EQ(&table.files(), cache.GetFileTable(unit, 1).get());
 }
@@ -115,7 +116,7 @@ TEST(LineTableCache, SharesHeaderTableWithoutDefineFile) {
   LineTableCache cache;
   std::shared_ptr<const LineFileTable> files = cache.GetFileTable(unit, 0);
   ASSERT_TRUE(files);
-  EXPECT_EQ(files.get(), &cache.DecodeLineTable(unit).files());
+  EXPECT_EQ(files.get(), &cache.DecodeLineTable(unit, kTestFirstCodeAddress).files());
 
   // After Clear(), the table is resolved again.
   cache.Clear();
@@ -133,7 +134,22 @@ TEST(LineTableCache, BadLineTable) {
   LineTableCache cache;
   EXPECT_FALSE(cache.GetFileTable(unit, 0));
   EXPECT_FALSE(cache.GetFileTable(unit, 5));
-  EXPECT_EQ(0u, cache.DecodeLineTable(unit).GetNumSequences());
+  EXPECT_EQ(0u, cache.DecodeLineTable(unit, kTestFirstCodeAddress).GetNumSequences());
+}
+
+TEST(LineTableCache, UnitWithoutLineTable) {
+  LineTableTestSections sections;
+  sections.Add(Builder(5));
+  sections.AddCompileUnit(5, std::nullopt, {1});
+  sections.Finish();
+  llvm::DWARFUnit& unit = *sections.unit(0);
+
+  LineTableCache cache;
+  EXPECT_FALSE(cache.GetFileTable(unit, 1));
+  EXPECT_EQ(0u, cache.DecodeLineTable(unit, kTestFirstCodeAddress).GetNumSequences());
+
+  // DW_AT_decl_file has no file table to use.
+  EXPECT_EQ(std::nullopt, DecodeDeclFile(sections.mutable_context(), unit, 0));
 }
 
 TEST(DwarfDieDecoder, AddFileDefinedByProgram) {
