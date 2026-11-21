@@ -5,12 +5,12 @@
 #ifndef SRC_DEVELOPER_DEBUG_DEBUG_AGENT_MOCK_EXCEPTION_HANDLE_H_
 #define SRC_DEVELOPER_DEBUG_DEBUG_AGENT_MOCK_EXCEPTION_HANDLE_H_
 
+#include <lib/syslog/cpp/macros.h>
 #include <zircon/status.h>
 
 #include <functional>
 #include <utility>
 
-#include <lib/syslog/cpp/macros.h>
 #include "src/developer/debug/debug_agent/exception_handle.h"
 #include "src/developer/debug/debug_agent/mock_process_handle.h"
 #include "src/developer/debug/debug_agent/mock_thread_handle.h"

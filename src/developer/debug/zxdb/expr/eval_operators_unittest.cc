@@ -47,7 +47,8 @@ class EvalOperators : public TestWithLoop {
 
   template <typename T>
   [[clang::no_sanitize("signed-integer-overflow")]]  // Allows -INT32_MAX overflow.
-  void DoUnaryMinusTest(T in) {
+  void
+  DoUnaryMinusTest(T in) {
     ExprValue original(in);
 
     ErrOrValue out = SyncEvalUnaryOperator(ExprTokenType::kMinus, original);

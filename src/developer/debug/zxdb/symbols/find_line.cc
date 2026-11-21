@@ -4,9 +4,10 @@
 
 #include "src/developer/debug/zxdb/symbols/find_line.h"
 
+#include <lib/syslog/cpp/macros.h>
+
 #include <map>
 #include <span>
-#include <lib/syslog/cpp/macros.h>
 
 #include "src/developer/debug/zxdb/symbols/code_block.h"
 #include "src/developer/debug/zxdb/symbols/function.h"

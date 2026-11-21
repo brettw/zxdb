@@ -4,15 +4,16 @@
 
 #include "src/developer/debug/debug_agent/linux_task.h"
 
-#include <gtest/gtest.h>
 #include <signal.h>
-#include <sys/wait.h>
 #include <sys/mman.h>
 #include <sys/ptrace.h>
-#include <chrono>
+#include <sys/wait.h>
 #include <unistd.h>
 
+#include <chrono>
 #include <thread>
+
+#include <gtest/gtest.h>
 
 #include "src/developer/debug/debug_agent/linux_binary_launcher.h"
 #include "src/developer/debug/debug_agent/linux_exception_handle.h"
@@ -46,6 +47,7 @@ class ChildGuard {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     } while (std::chrono::steady_clock::now() < deadline);
   }
+
  private:
   pid_t pid_;
 };
@@ -82,7 +84,8 @@ class ProcessObserver : public ProcessHandleObserver {
     }
     EXPECT_TRUE(exception->SetResolution(ExceptionHandle::Resolution::kTryNext).ok());
   }
-  void OnProcessStarting(std::unique_ptr<ProcessHandle> handle, bool inherited_breakpoints) override {
+  void OnProcessStarting(std::unique_ptr<ProcessHandle> handle,
+                         bool inherited_breakpoints) override {
     auto child = std::make_unique<ProcessObserver>(loop);
     child->quit_on_exit = false;
     child->process = std::move(handle);
@@ -129,7 +132,8 @@ class LinuxTaskTest : public testing::Test {
     EXPECT_EQ(1, observer.exits);
     EXPECT_EQ(7, observer.return_code);
     EXPECT_EQ(expected_threads, observer.starts);
-    EXPECT_EQ(expected_threads - observer.execs * (std::string(mode) == "worker-exec"), observer.thread_exits);
+    EXPECT_EQ(expected_threads - observer.execs * (std::string(mode) == "worker-exec"),
+              observer.thread_exits);
     EXPECT_EQ(expected_children, observer.children.size());
     for (const auto& child : observer.children) {
       EXPECT_EQ(1, child->exits);
@@ -202,11 +206,17 @@ TEST_F(LinuxTaskTest, AttachExistingWorkersAndRegisters) {
       auto regs = thread->GetGeneralRegisters();
       ASSERT_TRUE(regs);
       auto original = regs->GetNativeRegisters().r15;
-      auto written = thread->WriteRegisters({debug::RegisterValue(debug::RegisterID::kX64_r15, uint64_t{12345})});
+      auto written = thread->WriteRegisters(
+          {debug::RegisterValue(debug::RegisterID::kX64_r15, uint64_t{12345})});
       EXPECT_FALSE(written.empty());
       EXPECT_EQ(12345u, thread->GetGeneralRegisters()->GetNativeRegisters().r15);
-      EXPECT_FALSE(thread->WriteRegisters({debug::RegisterValue(debug::RegisterID::kX64_r15, uint64_t{original})}).empty());
-      EXPECT_TRUE(thread->WriteRegisters({debug::RegisterValue(debug::RegisterID::kX64_dr0, uint64_t{1})}).empty());
+      EXPECT_FALSE(thread
+                       ->WriteRegisters(
+                           {debug::RegisterValue(debug::RegisterID::kX64_r15, uint64_t{original})})
+                       .empty());
+      EXPECT_TRUE(
+          thread->WriteRegisters({debug::RegisterValue(debug::RegisterID::kX64_dr0, uint64_t{1})})
+              .empty());
     }
     observer.process->Detach();
     for (const auto& thread : threads)
@@ -221,8 +231,8 @@ TEST_F(LinuxTaskTest, AttachExistingWorkersAndRegisters) {
 
 TEST_F(LinuxTaskTest, PtraceReadsProtectedMemory) {
   size_t page_size = getpagesize();
-  void* mapping = mmap(nullptr, page_size, PROT_READ | PROT_WRITE,
-                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  void* mapping =
+      mmap(nullptr, page_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   ASSERT_NE(MAP_FAILED, mapping);
   memset(mapping, 0x5a, page_size);
   int ready[2];
@@ -234,7 +244,8 @@ TEST_F(LinuxTaskTest, PtraceReadsProtectedMemory) {
     mprotect(mapping, page_size, PROT_NONE);
     char byte = 0;
     write(ready[1], &byte, 1);
-    for (;;) pause();
+    for (;;)
+      pause();
   }
   ChildGuard cleanup(pid);
   close(ready[1]);
@@ -247,8 +258,10 @@ TEST_F(LinuxTaskTest, PtraceReadsProtectedMemory) {
     ASSERT_TRUE(observer.process->Attach(&observer, {}).ok());
     uint8_t data[13]{};
     size_t actual = 0;
-    EXPECT_TRUE(observer.process->ReadMemory(reinterpret_cast<uintptr_t>(mapping) + 3,
-                                             data, sizeof(data), &actual).ok());
+    EXPECT_TRUE(
+        observer.process
+            ->ReadMemory(reinterpret_cast<uintptr_t>(mapping) + 3, data, sizeof(data), &actual)
+            .ok());
     EXPECT_EQ(sizeof(data), actual);
     for (auto value : data)
       EXPECT_EQ(0x5a, value);
@@ -269,7 +282,8 @@ TEST_F(LinuxTaskTest, DetachInvalidatesDeferredStopAndPreservesSignal) {
     signal(SIGUSR1, [](int) { _exit(7); });
     char byte = 0;
     write(ready[1], &byte, 1);
-    for (;;) pause();
+    for (;;)
+      pause();
   }
   ChildGuard cleanup(pid);
   close(ready[1]);

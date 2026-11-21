@@ -5,6 +5,7 @@
 #include "src/developer/debug/zxdb/symbols/line_program_test_util.h"
 
 #include <lib/syslog/cpp/macros.h>
+
 #include <algorithm>
 
 #include "llvm/ADT/StringMap.h"
@@ -98,10 +99,9 @@ std::vector<uint32_t> GetLiveRowFiles(std::span<const LineRow> rows, size_t file
   for (size_t i = 0; i < rows.size(); i++) {
     if (!rows[i].end_sequence())
       continue;
-    bool ordered = std::is_sorted(rows.begin() + sequence_begin, rows.begin() + i + 1,
-                                  [](const LineRow& a, const LineRow& b) {
-                                    return a.address < b.address;
-                                  });
+    bool ordered =
+        std::is_sorted(rows.begin() + sequence_begin, rows.begin() + i + 1,
+                       [](const LineRow& a, const LineRow& b) { return a.address < b.address; });
     if (ordered && rows[sequence_begin].address >= first_code_address) {
       for (size_t row = sequence_begin; row <= i; row++) {
         if (rows[row].file < file_count)
@@ -224,21 +224,18 @@ void LineTableBuilder::Raw(const std::vector<uint8_t>& bytes) {
 void LineTableBuilder::Uleb(uint64_t value) { AppendUleb(program_, value); }
 
 void LineTableBuilder::WriteString(std::vector<uint8_t>& out, StringForm form,
-                                   const std::string& str,
-                                   LineTableTestSections& sections) const {
+                                   const std::string& str, LineTableTestSections& sections) const {
   size_t offset_size = format_ == Format::kDwarf64 ? 8 : 4;
   switch (form) {
     case StringForm::kString:
       AppendCString(out, str);
       break;
     case StringForm::kLineStrp:
-      Put(
-          out, sections.AddString(sections.line_str_, sections.line_str_offsets_, str),
+      Put(out, sections.AddString(sections.line_str_, sections.line_str_offsets_, str),
           offset_size);
       break;
     case StringForm::kStrp:
-      Put(out, sections.AddString(sections.str_, sections.str_offsets_map_, str),
-                         offset_size);
+      Put(out, sections.AddString(sections.str_, sections.str_offsets_map_, str), offset_size);
       break;
     case StringForm::kStrx1:
       out.push_back(sections.AddStrOffset(str));
@@ -407,8 +404,8 @@ void LineTableTestSections::AddCompileUnit(uint16_t version, std::optional<uint6
   std::vector<uint8_t> body;
   AppendInteger(body, version, 2);
   if (version >= 5) {
-    body.push_back(1);  // DW_UT_compile.
-    body.push_back(8);  // Address size.
+    body.push_back(1);          // DW_UT_compile.
+    body.push_back(8);          // Address size.
     AppendInteger(body, 0, 4);  // Abbreviation offset.
   } else {
     AppendInteger(body, 0, 4);
@@ -441,14 +438,14 @@ void LineTableTestSections::Finish(uint8_t address_size, bool little_endian) {
   };
   // Abbreviations for AddCompileUnit().
   std::vector<uint8_t> abbrev = {
-      1, 0x11, 1,              // 1: DW_TAG_compile_unit with children.
+      1,    0x11,       1,     // 1: DW_TAG_compile_unit with children.
       0x10, 0x17,              // DW_AT_stmt_list, DW_FORM_sec_offset.
       0x72, 0x17,              // DW_AT_str_offsets_base, DW_FORM_sec_offset.
-      0, 0,                    //
-      2, 0x2e, 0,              // 2: DW_TAG_subprogram without children.
+      0,    0,                 //
+      2,    0x2e,       0,     // 2: DW_TAG_subprogram without children.
       0x3a, kFormUdata, 0, 0,  // DW_AT_decl_file.
-      3, 0x11, 1,              // 3: DW_TAG_compile_unit without DW_AT_stmt_list.
-      0x72, 0x17, 0, 0,        // DW_AT_str_offsets_base, DW_FORM_sec_offset.
+      3,    0x11,       1,     // 3: DW_TAG_compile_unit without DW_AT_stmt_list.
+      0x72, 0x17,       0, 0,  // DW_AT_str_offsets_base, DW_FORM_sec_offset.
       0,
   };
 
@@ -466,8 +463,8 @@ void LineTableTestSections::Finish(uint8_t address_size, bool little_endian) {
   buffers_["debug_str_offsets"] = make_buffer(str_offsets, "debug_str_offsets");
   buffers_["debug_line_str"] = make_buffer(line_str_, "debug_line_str");
   buffers_["debug_str"] = make_buffer(str_, "debug_str");
-  context_ = llvm::DWARFContext::create(buffers_, address_size, little_endian, IgnoreError,
-                                        IgnoreError);
+  context_ =
+      llvm::DWARFContext::create(buffers_, address_size, little_endian, IgnoreError, IgnoreError);
 }
 
 const llvm::DWARFSection& LineTableTestSections::line_section() const {

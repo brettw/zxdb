@@ -8,7 +8,6 @@
 #include <stdint.h>
 
 #include <span>
-
 #include <string>
 
 #include "src/developer/debug/zxdb/common/err.h"

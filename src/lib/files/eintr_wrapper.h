@@ -5,9 +5,9 @@
 #ifndef LIB_FXL_FILES_EINTR_WRAPPER_H_
 #define LIB_FXL_FILES_EINTR_WRAPPER_H_
 
-#include "src/lib/fxl/build_config.h"
-
 #include <errno.h>
+
+#include "src/lib/fxl/build_config.h"
 
 #if defined(NDEBUG)
 

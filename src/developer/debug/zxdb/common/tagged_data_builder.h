@@ -5,10 +5,10 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_COMMON_TAGGED_DATA_BUILDER_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_COMMON_TAGGED_DATA_BUILDER_H_
 
-#include <span>
 #include <stdint.h>
 
 #include <initializer_list>
+#include <span>
 
 #include "src/developer/debug/zxdb/common/tagged_data.h"
 

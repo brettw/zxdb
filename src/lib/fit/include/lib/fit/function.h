@@ -273,7 +273,8 @@ class function_impl<inline_target_size, require_inline, Result(Args...), Allocat
   assignment_requires_conditions<
       std::is_convertible<decltype(std::declval<Callable&>()(std::declval<Args>()...)),
                           result_type>,
-      not_self_type<Callable>> operator=(Callable&& function_target) {
+      not_self_type<Callable>>
+  operator=(Callable&& function_target) {
     base::assign_callable(std::forward<Callable>(function_target));
     return *this;
   }
@@ -424,7 +425,8 @@ class callback_impl<inline_target_size, require_inline, Result(Args...), Allocat
   assignment_requires_conditions<
       std::is_convertible<decltype(std::declval<Callable&>()(std::declval<Args>()...)),
                           result_type>,
-      not_self_type<Callable>> operator=(Callable&& callback_target) {
+      not_self_type<Callable>>
+  operator=(Callable&& callback_target) {
     base::assign_callable(std::forward<Callable>(callback_target));
     return *this;
   }

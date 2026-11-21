@@ -6,6 +6,7 @@
 #define LIB_CONTAINERS_CPP_TEMPLATE_UTIL_H_
 
 #include <stddef.h>
+
 #include <iosfwd>
 #include <iterator>
 #include <type_traits>

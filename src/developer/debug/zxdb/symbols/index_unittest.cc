@@ -426,11 +426,10 @@ TEST(Index, BenchmarkIndexing) {
   printf("\nIndexing results for %s:\n   Load: %" PRId64 " µs\n  Index: %" PRId64 " µs\n",
          kFilename, load_complete_us - begin_us, index_complete_us - load_complete_us);
   DwarfBinary& binary = *setup.symbols()->binary();
-  for (std::optional<size_t> thread_count : std::vector<std::optional<size_t>>{
-           std::nullopt, 0, 1, 2, 4, 6}) {
+  for (std::optional<size_t> thread_count :
+       std::vector<std::optional<size_t>>{std::nullopt, 0, 1, 2, 4, 6}) {
     int64_t source_files_begin_us = GetTickMicroseconds();
-    SourceFileIndexer source_files(CollectLineTableJobs(binary),
-                                   {.thread_count = thread_count});
+    SourceFileIndexer source_files(CollectLineTableJobs(binary), {.thread_count = thread_count});
     size_t workers = source_files.worker_count();
     SourceFileIndexer::FileIndex files;
     source_files.FinishInto(&files);

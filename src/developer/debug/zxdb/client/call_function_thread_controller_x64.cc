@@ -4,9 +4,8 @@
 
 #include "src/developer/debug/zxdb/client/call_function_thread_controller_x64.h"
 
-#include <vector>
-
 #include <memory>
+#include <vector>
 
 #include "src/developer/debug/shared/register_id.h"
 #include "src/developer/debug/shared/register_info.h"

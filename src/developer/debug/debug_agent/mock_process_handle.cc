@@ -52,7 +52,10 @@ debug::Status MockProcessHandle::Attach(ProcessHandleObserver* observer, AttachC
   return debug::Status();
 }
 
-debug::Status MockProcessHandle::Detach() { is_attached_ = false; return debug::Status(); }
+debug::Status MockProcessHandle::Detach() {
+  is_attached_ = false;
+  return debug::Status();
+}
 
 uint64_t MockProcessHandle::GetLoaderBreakpointAddress() {
   // Not currently implemented in this mock.

@@ -5,11 +5,12 @@
 #ifndef SRC_LIB_ANALYTICS_CPP_CORE_DEV_TOOLS_ANALYTICS_H_
 #define SRC_LIB_ANALYTICS_CPP_CORE_DEV_TOOLS_ANALYTICS_H_
 
+#include <lib/syslog/cpp/macros.h>
+
 #include <memory>
 #include <string>
 #include <vector>
 
-#include <lib/syslog/cpp/macros.h>
 #include "src/lib/analytics/cpp/core_dev_tools/analytics_internal.h"
 #include "src/lib/analytics/cpp/core_dev_tools/analytics_messages.h"
 #include "src/lib/analytics/cpp/core_dev_tools/analytics_status.h"

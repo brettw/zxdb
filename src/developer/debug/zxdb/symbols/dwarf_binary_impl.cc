@@ -370,8 +370,8 @@ const llvm::DWARFDebugNames* DwarfBinaryImpl::GetDebugNames() const {
   return &names;
 }
 
-std::shared_ptr<const LineFileTable> DwarfBinaryImpl::GetLineFileTable(
-    llvm::DWARFUnit* unit, uint64_t file_index) const {
+std::shared_ptr<const LineFileTable> DwarfBinaryImpl::GetLineFileTable(llvm::DWARFUnit* unit,
+                                                                       uint64_t file_index) const {
   if (!unit)
     return nullptr;
   return line_tables_.GetFileTable(*unit, file_index);

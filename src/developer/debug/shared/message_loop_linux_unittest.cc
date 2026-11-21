@@ -4,13 +4,13 @@
 
 #include "src/developer/debug/shared/message_loop_linux.h"
 
-#include <unistd.h>
 #include <sys/wait.h>
-
-#include <gtest/gtest.h>
+#include <unistd.h>
 
 #include <map>
 #include <vector>
+
+#include <gtest/gtest.h>
 
 namespace debug {
 

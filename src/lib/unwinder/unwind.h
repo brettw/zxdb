@@ -5,11 +5,12 @@
 #ifndef SRC_LIB_UNWINDER_UNWIND_H_
 #define SRC_LIB_UNWINDER_UNWIND_H_
 
+#include <lib/fit/function.h>
+
 #include <cstdint>
 #include <span>
 #include <vector>
 
-#include <lib/fit/function.h>
 #include "src/lib/unwinder/cfi_unwinder.h"
 #include "src/lib/unwinder/elf_module_cache.h"
 #include "src/lib/unwinder/frame.h"

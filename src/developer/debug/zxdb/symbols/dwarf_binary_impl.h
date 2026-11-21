@@ -11,8 +11,8 @@
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/common/err.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
-#include "src/developer/debug/zxdb/symbols/line_table_cache.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_symbol_factory.h"
+#include "src/developer/debug/zxdb/symbols/line_table_cache.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
 
 namespace llvm {

@@ -5,9 +5,10 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_COMMON_TAGGED_DATA_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_COMMON_TAGGED_DATA_H_
 
-#include <string>
 #include <stdint.h>
+
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace zxdb {

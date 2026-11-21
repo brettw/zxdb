@@ -165,25 +165,26 @@ void DwarfDieDecoder::AddReference(llvm::dwarf::Attribute attribute, llvm::DWARF
 
 void DwarfDieDecoder::AddFile(llvm::dwarf::Attribute attribute,
                               std::optional<std::string>* output) {
-  attrs_.emplace_back(
-      attribute, [this, output](llvm::DWARFUnit* unit, const llvm::DWARFFormValue& form) {
-        std::optional<uint64_t> file_index = form.getAsUnsignedConstant();
-        if (!file_index || !unit)
-          return;
+  attrs_.emplace_back(attribute,
+                      [this, output](llvm::DWARFUnit* unit, const llvm::DWARFFormValue& form) {
+                        std::optional<uint64_t> file_index = form.getAsUnsignedConstant();
+                        if (!file_index || !unit)
+                          return;
 
-        // The binary caches the file tables. Without a binary, use a cache for this lookup only.
-        std::shared_ptr<const LineFileTable> files;
-        if (binary_) {
-          files = binary_->GetLineFileTable(unit, *file_index);
-        } else {
-          files = LineTableCache().GetFileTable(*unit, *file_index);
-        }
-        if (!files)
-          return;
+                        // The binary caches the file tables. Without a binary, use a cache for this
+                        // lookup only.
+                        std::shared_ptr<const LineFileTable> files;
+                        if (binary_) {
+                          files = binary_->GetLineFileTable(unit, *file_index);
+                        } else {
+                          files = LineTableCache().GetFileTable(*unit, *file_index);
+                        }
+                        if (!files)
+                          return;
 
-        if (const std::string* name = files->GetFileName(*file_index))
-          *output = *name;
-      });
+                        if (const std::string* name = files->GetFileName(*file_index))
+                          *output = *name;
+                      });
 }
 
 void DwarfDieDecoder::AddAbstractParent(llvm::DWARFDie* output) {

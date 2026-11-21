@@ -1342,7 +1342,6 @@ TEST(Protocol, NotifyFilterCreatedWithVersion) {
   EXPECT_TRUE(serialized.empty());
 }
 
-
 TEST(Protocol, LinuxExceptionMetadataVersioning) {
   NotifyException initial;
   initial.exception.linux_signal = 11;
@@ -1360,7 +1359,6 @@ TEST(Protocol, LinuxExceptionMetadataVersioning) {
   EXPECT_EQ(0, old.exception.linux_signal);
   EXPECT_EQ(0u, old.exception.linux_address);
 }
-
 
 TEST(Protocol, ExecModuleResetVersioning) {
   NotifyModules initial;

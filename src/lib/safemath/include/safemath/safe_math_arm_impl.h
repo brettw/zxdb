@@ -98,8 +98,7 @@ struct ClampedSubFastAsmOp {
 
 template <typename T, typename U>
 struct ClampedMulFastAsmOp {
-  static constexpr bool is_supported =
-      kEnableAsmCode && CheckedMulFastAsmOp<T, U>::is_supported;
+  static constexpr bool is_supported = kEnableAsmCode && CheckedMulFastAsmOp<T, U>::is_supported;
 
   template <typename V>
   __attribute__((always_inline)) static V Do(T x, U y) {
@@ -114,8 +113,7 @@ struct ClampedMulFastAsmOp {
     } else {
       static_assert(kIsFastIntegerArithmeticPromotionContained<T, U>);
       using Promotion = FastIntegerArithmeticPromotion<T, U>;
-      return saturated_cast<V>(static_cast<Promotion>(x) *
-                               static_cast<Promotion>(y));
+      return saturated_cast<V>(static_cast<Promotion>(x) * static_cast<Promotion>(y));
     }
   }
 };

@@ -12,14 +12,13 @@
 #include <unistd.h>
 #include <zircon/errors.h>
 
-#include "src/developer/debug/shared/message_loop_linux.h"
 #include "src/developer/debug/debug_agent/linux_process_handle.h"
-#include "src/developer/debug/debug_agent/linux_utils.h"
 #include "src/developer/debug/debug_agent/linux_task.h"
 #include "src/developer/debug/debug_agent/linux_utils.h"
 #include "src/developer/debug/debug_agent/posix/dir_reader_linux.h"
 #include "src/developer/debug/debug_agent/posix/eintr_wrapper.h"
 #include "src/developer/debug/debug_agent/posix/file_descriptor_shuffle.h"
+#include "src/developer/debug/shared/message_loop_linux.h"
 #include "src/lib/fxl/strings/string_printf.h"
 
 namespace debug_agent {

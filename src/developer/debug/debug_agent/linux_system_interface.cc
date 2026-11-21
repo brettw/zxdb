@@ -4,8 +4,8 @@
 
 #include "src/developer/debug/debug_agent/linux_system_interface.h"
 
-#include <unistd.h>
 #include <sys/sysinfo.h>
+#include <unistd.h>
 
 #include "src/developer/debug/debug_agent/linux_binary_launcher.h"
 #include "src/developer/debug/debug_agent/linux_job_handle.h"

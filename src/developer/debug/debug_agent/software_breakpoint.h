@@ -39,7 +39,10 @@ class SoftwareBreakpoint : public ProcessBreakpoint {
   // Exec replaced the image; never restore bytes into the new mappings.
   debug::Status Reinstall() { return Update(); }
   debug::Status RestoreMemory() { return Uninstall(); }
-  void ForgetMemory() { installed_ = false; suspend_tokens_.clear(); }
+  void ForgetMemory() {
+    installed_ = false;
+    suspend_tokens_.clear();
+  }
   void SuspendNewThread(DebuggedThread* thread);
 
   const DebuggedThread* currently_stepping_over_thread() const {

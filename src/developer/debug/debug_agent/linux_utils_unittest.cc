@@ -4,15 +4,15 @@
 
 #include "src/developer/debug/debug_agent/linux_utils.h"
 
-#include <gtest/gtest.h>
 #include <lib/fit/defer.h>
-
 #include <sys/mman.h>
 #include <unistd.h>
+
+#include <gtest/gtest.h>
+
 #include "src/developer/debug/debug_agent/linux_process_handle.h"
 #include "src/developer/debug/debug_agent/linux_task.h"
 #include "src/developer/debug/shared/message_loop_linux.h"
-
 
 namespace debug_agent {
 namespace linux {
@@ -127,8 +127,7 @@ nonvoluntary_ctxt_switches:     152
 
 namespace debug_agent::linux {
 TEST(LinuxUtils, AuxvBounds) {
-  const uint64_t words[] = {AT_PHENT, sizeof(Elf64_Phdr), AT_BASE, 123,
-                            AT_NULL, 0, AT_ENTRY, 456};
+  const uint64_t words[] = {AT_PHENT, sizeof(Elf64_Phdr), AT_BASE, 123, AT_NULL, 0, AT_ENTRY, 456};
   std::string storage(1, 'x');
   storage.append(reinterpret_cast<const char*>(words), sizeof(words));
   auto bytes = std::string_view(storage).substr(1);
@@ -142,16 +141,16 @@ TEST(LinuxUtils, AuxvBounds) {
 }
 
 TEST(LinuxUtils, AuxvRejectsUnsupportedLayout) {
-  const uint32_t compat[] = {AT_PHENT, sizeof(Elf32_Phdr), AT_BASE, 123,
-                             AT_ENTRY, 456, AT_NULL, 0};
-  EXPECT_TRUE(ParseAuxv(std::string_view(reinterpret_cast<const char*>(compat),
-                                       sizeof(compat))).empty());
+  const uint32_t compat[] = {AT_PHENT, sizeof(Elf32_Phdr), AT_BASE, 123, AT_ENTRY, 456, AT_NULL, 0};
+  EXPECT_TRUE(
+      ParseAuxv(std::string_view(reinterpret_cast<const char*>(compat), sizeof(compat))).empty());
   const uint64_t wrong_size[] = {AT_PHENT, sizeof(Elf32_Phdr), AT_NULL, 0};
-  EXPECT_TRUE(ParseAuxv(std::string_view(reinterpret_cast<const char*>(wrong_size),
-                                       sizeof(wrong_size))).empty());
+  EXPECT_TRUE(
+      ParseAuxv(std::string_view(reinterpret_cast<const char*>(wrong_size), sizeof(wrong_size)))
+          .empty());
   const uint64_t missing[] = {AT_BASE, 123, AT_NULL, 0};
-  EXPECT_TRUE(ParseAuxv(std::string_view(reinterpret_cast<const char*>(missing),
-                                       sizeof(missing))).empty());
+  EXPECT_TRUE(
+      ParseAuxv(std::string_view(reinterpret_cast<const char*>(missing), sizeof(missing))).empty());
   auto native = ReadAuxv(getpid());
   ASSERT_NE(native.end(), native.find(AT_PHENT));
   EXPECT_EQ(sizeof(Elf64_Phdr), native.at(AT_PHENT));
@@ -170,8 +169,9 @@ TEST(LinuxUtils, MapReadValidity) {
 }
 
 TEST(LinuxUtils, LargeInodeAndMalformedMaps) {
-  auto maps = ParseMaps("1000-2000 r--p 0 00:01 4294967296 /large inode\n"
-                        "2000-3000 rw-p 0 00:00 0\n");
+  auto maps = ParseMaps(
+      "1000-2000 r--p 0 00:01 4294967296 /large inode\n"
+      "2000-3000 rw-p 0 00:00 0\n");
   ASSERT_EQ(2u, maps.size());
   EXPECT_EQ(4294967296ull, maps[0].inode);
   EXPECT_EQ("/large inode", maps[0].path);
@@ -181,7 +181,6 @@ TEST(LinuxUtils, LargeInodeAndMalformedMaps) {
   EXPECT_TRUE(ParseMaps("1000-2000 r--p 0 00:00").empty());
 }
 }  // namespace debug_agent::linux
-
 
 namespace debug_agent {
 TEST(LinuxMemory, PartialReadAndInvalidRanges) {
@@ -193,8 +192,8 @@ TEST(LinuxMemory, PartialReadAndInvalidRanges) {
     auto task = fxl::MakeRefCounted<LinuxTask>(getpid());
     LinuxProcessHandle process(task);
     size_t page = sysconf(_SC_PAGESIZE);
-    void* mapping = mmap(nullptr, page * 3, PROT_READ | PROT_WRITE,
-                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void* mapping =
+        mmap(nullptr, page * 3, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     ASSERT_NE(MAP_FAILED, mapping);
     auto unmap = fit::defer([&] { munmap(mapping, page * 3); });
     auto bytes = static_cast<uint8_t*>(mapping);
@@ -277,8 +276,9 @@ TEST(LinuxMemory, WordWritesPreserveEdgesAndReportProgress) {
       fail_write_at = -1;
       write_count = 0;
       size_t actual = 123;
-      EXPECT_FALSE(LinuxProcessHandle::WriteMemoryByWord(
-          0, offset, input.data(), length, ReadTestWord, WriteTestWord, &actual).has_error());
+      EXPECT_FALSE(LinuxProcessHandle::WriteMemoryByWord(0, offset, input.data(), length,
+                                                         ReadTestWord, WriteTestWord, &actual)
+                       .has_error());
       EXPECT_EQ(length, actual);
       auto bytes = reinterpret_cast<uint8_t*>(memory_words);
       for (size_t i = 0; i < sizeof(memory_words); ++i)
@@ -288,12 +288,14 @@ TEST(LinuxMemory, WordWritesPreserveEdgesAndReportProgress) {
   size_t actual = 123;
   fail_write_at = 1;
   write_count = 0;
-  EXPECT_TRUE(LinuxProcessHandle::WriteMemoryByWord(
-      0, 0, input.data(), 16, ReadTestWord, WriteTestWord, &actual).has_error());
+  EXPECT_TRUE(LinuxProcessHandle::WriteMemoryByWord(0, 0, input.data(), 16, ReadTestWord,
+                                                    WriteTestWord, &actual)
+                  .has_error());
   EXPECT_EQ(sizeof(uintptr_t), actual);
   actual = 123;
-  EXPECT_TRUE(LinuxProcessHandle::WriteMemoryByWord(
-      0, UINTPTR_MAX, input.data(), 2, ReadTestWord, WriteTestWord, &actual).has_error());
+  EXPECT_TRUE(LinuxProcessHandle::WriteMemoryByWord(0, UINTPTR_MAX, input.data(), 2, ReadTestWord,
+                                                    WriteTestWord, &actual)
+                  .has_error());
   EXPECT_EQ(0u, actual);
 }
 }  // namespace debug_agent

@@ -1054,7 +1054,7 @@ std::optional<std::string> GetScopeExpressionForExecutorFrame(
           // Multithreaded executor, found on a worker thread.
           {{"fuchsia_async::runtime::fuchsia::executor::send", "create_worker_threads::{closure"},
            "root_scope"},
-  };
+      };
 
   for (const auto& [func_parts, expr] : kExecutorFrameNameToScopeExpr) {
     size_t i = 0;

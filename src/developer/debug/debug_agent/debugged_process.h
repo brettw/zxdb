@@ -214,7 +214,8 @@ class DebuggedProcess : public ProcessHandleObserver {
   void OnThreadStarting(std::unique_ptr<ExceptionHandle> exception) override;
   void OnThreadExiting(std::unique_ptr<ExceptionHandle> exception) override;
   void OnException(std::unique_ptr<ExceptionHandle> exception) override;
-  void OnProcessStarting(std::unique_ptr<ProcessHandle> new_process_handle, bool inherited_breakpoints = true) override;
+  void OnProcessStarting(std::unique_ptr<ProcessHandle> new_process_handle,
+                         bool inherited_breakpoints = true) override;
 
  private:
   void OnStdout(bool close);

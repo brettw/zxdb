@@ -186,9 +186,9 @@ LineDetails LineTable::GetLineDetails(const SymbolContext& symbol_context,
   // Find the last row at or before the address, excluding the end_sequence row. When the compiler
   // emits several rows at the address of the first instruction of a function, the last one is the
   // one that describes the code.
-  auto upper = std::upper_bound(
-      rows.begin() + 1, rows.end() - 1, relative_address,
-      [](uint64_t address, const LineRow& row) { return address < row.address; });
+  auto upper =
+      std::upper_bound(rows.begin() + 1, rows.end() - 1, relative_address,
+                       [](uint64_t address, const LineRow& row) { return address < row.address; });
   size_t found_row_index = std::distance(rows.begin(), upper) - 1;
 
   // Adjust the beginning and end ranges to include all matching entries of the same line.

@@ -4,13 +4,12 @@
 
 #include "src/lib/files/scoped_temp_dir.h"
 
-#include <string.h>
-
 #include <assert.h>
 #include <fcntl.h>
 #include <stdlib.h>
-#include <time.h>
+#include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <iostream>

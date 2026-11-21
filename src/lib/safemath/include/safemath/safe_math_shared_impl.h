@@ -153,9 +153,7 @@ constexpr T AbsWrapper(T value) {
   return value < 0 ? -value : value;
 }
 
-template <template <typename, typename> class M,
-          typename L,
-          typename R,
+template <template <typename, typename> class M, typename L, typename R,
           typename Math = M<UnderlyingType<L>, UnderlyingType<R>>>
   requires requires { typename Math::result_type; }
 struct MathWrapper {
@@ -166,32 +164,28 @@ struct MathWrapper {
 // The following macros are just boilerplate for the standard arithmetic
 // operator overloads and variadic function templates. A macro isn't the nicest
 // solution, but it beats rewriting these over and over again.
-#define SAFEMATH_NUMERIC_ARITHMETIC_VARIADIC(CLASS, CL_ABBR, OP_NAME)   \
-  template <typename L, typename R, typename... Args>                   \
-  constexpr auto CL_ABBR##OP_NAME(L lhs, R rhs, Args... args) {         \
-    return CL_ABBR##MathOp<CLASS##OP_NAME##Op, L, R, Args...>(lhs, rhs, \
-                                                              args...); \
+#define SAFEMATH_NUMERIC_ARITHMETIC_VARIADIC(CLASS, CL_ABBR, OP_NAME)             \
+  template <typename L, typename R, typename... Args>                             \
+  constexpr auto CL_ABBR##OP_NAME(L lhs, R rhs, Args... args) {                   \
+    return CL_ABBR##MathOp<CLASS##OP_NAME##Op, L, R, Args...>(lhs, rhs, args...); \
   }
 
-#define SAFEMATH_NUMERIC_ARITHMETIC_OPERATORS(CLASS, CL_ABBR, OP_NAME, OP, \
-                                              CMP_OP)                      \
-  /* Binary arithmetic operator for all CLASS##Numeric operations. */      \
-  template <typename L, typename R>                                        \
-    requires(Is##CLASS##Op<L, R>)                                          \
-  constexpr CLASS##Numeric<                                                \
-      typename MathWrapper<CLASS##OP_NAME##Op, L, R>::type>                \
-  operator OP(L lhs, R rhs) {                                              \
-    return decltype(lhs OP rhs)::template MathOp<CLASS##OP_NAME##Op>(lhs,  \
-                                                                     rhs); \
-  }                                                                        \
-  /* Assignment arithmetic operator implementation from CLASS##Numeric. */ \
-  template <typename L>                                                    \
-    requires std::is_arithmetic_v<L>                                       \
-  template <typename R>                                                    \
-  constexpr CLASS##Numeric<L>& CLASS##Numeric<L>::operator CMP_OP(R rhs) { \
-    return MathOp<CLASS##OP_NAME##Op>(rhs);                                \
-  }                                                                        \
-  /* Variadic arithmetic functions that return CLASS##Numeric. */          \
+#define SAFEMATH_NUMERIC_ARITHMETIC_OPERATORS(CLASS, CL_ABBR, OP_NAME, OP, CMP_OP)            \
+  /* Binary arithmetic operator for all CLASS##Numeric operations. */                         \
+  template <typename L, typename R>                                                           \
+    requires(Is##CLASS##Op<L, R>)                                                             \
+  constexpr CLASS##Numeric<typename MathWrapper<CLASS##OP_NAME##Op, L, R>::type> operator OP( \
+      L lhs, R rhs) {                                                                         \
+    return decltype(lhs OP rhs)::template MathOp<CLASS##OP_NAME##Op>(lhs, rhs);               \
+  }                                                                                           \
+  /* Assignment arithmetic operator implementation from CLASS##Numeric. */                    \
+  template <typename L>                                                                       \
+    requires std::is_arithmetic_v<L>                                                          \
+  template <typename R>                                                                       \
+  constexpr CLASS##Numeric<L>& CLASS##Numeric<L>::operator CMP_OP(R rhs) {                    \
+    return MathOp<CLASS##OP_NAME##Op>(rhs);                                                   \
+  }                                                                                           \
+  /* Variadic arithmetic functions that return CLASS##Numeric. */                             \
   SAFEMATH_NUMERIC_ARITHMETIC_VARIADIC(CLASS, CL_ABBR, OP_NAME)
 
 }  // namespace internal

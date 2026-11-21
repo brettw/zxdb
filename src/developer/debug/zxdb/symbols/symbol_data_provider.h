@@ -6,11 +6,11 @@
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_SYMBOL_DATA_PROVIDER_H_
 
 #include <lib/fit/function.h>
-#include <span>
 #include <stdint.h>
 
 #include <map>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include "src/developer/debug/shared/arch.h"

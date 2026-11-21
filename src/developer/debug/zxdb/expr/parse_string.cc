@@ -176,7 +176,7 @@ Err HandleEscaped(std::string_view input, const StringOrCharLiteralBegin& info, 
                   size_t* error_location, std::string* result) {
   // Shared C/Rust escape sequences.
   switch (input[*cur]) {
-    // clang-format off
+      // clang-format off
     case 'n':  result->push_back('\n'); ++(*cur); return Err();
     case 'r':  result->push_back('\r'); ++(*cur); return Err();
     case 't':  result->push_back('\t'); ++(*cur); return Err();
@@ -200,7 +200,7 @@ Err HandleEscaped(std::string_view input, const StringOrCharLiteralBegin& info, 
   if (info.language == ExprLanguage::kC) {
     // C-specific escape sequences.
     switch (input[*cur]) {
-      // clang-format off
+        // clang-format off
       case '?':  result->push_back('?'); ++(*cur); return Err();
       case 'a':  result->push_back('\a'); ++(*cur); return Err();
       case 'b':  result->push_back('\b'); ++(*cur); return Err();

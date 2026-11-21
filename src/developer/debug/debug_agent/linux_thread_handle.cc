@@ -4,9 +4,9 @@
 
 #include "src/developer/debug/debug_agent/linux_thread_handle.h"
 
-#include <map>
 #include <algorithm>
 #include <cstring>
+#include <map>
 
 #include "src/developer/debug/debug_agent/linux_suspend_handle.h"
 #include "src/developer/debug/debug_agent/linux_utils.h"
@@ -101,27 +101,68 @@ std::vector<debug::RegisterValue> LinuxThreadHandle::WriteRegisters(
     if (value.data.size() != sizeof(uint64_t))
       return {};
     switch (value.id) {
-      case debug::RegisterID::kX64_rax: native.rax = value.GetValue(); break;
-      case debug::RegisterID::kX64_rbx: native.rbx = value.GetValue(); break;
-      case debug::RegisterID::kX64_rcx: native.rcx = value.GetValue(); break;
-      case debug::RegisterID::kX64_rdx: native.rdx = value.GetValue(); break;
-      case debug::RegisterID::kX64_rsi: native.rsi = value.GetValue(); break;
-      case debug::RegisterID::kX64_rdi: native.rdi = value.GetValue(); break;
-      case debug::RegisterID::kX64_rbp: native.rbp = value.GetValue(); break;
-      case debug::RegisterID::kX64_rsp: native.rsp = value.GetValue(); break;
-      case debug::RegisterID::kX64_r8: native.r8 = value.GetValue(); break;
-      case debug::RegisterID::kX64_r9: native.r9 = value.GetValue(); break;
-      case debug::RegisterID::kX64_r10: native.r10 = value.GetValue(); break;
-      case debug::RegisterID::kX64_r11: native.r11 = value.GetValue(); break;
-      case debug::RegisterID::kX64_r12: native.r12 = value.GetValue(); break;
-      case debug::RegisterID::kX64_r13: native.r13 = value.GetValue(); break;
-      case debug::RegisterID::kX64_r14: native.r14 = value.GetValue(); break;
-      case debug::RegisterID::kX64_r15: native.r15 = value.GetValue(); break;
-      case debug::RegisterID::kX64_rip: native.rip = value.GetValue(); break;
-      case debug::RegisterID::kX64_rflags: native.eflags = value.GetValue(); break;
-      case debug::RegisterID::kX64_fsbase: native.fs_base = value.GetValue(); break;
-      case debug::RegisterID::kX64_gsbase: native.gs_base = value.GetValue(); break;
-      default: return {};  // Validate the entire request before changing the kernel.
+      case debug::RegisterID::kX64_rax:
+        native.rax = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_rbx:
+        native.rbx = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_rcx:
+        native.rcx = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_rdx:
+        native.rdx = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_rsi:
+        native.rsi = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_rdi:
+        native.rdi = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_rbp:
+        native.rbp = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_rsp:
+        native.rsp = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_r8:
+        native.r8 = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_r9:
+        native.r9 = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_r10:
+        native.r10 = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_r11:
+        native.r11 = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_r12:
+        native.r12 = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_r13:
+        native.r13 = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_r14:
+        native.r14 = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_r15:
+        native.r15 = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_rip:
+        native.rip = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_rflags:
+        native.eflags = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_fsbase:
+        native.fs_base = value.GetValue();
+        break;
+      case debug::RegisterID::kX64_gsbase:
+        native.gs_base = value.GetValue();
+        break;
+      default:
+        return {};  // Validate the entire request before changing the kernel.
     }
   }
   if (!SetGeneralRegisters(*current))

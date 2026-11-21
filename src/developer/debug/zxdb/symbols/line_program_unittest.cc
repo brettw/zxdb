@@ -135,10 +135,10 @@ TEST_P(LineProgramVersionTest, Basic) {
             decoded.files);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    LineProgram, LineProgramVersionTest,
-    ::testing::Combine(::testing::Values(2, 3, 4, 5),
-                       ::testing::Values(Builder::Format::kDwarf32, Builder::Format::kDwarf64)));
+INSTANTIATE_TEST_SUITE_P(LineProgram, LineProgramVersionTest,
+                         ::testing::Combine(::testing::Values(2, 3, 4, 5),
+                                            ::testing::Values(Builder::Format::kDwarf32,
+                                                              Builder::Format::kDwarf64)));
 
 TEST(LineProgram, StandardOpcodes) {
   Builder builder = MakeBuilder();
@@ -283,7 +283,7 @@ TEST(LineProgram, SpecialOpcodeEightWithLowOpcodeBase) {
 
 INSTANTIATE_TEST_SUITE_P(
     LineProgram, LineProgramSpecialTest,
-    ::testing::Values(std::make_tuple(-5, 14, 13, 1),  // Clang.
+    ::testing::Values(std::make_tuple(-5, 14, 13, 1),    // Clang.
                       std::make_tuple(-10, 242, 13, 1),  // GCC.
                       std::make_tuple(1, 1, 10, 4),      // DWARF 2 opcode base, 4-byte instrs.
                       std::make_tuple(-3, 12, 1, 1),     // Every nonzero opcode is special.
@@ -341,8 +341,8 @@ TEST(LineProgram, ExtendedOpcodes) {
   Builder builder = MakeBuilder();
   builder.SetAddress(0x1000);
   builder.SetDiscriminator(5);
-  builder.Extended(0, {});                // Zero length: no sub-opcode.
-  builder.Extended(4, {0x80, 1, 2, 3});   // Unknown vendor opcode.
+  builder.Extended(0, {});               // Zero length: no sub-opcode.
+  builder.Extended(4, {0x80, 1, 2, 3});  // Unknown vendor opcode.
   builder.Copy();
   // An end_sequence with a longer length. The extra byte is skipped, so the negate_stmt opcode in
   // it has no effect.
@@ -457,17 +457,14 @@ TEST(LineProgram, StrippedSequences) {
   uint32_t dead = static_cast<uint32_t>(dead_file);
   uint32_t both = static_cast<uint32_t>(both_file);
   std::vector<LineRow> expected = {
-      LineRow(0, dead, 1, 0, kStmt),
-      LineRow(4, both, 1, 0, kStmt),
-      LineRow(8, both, 1, 0, kStmt | kEnd),
-      LineRow(0x1000, live, 1, 0, kStmt),
-      LineRow(0x1004, both, 1, 0, kStmt),
-      LineRow(0x1008, both, 1, 0, kStmt | kEnd),
+      LineRow(0, dead, 1, 0, kStmt),        LineRow(4, both, 1, 0, kStmt),
+      LineRow(8, both, 1, 0, kStmt | kEnd), LineRow(0x1000, live, 1, 0, kStmt),
+      LineRow(0x1004, both, 1, 0, kStmt),   LineRow(0x1008, both, 1, 0, kStmt | kEnd),
   };
   EXPECT_EQ(expected, decoded.rows);
-  EXPECT_EQ((std::vector<uint32_t>{static_cast<uint32_t>(live_file),
-                                   static_cast<uint32_t>(both_file)}),
-            decoded.files);
+  EXPECT_EQ(
+      (std::vector<uint32_t>{static_cast<uint32_t>(live_file), static_cast<uint32_t>(both_file)}),
+      decoded.files);
 
   LineTable table(nullptr, decoded.rows, kFirstCodeAddress);
   ASSERT_EQ(1u, table.GetNumSequences());
@@ -518,9 +515,9 @@ TEST(LineProgram, StrippedSequencesBelowFirstCode) {
   scan = program.value().ScanFiles(0);
   EXPECT_EQ(LineProgramStatus::kOk, scan.status);
   files = scan.file_indices;
-  EXPECT_EQ((std::vector<uint32_t>{static_cast<uint32_t>(live_file),
-                                   static_cast<uint32_t>(dead_file)}),
-            files);
+  EXPECT_EQ(
+      (std::vector<uint32_t>{static_cast<uint32_t>(live_file), static_cast<uint32_t>(dead_file)}),
+      files);
   EXPECT_EQ(2u, LineTable(nullptr, rows, 0).GetNumSequences());
 }
 
@@ -682,10 +679,10 @@ TEST(LineProgram, LebOverflow) {
     uint8_t opcode;
     uint8_t last_byte = 0x02;  // 2^64 after nine 0x80 bytes.
   };
-  for (const Case& c : {Case{"advance_pc", 2}, Case{"advance_line INT64_MAX + 1", 3, 0x01},
-                        Case{"advance_line 2^64", 3}, Case{"set_file", 4},
-                        Case{"set_column", 5}, Case{"set_isa", 12}, Case{"unknown standard", 13},
-                        Case{"extended length", 0}}) {
+  for (const Case& c :
+       {Case{"advance_pc", 2}, Case{"advance_line INT64_MAX + 1", 3, 0x01},
+        Case{"advance_line 2^64", 3}, Case{"set_file", 4}, Case{"set_column", 5},
+        Case{"set_isa", 12}, Case{"unknown standard", 13}, Case{"extended length", 0}}) {
     SCOPED_TRACE(c.name);
     Builder builder = MakeBuilder();
     builder.set_opcode_base(14);
@@ -945,8 +942,8 @@ TEST(LineProgram, IndexedStringBounds) {
 
   for (uint8_t entry_size : {4, 8}) {
     for (uint64_t base : {0, 8}) {
-      SCOPED_TRACE(::testing::Message() << "entry size " << static_cast<int>(entry_size)
-                                        << " base " << base);
+      SCOPED_TRACE(::testing::Message()
+                   << "entry size " << static_cast<int>(entry_size) << " base " << base);
       // The table has one entry, for "first.cc" at offset 0.
       std::string str_offsets(base + entry_size, '\0');
       LineStringSections strings;
@@ -959,8 +956,8 @@ TEST(LineProgram, IndexedStringBounds) {
       const uint64_t wrapping_index = (~uint64_t{0} / entry_size) + 1;
       std::vector<uint8_t> tables = {1, DW_LNCT_path, DW_FORM_string, 1};
       tables.insert(tables.end(), {'/', 'b', 0});
-      tables.insert(tables.end(), {2, DW_LNCT_path, DW_FORM_strx, DW_LNCT_directory_index,
-                                   DW_FORM_udata, 3});
+      tables.insert(tables.end(),
+                    {2, DW_LNCT_path, DW_FORM_strx, DW_LNCT_directory_index, DW_FORM_udata, 3});
       for (uint64_t index : {uint64_t{0}, uint64_t{1}, wrapping_index}) {
         AppendUleb(tables, index);
         tables.push_back(0);  // Directory index.
@@ -972,8 +969,8 @@ TEST(LineProgram, IndexedStringBounds) {
       uint64_t offset = sections.Add(builder);
       sections.Finish();
       llvm::StringRef line = sections.line_section().Data;
-      ErrOr<LineProgram> program = LineProgram::Parse(
-          std::string_view(line.data(), line.size()), offset, true, strings);
+      ErrOr<LineProgram> program =
+          LineProgram::Parse(std::string_view(line.data(), line.size()), offset, true, strings);
       ASSERT_TRUE(program.ok()) << program.err().msg();
       ASSERT_EQ(3u, program.value().header().files.size());
       EXPECT_EQ("first.cc", program.value().header().files[0].name);
@@ -1030,13 +1027,20 @@ TEST(LineProgram, IndexedStringByteOrder) {
         line.Add(builder);
         line.Finish(8, little_endian);
 
-        std::vector<uint8_t> abbrev = {1, DW_TAG_compile_unit, 0,
-                                      DW_AT_stmt_list, DW_FORM_sec_offset,
-                                      DW_AT_str_offsets_base, DW_FORM_sec_offset, 0, 0, 0};
+        std::vector<uint8_t> abbrev = {1,
+                                       DW_TAG_compile_unit,
+                                       0,
+                                       DW_AT_stmt_list,
+                                       DW_FORM_sec_offset,
+                                       DW_AT_str_offsets_base,
+                                       DW_FORM_sec_offset,
+                                       0,
+                                       0,
+                                       0};
         std::vector<uint8_t> info;
         put(info, 5, 2);
         info.push_back(DW_UT_compile);
-        info.push_back(8);  // Address size.
+        info.push_back(8);          // Address size.
         put(info, 0, offset_size);  // Abbreviation offset.
         AppendUleb(info, 1);
         put(info, 0, offset_size);  // Line table offset.
@@ -1050,8 +1054,8 @@ TEST(LineProgram, IndexedStringByteOrder) {
         add("debug_info", contribution(info));
         add("debug_abbrev", abbrev);
         add("debug_str_offsets", contribution(offsets));
-        buffers["debug_str"] = llvm::MemoryBuffer::getMemBufferCopy(
-            llvm::StringRef("pad\0first.cc\0second.cc\0", 23));
+        buffers["debug_str"] =
+            llvm::MemoryBuffer::getMemBufferCopy(llvm::StringRef("pad\0first.cc\0second.cc\0", 23));
         buffers["debug_line"] = llvm::MemoryBuffer::getMemBufferCopy(line.line_section().Data);
         auto context = llvm::DWARFContext::create(buffers, 8, little_endian);
         llvm::DWARFUnit* unit = context->getUnitAtIndex(0);
@@ -1155,8 +1159,8 @@ TEST(LineProgram, TruncatedHeaders) {
         EXPECT_TRUE(LineProgram::Parse(prefix, 0, true, strings).has_error());
       }
 
-      ErrOr<LineProgram> program = LineProgram::Parse(
-          std::string_view(section.data(), section.size()), 0, true, strings);
+      ErrOr<LineProgram> program =
+          LineProgram::Parse(std::string_view(section.data(), section.size()), 0, true, strings);
       ASSERT_TRUE(program.ok()) << program.err().msg();
       LineFileTable names = LineFileTable::FromEntries(program.value().header_files());
       if (version >= 5)
@@ -1245,8 +1249,8 @@ TEST(LineProgram, Dwarf5TableFormats) {
     c.tables.insert(c.tables.end(), 8, 0xab);
   }
   {
-    Case& c = cases.emplace_back(
-        Case{"other content types and forms", {}, {"d/a.cc", nullptr, "b.cc"}});
+    Case& c =
+        cases.emplace_back(Case{"other content types and forms", {}, {"d/a.cc", nullptr, "b.cc"}});
     dirs(c.tables);
     c.tables.push_back(6);
     AppendUleb(c.tables, DW_LNCT_timestamp);
@@ -1273,12 +1277,12 @@ TEST(LineProgram, Dwarf5TableFormats) {
         c.tables.push_back(static_cast<uint8_t>(dir >> (8 * i)));
     };
     entry("a.cc", 1);
-    entry("", 0);  // An empty name in the compilation directory.
+    entry("", 0);       // An empty name in the compilation directory.
     entry("b.cc", 99);  // An invalid directory index.
   }
   {
-    Case& c = cases.emplace_back(
-        Case{"names that can't be decoded", {}, {nullptr, nullptr, "d/c.cc"}});
+    Case& c =
+        cases.emplace_back(Case{"names that can't be decoded", {}, {nullptr, nullptr, "d/c.cc"}});
     dirs(c.tables);
     c.tables.push_back(3);
     AppendUleb(c.tables, DW_LNCT_path);
@@ -1552,8 +1556,8 @@ TEST(LineProgram, EmptyEntries) {
   {
     // A zero-byte entry can have a nonzero directory index. Bulk filling must copy that value.
     std::vector<uint8_t> tables = dirs;
-    tables.insert(tables.end(), {2, DW_LNCT_path, DW_FORM_implicit_const,
-                                 DW_LNCT_directory_index, DW_FORM_flag_present, 3});
+    tables.insert(tables.end(), {2, DW_LNCT_path, DW_FORM_implicit_const, DW_LNCT_directory_index,
+                                 DW_FORM_flag_present, 3});
     Builder builder(5);
     builder.set_raw_tables(tables);
     LineTableTestSections sections;
@@ -1748,8 +1752,8 @@ TEST(LineProgram, FileNamesDwarf4) {
 
 // File name tables for DWARF 5 with each string form, directory index form, and format.
 class LineProgramFileNameTest
-    : public ::testing::TestWithParam<std::tuple<Builder::StringForm, Builder::DirIndexForm, bool,
-                                                 Builder::Format>> {};
+    : public ::testing::TestWithParam<
+          std::tuple<Builder::StringForm, Builder::DirIndexForm, bool, Builder::Format>> {};
 
 TEST_P(LineProgramFileNameTest, Dwarf5) {
   auto [string_form, dir_index_form, md5, format] = GetParam();
@@ -1790,16 +1794,16 @@ TEST_P(LineProgramFileNameTest, Dwarf5) {
   EXPECT_EQ((std::vector<uint32_t>{0, 3}), decoded.files);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    LineProgram, LineProgramFileNameTest,
-    ::testing::Combine(::testing::Values(Builder::StringForm::kString,
-                                         Builder::StringForm::kLineStrp,
-                                         Builder::StringForm::kStrp),
-                       ::testing::Values(Builder::DirIndexForm::kUdata,
-                                         Builder::DirIndexForm::kData1,
-                                         Builder::DirIndexForm::kData2),
-                       ::testing::Bool(),
-                       ::testing::Values(Builder::Format::kDwarf32, Builder::Format::kDwarf64)));
+INSTANTIATE_TEST_SUITE_P(LineProgram, LineProgramFileNameTest,
+                         ::testing::Combine(::testing::Values(Builder::StringForm::kString,
+                                                              Builder::StringForm::kLineStrp,
+                                                              Builder::StringForm::kStrp),
+                                            ::testing::Values(Builder::DirIndexForm::kUdata,
+                                                              Builder::DirIndexForm::kData1,
+                                                              Builder::DirIndexForm::kData2),
+                                            ::testing::Bool(),
+                                            ::testing::Values(Builder::Format::kDwarf32,
+                                                              Builder::Format::kDwarf64)));
 
 TEST(LineProgram, ManyFilesDwarf5) {
   // More than 128 files, so the counts and indices need multi-byte ULEB128 values.

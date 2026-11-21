@@ -126,7 +126,7 @@ TEST(FindLine, GetAllLineTableMatchesInUnitIgnoreInvalidFunctions) {
   rows.push_back(MakeStatementRow(0x1000, 1, 1));  // File #1, line 1.
   rows.push_back(MakeStatementRow(0x1001, 1, 2));
   rows.push_back(MakeStatementRow(0x1002, 1, 1));  // Dupe for file #1, line 1, but
-                                                                  // has no function symbol.
+                                                   // has no function symbol.
   rows.push_back(MakeStatementRow(0x1003, 1, 3));
   rows.push_back(MakeEndSequenceRow(0x1004, 1, 3));
 
@@ -154,7 +154,7 @@ TEST(FindLine, GetAllLineTableMatchesInUnitIgnoreInvalidFunctions_Reverse) {
   rows.push_back(MakeStatementRow(0x1000, 1, 1));  // File #1, line 1.
   rows.push_back(MakeStatementRow(0x1001, 1, 2));
   rows.push_back(MakeStatementRow(0x1002, 1, 1));  // Dupe for file #1, line 1, but
-                                                                  // this one has a function symbol.
+                                                   // this one has a function symbol.
   rows.push_back(MakeStatementRow(0x1003, 1, 3));
   rows.push_back(MakeEndSequenceRow(0x1004, 1, 3));
 

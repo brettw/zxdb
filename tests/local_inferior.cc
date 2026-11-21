@@ -13,8 +13,7 @@ int main(int argc, char** argv) {
   sigprocmask(SIG_SETMASK, nullptr, &mask);
   sigaction(SIGPIPE, nullptr, &action);
   bool expect_ignored = argc > 1 && strcmp(argv[1], "ignored") == 0;
-  if (sigismember(&mask, SIGCHLD) ||
-      action.sa_handler != (expect_ignored ? SIG_IGN : SIG_DFL))
+  if (sigismember(&mask, SIGCHLD) || action.sa_handler != (expect_ignored ? SIG_IGN : SIG_DFL))
     return 99;
   return StandaloneCompute(35) == 42 ? (argc > 1 ? 7 : 0) : 1;
 }

@@ -79,3 +79,26 @@ add_subdirectory(src/developer/debug/zxdb)
 if(BUILD_TESTING)
   add_subdirectory(tests)
 endif()
+
+# "format" reformats the tracked C and C++ files. "check-format" fails if any need formatting.
+find_program(CLANG_FORMAT NAMES clang-format-19 clang-format)
+if(CLANG_FORMAT)
+  add_custom_target(format
+    COMMAND "${CMAKE_COMMAND}" -E env "CLANG_FORMAT=${CLANG_FORMAT}"
+      "${PROJECT_SOURCE_DIR}/scripts/clang-format"
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    COMMENT "Formatting sources with clang-format"
+    USES_TERMINAL
+    VERBATIM
+  )
+  add_custom_target(check-format
+    COMMAND "${CMAKE_COMMAND}" -E env "CLANG_FORMAT=${CLANG_FORMAT}"
+      "${PROJECT_SOURCE_DIR}/scripts/clang-format" --check
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    COMMENT "Checking source formatting with clang-format"
+    USES_TERMINAL
+    VERBATIM
+  )
+else()
+  message(STATUS "clang-format not found. The format and check-format targets are unavailable.")
+endif()

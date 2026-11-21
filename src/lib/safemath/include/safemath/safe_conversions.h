@@ -84,18 +84,14 @@ constexpr bool IsValueInRangeForNumericType(Src value) {
   using SrcType = UnderlyingType<Src>;
   const auto underlying_value = static_cast<SrcType>(value);
   return internal::IsValueInRangeFastOp<Dst, SrcType>::is_supported
-             ? internal::IsValueInRangeFastOp<Dst, SrcType>::Do(
-                   underlying_value)
-             : internal::DstRangeRelationToSrcRange<Dst>(underlying_value)
-                   .IsValid();
+             ? internal::IsValueInRangeFastOp<Dst, SrcType>::Do(underlying_value)
+             : internal::DstRangeRelationToSrcRange<Dst>(underlying_value).IsValid();
 }
 
 // checked_cast<> is analogous to static_cast<> for numeric types,
 // except that it CHECKs that the specified numeric conversion will not
 // overflow or underflow. NaN source will always trigger a CHECK.
-template <typename Dst,
-          class CheckHandler = internal::CheckOnFailure,
-          typename Src>
+template <typename Dst, class CheckHandler = internal::CheckOnFailure, typename Src>
   requires(IsNumeric<Src> && std::is_arithmetic_v<Dst> &&
            std::numeric_limits<Dst>::lowest() < std::numeric_limits<Dst>::max())
 constexpr Dst checked_cast(Src value) {
@@ -142,12 +138,10 @@ constexpr Dst saturated_cast_impl(Src value, RangeCheck constraint) {
   // For some reason clang generates much better code when the branch is
   // structured exactly this way, rather than a sequence of checks.
   return !constraint.IsOverflowFlagSet()
-             ? (!constraint.IsUnderflowFlagSet() ? static_cast<Dst>(value)
-                                                 : S<Dst>::Underflow())
+             ? (!constraint.IsUnderflowFlagSet() ? static_cast<Dst>(value) : S<Dst>::Underflow())
              // Skip this check for integral Src, which cannot be NaN.
-             : (std::is_integral_v<Src> || !constraint.IsUnderflowFlagSet()
-                    ? S<Dst>::Overflow()
-                    : S<Dst>::NaN());
+             : (std::is_integral_v<Src> || !constraint.IsUnderflowFlagSet() ? S<Dst>::Overflow()
+                                                                            : S<Dst>::NaN());
 }
 
 // We can reduce the number of conditions and get slightly better performance
@@ -163,18 +157,14 @@ struct SaturateFastOp {
 };
 
 template <typename Dst, typename Src>
-  requires(std::integral<Src> && std::integral<Dst> &&
-           SaturateFastAsmOp<Dst, Src>::is_supported)
+  requires(std::integral<Src> && std::integral<Dst> && SaturateFastAsmOp<Dst, Src>::is_supported)
 struct SaturateFastOp<Dst, Src> {
   static constexpr bool is_supported = true;
-  static constexpr Dst Do(Src value) {
-    return SaturateFastAsmOp<Dst, Src>::Do(value);
-  }
+  static constexpr Dst Do(Src value) { return SaturateFastAsmOp<Dst, Src>::Do(value); }
 };
 
 template <typename Dst, typename Src>
-  requires(std::integral<Src> && std::integral<Dst> &&
-           !SaturateFastAsmOp<Dst, Src>::is_supported)
+  requires(std::integral<Src> && std::integral<Dst> && !SaturateFastAsmOp<Dst, Src>::is_supported)
 struct SaturateFastOp<Dst, Src> {
   static constexpr bool is_supported = true;
   static constexpr Dst Do(Src value) {
@@ -195,37 +185,32 @@ struct SaturateFastOp<Dst, Src> {
 // that the specified numeric conversion will saturate by default rather than
 // overflow or underflow, and NaN assignment to an integral will return 0.
 // All boundary condition behaviors can be overridden with a custom handler.
-template <typename Dst,
-          template <typename> class SaturationHandler = SaturationDefaultLimits,
+template <typename Dst, template <typename> class SaturationHandler = SaturationDefaultLimits,
           typename Src>
 constexpr Dst saturated_cast(Src value) {
   using SrcType = UnderlyingType<Src>;
   const auto underlying_value = static_cast<SrcType>(value);
-  return !std::is_constant_evaluated() &&
-                 SaturateFastOp<Dst, SrcType>::is_supported &&
-                 std::is_same_v<SaturationHandler<Dst>,
-                                SaturationDefaultLimits<Dst>>
+  return !std::is_constant_evaluated() && SaturateFastOp<Dst, SrcType>::is_supported &&
+                 std::is_same_v<SaturationHandler<Dst>, SaturationDefaultLimits<Dst>>
              ? SaturateFastOp<Dst, SrcType>::Do(underlying_value)
              : saturated_cast_impl<Dst, SaturationHandler, SrcType>(
                    underlying_value,
-                   DstRangeRelationToSrcRange<Dst, SaturationHandler, SrcType>(
-                       underlying_value));
+                   DstRangeRelationToSrcRange<Dst, SaturationHandler, SrcType>(underlying_value));
 }
 
 // strict_cast<> is analogous to static_cast<> for numeric types, except that
 // it will cause a compile failure if the destination type is not large enough
 // to contain any value in the source type. It performs no runtime checking.
 template <typename Dst, typename Src, typename SrcType = UnderlyingType<Src>>
-  requires(
-      IsNumeric<Src> && std::is_arithmetic_v<Dst> &&
-      // If you got here from a compiler error, it's because you tried to assign
-      // from a source type to a destination type that has insufficient range.
-      // The solution may be to change the destination type you're assigning to,
-      // and use one large enough to represent the source.
-      // Alternatively, you may be better served with the checked_cast<> or
-      // saturated_cast<> template functions for your particular use case.
-      kStaticDstRangeRelationToSrcRange<Dst, SrcType> ==
-          NumericRangeRepresentation::kContained)
+  requires(IsNumeric<Src> && std::is_arithmetic_v<Dst> &&
+           // If you got here from a compiler error, it's because you tried to assign
+           // from a source type to a destination type that has insufficient range.
+           // The solution may be to change the destination type you're assigning to,
+           // and use one large enough to represent the source.
+           // Alternatively, you may be better served with the checked_cast<> or
+           // saturated_cast<> template functions for your particular use case.
+           kStaticDstRangeRelationToSrcRange<Dst, SrcType> ==
+               NumericRangeRepresentation::kContained)
 constexpr Dst strict_cast(Src value) {
   return static_cast<Dst>(static_cast<SrcType>(value));
 }
@@ -238,8 +223,7 @@ template <typename Dst, typename Src>
   requires(std::is_arithmetic_v<ArithmeticOrUnderlyingEnum<Dst>> &&
            std::is_arithmetic_v<ArithmeticOrUnderlyingEnum<Src>>)
 inline constexpr bool kIsNumericRangeContained<Dst, Src> =
-    kStaticDstRangeRelationToSrcRange<Dst, Src> ==
-    NumericRangeRepresentation::kContained;
+    kStaticDstRangeRelationToSrcRange<Dst, Src> == NumericRangeRepresentation::kContained;
 
 // StrictNumeric implements compile time range checking between numeric types by
 // wrapping assignment operations in a strict_cast. This class is intended to be
@@ -261,8 +245,7 @@ class StrictNumeric {
 
   // Copy constructor.
   template <typename Src>
-  constexpr StrictNumeric(const StrictNumeric<Src>& rhs)
-      : value_(strict_cast<T>(rhs.value_)) {}
+  constexpr StrictNumeric(const StrictNumeric<Src>& rhs) : value_(strict_cast<T>(rhs.value_)) {}
 
   // This is not an explicit constructor because we implicitly upgrade regular
   // numerics to StrictNumerics to make them easier to use.

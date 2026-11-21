@@ -755,8 +755,8 @@ std::optional<Location> ModuleSymbolsImpl::DwarfLocationForAddress(
           // locations compare identically. This is guaranteed here because file_name will only be
           // set when the line is nonzero.
           if (build_dir_.empty()) {
-            file_line = FileLine(std::move(*file_name),
-                                 found_unit.details_unit->GetCompilationDir(), line);
+            file_line =
+                FileLine(std::move(*file_name), found_unit.details_unit->GetCompilationDir(), line);
           } else {
             file_line = FileLine(std::move(*file_name), build_dir_, line);
           }

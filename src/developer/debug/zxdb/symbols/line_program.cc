@@ -738,8 +738,8 @@ Err ReadV5Tables(DataReader& reader, size_t offset_size, uint8_t address_size,
     uint64_t entry_begin = reader.offset();
     std::optional<std::string_view> dir;
     for (const EntryFormat& format : dir_format.value()) {
-      ErrOr<FormValue> value = ReadForm(reader, format.form, offset_size, address_size, strings,
-                                        header->little_endian);
+      ErrOr<FormValue> value =
+          ReadForm(reader, format.form, offset_size, address_size, strings, header->little_endian);
       if (value.has_error())
         return Err();
       if (format.content_type == llvm::dwarf::DW_LNCT_path)
@@ -763,8 +763,8 @@ Err ReadV5Tables(DataReader& reader, size_t offset_size, uint8_t address_size,
     uint64_t entry_begin = reader.offset();
     LineFileEntry file;
     for (const EntryFormat& format : file_format.value()) {
-      ErrOr<FormValue> value = ReadForm(reader, format.form, offset_size, address_size, strings,
-                                        header->little_endian);
+      ErrOr<FormValue> value =
+          ReadForm(reader, format.form, offset_size, address_size, strings, header->little_endian);
       if (value.has_error())
         return Err();
       switch (format.content_type) {
@@ -933,7 +933,7 @@ ErrOr<LineTableExtent> ReadLineTableExtent(std::string_view line_section, uint64
   // A unit length larger than the section means the rest of the section, like in LLVM.
   extent.begin = reader.offset();
   extent.end = unit_length < line_section.size() - extent.begin ? extent.begin + unit_length
-                                                                 : line_section.size();
+                                                                : line_section.size();
   return extent;
 }
 

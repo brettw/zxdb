@@ -16,4 +16,4 @@
 #endif
 #endif
 
-#endif // LIB_CONTAINERS_OWNERSHIP_H_
+#endif  // LIB_CONTAINERS_OWNERSHIP_H_

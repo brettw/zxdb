@@ -56,6 +56,7 @@ class ThreadCheckingConsole : public MockConsole {
     ASSERT_EQ(owner_, std::this_thread::get_id());
     MockConsole::Write(output, add_newline);
   }
+
  private:
   std::thread::id owner_;
 };

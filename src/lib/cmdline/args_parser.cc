@@ -3,7 +3,6 @@
 // found in the LICENSE file.
 
 #include <lib/cmdline/args_parser.h>
-
 #include <string.h>
 
 #include <algorithm>

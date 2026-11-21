@@ -8,10 +8,8 @@
 // clang-format on
 
 #include "src/developer/debug/debug_agent/linux_utils.h"
-#include "src/developer/debug/shared/logging/logging.h"
 
 #include <ctype.h>
-#include <cstring>
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -20,6 +18,7 @@
 #include <unistd.h>
 #include <zircon/errors.h>
 
+#include <cstring>
 #include <optional>
 #include <sstream>
 
@@ -29,6 +28,7 @@
 
 #include "src/developer/debug/debug_agent/elf_utils.h"
 #include "src/developer/debug/debug_agent/process_handle.h"
+#include "src/developer/debug/shared/logging/logging.h"
 #include "src/lib/files/eintr_wrapper.h"
 #include "src/lib/files/file.h"
 #include "src/lib/fxl/strings/split_string.h"
@@ -82,8 +82,7 @@ std::optional<user_regs_struct> ReadGeneralRegisters(int pid) {
   iovec vec;
   vec.iov_base = &regs;
   vec.iov_len = sizeof(regs);
-  if (ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &vec) == -1 ||
-      vec.iov_len != sizeof(regs)) {
+  if (ptrace(PTRACE_GETREGSET, pid, NT_PRSTATUS, &vec) == -1 || vec.iov_len != sizeof(regs)) {
     return std::nullopt;
   }
   return regs;
@@ -118,9 +117,8 @@ debug::Result<std::vector<MapEntry>, debug::Status> ParseMapsChecked(const std::
     // Flags.
     char r_bit, w_bit, x_bit, s_bit;
     in >> r_bit >> w_bit >> x_bit >> s_bit;
-    if (!in.good() || (r_bit != 'r' && r_bit != '-') ||
-        (w_bit != 'w' && w_bit != '-') || (x_bit != 'x' && x_bit != '-') ||
-        (s_bit != 's' && s_bit != 'p'))
+    if (!in.good() || (r_bit != 'r' && r_bit != '-') || (w_bit != 'w' && w_bit != '-') ||
+        (x_bit != 'x' && x_bit != '-') || (s_bit != 's' && s_bit != 'p'))
       return debug::Status("Malformed procfs mapping.");
     entry.read = r_bit == 'r';
     entry.write = w_bit == 'w';
@@ -226,8 +224,8 @@ std::optional<LdSoInfo> GetLdSoInfo(int pid) {
 
   for (const MapEntry& entry : GetMaps(pid)) {
     if (entry.range.begin() == load_addr) {
-      auto path = fxl::StringPrintf("/proc/%d/map_files/%lx-%lx", pid,
-                                    entry.range.begin(), entry.range.end());
+      auto path = fxl::StringPrintf("/proc/%d/map_files/%lx-%lx", pid, entry.range.begin(),
+                                    entry.range.end());
       if (access(path.c_str(), R_OK) != 0)
         path = fxl::StringPrintf("/proc/%d/root", pid) + entry.path;
       return LdSoInfo{.load_address = load_addr, .path = std::move(path)};
@@ -256,9 +254,7 @@ uint64_t GetLdSoBreakpointAddress(int pid) {
   return 0;
 }
 
-std::map<uint64_t, uint64_t> ReadAuxv(int pid) {
-  return ParseAuxv(ReadProcFile(pid, "auxv"));
-}
+std::map<uint64_t, uint64_t> ReadAuxv(int pid) { return ParseAuxv(ReadProcFile(pid, "auxv")); }
 
 std::map<uint64_t, uint64_t> ParseAuxv(std::string_view contents) {
   std::map<uint64_t, uint64_t> result;

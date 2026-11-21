@@ -10,7 +10,7 @@ namespace zxdb {
 
 const char* VmOpTypeToString(VmOpType op) {
   switch (op) {
-    // clang-format off
+      // clang-format off
     case VmOpType::kError:          return "Error";
     case VmOpType::kUnary:          return "Unary";
     case VmOpType::kBinary:         return "Binary";

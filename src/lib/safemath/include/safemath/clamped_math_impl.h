@@ -51,9 +51,8 @@ constexpr T SaturatedAbsWrapper(T value) {
   // special case of numeric_limits<T>::min(), by evaluating the bit pattern as
   // a signed integer value. If it is the overflow case, we end up subtracting
   // one from the unsigned result, thus saturating to numeric_limits<T>::max().
-  return static_cast<T>(
-      SafeUnsignedAbs(value) -
-      IsValueNegative<T>(static_cast<T>(SafeUnsignedAbs(value))));
+  return static_cast<T>(SafeUnsignedAbs(value) -
+                        IsValueNegative<T>(static_cast<T>(SafeUnsignedAbs(value))));
 }
 
 template <typename T>
@@ -119,8 +118,7 @@ struct ClampedMulOp<T, U> {
       return ClampedMulFastOp<T, U>::template Do<V>(x, y);
     }
     V result = {};
-    const V saturated =
-        CommonMaxOrMin<V>(IsValueNegative(x) ^ IsValueNegative(y));
+    const V saturated = CommonMaxOrMin<V>(IsValueNegative(x) ^ IsValueNegative(y));
     if (CheckedMulOp<T, U>::Do(x, y, &result)) [[likely]] {
       return result;
     }
@@ -256,8 +254,7 @@ struct ClampedMaxOp<T, U> {
   using result_type = MaxExponentPromotion<T, U>;
   template <typename V = result_type>
   static constexpr V Do(T x, U y) {
-    return IsGreater<T, U>::Test(x, y) ? saturated_cast<V>(x)
-                                       : saturated_cast<V>(y);
+    return IsGreater<T, U>::Test(x, y) ? saturated_cast<V>(x) : saturated_cast<V>(y);
   }
 };
 
@@ -270,8 +267,7 @@ struct ClampedMinOp<T, U> {
   using result_type = LowestValuePromotion<T, U>;
   template <typename V = result_type>
   static constexpr V Do(T x, U y) {
-    return IsLess<T, U>::Test(x, y) ? saturated_cast<V>(x)
-                                    : saturated_cast<V>(y);
+    return IsLess<T, U>::Test(x, y) ? saturated_cast<V>(x) : saturated_cast<V>(y);
   }
 };
 

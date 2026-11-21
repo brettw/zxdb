@@ -1,12 +1,12 @@
 #include <pthread.h>
 #include <sched.h>
-#include <sys/mman.h>
-#include <ucontext.h>
-#include <atomic>
 #include <signal.h>
+#include <sys/mman.h>
 #include <sys/wait.h>
+#include <ucontext.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <cstring>
 #include <fstream>
 #include <thread>
@@ -14,24 +14,23 @@
 namespace {
 volatile sig_atomic_t signals = 0;
 void SignalHandler(int) { signals = signals + 1; }
-}
+}  // namespace
 
-extern "C" __attribute__((naked, noinline)) void StepFirst() {
-  asm volatile("nop\nnop\nret");
-}
+extern "C" __attribute__((naked, noinline)) void StepFirst() { asm volatile("nop\nnop\nret"); }
 
 unsigned long step_first_address = reinterpret_cast<unsigned long>(&StepFirst);
 
-extern "C" __attribute__((naked, noinline)) void FaultFirst() {
-  asm volatile("ud2\nret");
-}
+extern "C" __attribute__((naked, noinline)) void FaultFirst() { asm volatile("ud2\nret"); }
 
 int main(int argc, char** argv) {
   if (argc < 2)
     return 2;
   if (!strcmp(argv[1], "shutdown") && argc == 3) {
     std::atomic<bool> done = false;
-    auto worker = [&] { while (!done) usleep(1000); };
+    auto worker = [&] {
+      while (!done)
+        usleep(1000);
+    };
     std::thread first(worker), second(worker);
     std::ofstream(std::string(argv[2]) + ".ready") << getpid();
     StepFirst();
@@ -61,7 +60,10 @@ int main(int argc, char** argv) {
     };
     sigaction(SIGILL, &action, nullptr);
     std::atomic<bool> done = false;
-    std::thread peer([&] { while (!done) usleep(1000); });
+    std::thread peer([&] {
+      while (!done)
+        usleep(1000);
+    });
     FaultFirst();
     done = true;
     peer.join();
@@ -77,7 +79,10 @@ int main(int argc, char** argv) {
     first.join();
     second.join();
   } else if (!strcmp(argv[1], "leader-exit")) {
-    std::thread([] { usleep(20000); _exit(7); }).detach();
+    std::thread([] {
+      usleep(20000);
+      _exit(7);
+    }).detach();
     pthread_exit(nullptr);
   } else if (!strcmp(argv[1], "clone-process") || !strcmp(argv[1], "clone-vm")) {
     size_t size = 1024 * 1024;
@@ -87,7 +92,8 @@ int main(int argc, char** argv) {
     int flags = !strcmp(argv[1], "clone-vm") ? CLONE_VM : 0;
     pid_t pid = clone([](void*) { return 7; }, static_cast<char*>(stack) + size, flags, nullptr);
     int status;
-    if (pid < 0 || waitpid(pid, &status, __WCLONE) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 7)
+    if (pid < 0 || waitpid(pid, &status, __WCLONE) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 7)
       return 3;
     munmap(stack, size);
   } else if (!strcmp(argv[1], "fork")) {
@@ -95,7 +101,8 @@ int main(int argc, char** argv) {
     if (pid == 0)
       _exit(7);
     int status;
-    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 7)
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 7)
       return 3;
   } else if (!strcmp(argv[1], "vfork") || !strcmp(argv[1], "vfork-exit")) {
     bool exec_child = !strcmp(argv[1], "vfork");
@@ -106,7 +113,8 @@ int main(int argc, char** argv) {
       _exit(7);
     }
     int status;
-    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 7)
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 7)
       return 3;
     StepFirst();
   } else if (!strcmp(argv[1], "signal")) {
@@ -127,7 +135,10 @@ int main(int argc, char** argv) {
     execl(argv[0], argv[0], "threads", nullptr);
     return 6;
   } else if (!strcmp(argv[1], "worker-exec")) {
-    std::thread([&] { execl(argv[0], argv[0], "threads", nullptr); _exit(6); }).join();
+    std::thread([&] {
+      execl(argv[0], argv[0], "threads", nullptr);
+      _exit(6);
+    }).join();
   } else if (!strcmp(argv[1], "output")) {
     write(STDOUT_FILENO, "final stdout sentinel\n", 22);
     write(STDERR_FILENO, "final stderr sentinel\n", 22);

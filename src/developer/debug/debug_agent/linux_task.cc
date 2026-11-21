@@ -5,16 +5,17 @@
 #include "src/developer/debug/debug_agent/linux_task.h"
 
 #include <fcntl.h>
-#include <chrono>
-#include <thread>
 #include <lib/syslog/cpp/macros.h>
+#include <sched.h>
 #include <signal.h>
 #include <sys/ptrace.h>
 #include <sys/syscall.h>
-#include <sched.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <zircon/errors.h>
+
+#include <chrono>
+#include <thread>
 
 #include <linux/unistd.h>
 
@@ -30,7 +31,8 @@ namespace debug_agent {
 namespace {
 
 const long kPtraceOpts = PTRACE_O_TRACEEXIT | PTRACE_O_TRACECLONE | PTRACE_O_TRACEEXEC |
-                         PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | PTRACE_O_TRACEVFORKDONE | PTRACE_O_EXITKILL;
+                         PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | PTRACE_O_TRACEVFORKDONE |
+                         PTRACE_O_EXITKILL;
 
 // Checks if the given status code from waitpid() is the given ptrace event.
 bool IsPtraceEvent(int status, int ptrace_event_type) {
@@ -39,9 +41,9 @@ bool IsPtraceEvent(int status, int ptrace_event_type) {
 
 // Returns true for all messages that can be used with PTRACE_GETEVENTMSG.
 bool HasEventMessage(int status) {
-  return IsPtraceEvent(status, PTRACE_EVENT_EXEC) || IsPtraceEvent(status, PTRACE_EVENT_CLONE) || IsPtraceEvent(status, PTRACE_EVENT_EXIT) ||
-         IsPtraceEvent(status, PTRACE_EVENT_FORK) || IsPtraceEvent(status, PTRACE_EVENT_SECCOMP) ||
-         IsPtraceEvent(status, PTRACE_EVENT_VFORK) ||
+  return IsPtraceEvent(status, PTRACE_EVENT_EXEC) || IsPtraceEvent(status, PTRACE_EVENT_CLONE) ||
+         IsPtraceEvent(status, PTRACE_EVENT_EXIT) || IsPtraceEvent(status, PTRACE_EVENT_FORK) ||
+         IsPtraceEvent(status, PTRACE_EVENT_SECCOMP) || IsPtraceEvent(status, PTRACE_EVENT_VFORK) ||
          IsPtraceEvent(status, PTRACE_EVENT_VFORK_DONE);
 }
 
@@ -169,16 +171,17 @@ void LinuxTask::DispatchEvent(const SignalRecord& record) {
     is_attached_ = false;
     ++generation_;
     process_watch_handle_.StopWatching();
-    exit_code_ = WIFEXITED(record.status) ? WEXITSTATUS(record.status)
-                                        : 128 + WTERMSIG(record.status);
+    exit_code_ =
+        WIFEXITED(record.status) ? WEXITSTATUS(record.status) : 128 + WTERMSIG(record.status);
     ++suspend_count_;
     if (vfork_parent_) {
       --suspend_count_;
       CompleteVfork(false);
       return;
     }
-    observer_->OnExited(this, std::make_unique<LinuxExceptionHandle>(
-        debug_ipc::ExceptionType::kThreadExiting, fxl::RefPtr<LinuxTask>(this)));
+    observer_->OnExited(
+        this, std::make_unique<LinuxExceptionHandle>(debug_ipc::ExceptionType::kThreadExiting,
+                                                     fxl::RefPtr<LinuxTask>(this)));
   } else if (WIFSTOPPED(record.status)) {
     OnStopped(record);
   } else if (WIFCONTINUED(record.status)) {
@@ -193,7 +196,8 @@ void LinuxTask::DispatchEvent(const SignalRecord& record) {
 void LinuxTask::OnExec(const SignalRecord& record) {
   unsupported_abi_ = !linux::ReadGeneralRegisters(pid_).has_value();
   if (unsupported_abi_)
-    LOGS(Error) << "Exec did not provide native x86-64 registers; detach to release the unsupported image.";
+    LOGS(Error)
+        << "Exec did not provide native x86-64 registers; detach to release the unsupported image.";
   exiting_ = false;
   single_step_ = false;
   stop_pending_ = false;
@@ -249,7 +253,8 @@ void LinuxTask::OnChild(const SignalRecord& record) {
   // Waiting by child PID preserves an early initial stop in the kernel. Registration
   // also schedules a scan, so no second SIGCHLD is needed when the child stopped first.
   child->process_watch_handle_ = debug::MessageLoopLinux::Current()->WatchChildSignals(
-      child_pid, [weak = weak_factory_.GetWeakPtr(), generation = generation_](int pid, int status) {
+      child_pid,
+      [weak = weak_factory_.GetWeakPtr(), generation = generation_](int pid, int status) {
         if (weak && weak->generation_ == generation && weak->observer_)
           weak->CollectChild(pid, status);
       });
@@ -266,8 +271,8 @@ void LinuxTask::CollectChild(int pid, int status) {
   if (WIFSTOPPED(status)) {
     child->stopped_ = true;
     ++child->suspend_count_;
-    auto exception = std::make_unique<LinuxExceptionHandle>(
-        debug_ipc::ExceptionType::kThreadStarting, child);
+    auto exception =
+        std::make_unique<LinuxExceptionHandle>(debug_ipc::ExceptionType::kThreadStarting, child);
     auto child_status = linux::GetStatus(pid);
     auto parent_status = linux::GetStatus(pid_);
     if (child->vfork_parent_) {
@@ -280,9 +285,9 @@ void LinuxTask::CollectChild(int pid, int status) {
       unsupported_shared_clone_ = true;
       observer_->OnUnsupportedClone(std::move(exception));
       LOGS(Error) << "A non-thread CLONE_VM process is unsupported. Both tasks remain stopped; "
-                    "detach to release them safely.";
-      observer_->OnStopSignal(this, std::make_unique<LinuxExceptionHandle>(
-          fxl::RefPtr<LinuxTask>(this), siginfo_t{}));
+                     "detach to release them safely.";
+      observer_->OnStopSignal(
+          this, std::make_unique<LinuxExceptionHandle>(fxl::RefPtr<LinuxTask>(this), siginfo_t{}));
       return;
     } else
       observer_->OnProcessStarting(std::move(exception));
@@ -432,8 +437,8 @@ void LinuxTask::IncrementSuspendCount() {
   }
   auto record = MakeSignalRecord(pid_, status);
   stopped_ = WIFSTOPPED(status);
-  bool our_stop = stopped_ && (initial_stop_pending_ ||
-      ((status >> 16) == PTRACE_EVENT_STOP && WSTOPSIG(status) == SIGTRAP));
+  bool our_stop = stopped_ && (initial_stop_pending_ || ((status >> 16) == PTRACE_EVENT_STOP &&
+                                                         WSTOPSIG(status) == SIGTRAP));
   initial_stop_pending_ = false;
   if (our_stop) {
     stop_pending_ = false;
@@ -463,14 +468,15 @@ debug::Status LinuxTask::Resume() {
     return last_error_;
   }
   if (unsupported_shared_clone_) {
-    last_error_ = debug::Status("Cannot resume an unsupported shared-address-space clone; detach first.");
+    last_error_ =
+        debug::Status("Cannot resume an unsupported shared-address-space clone; detach first.");
     LOGS(Error) << last_error_.message();
     return last_error_;
   }
   if (!is_attached_ || !stopped_ || terminated_)
     return debug::Status();
-  auto request = group_stopped_ && seized_ ? PTRACE_LISTEN
-                                         : (single_step_ ? PTRACE_SINGLESTEP : PTRACE_CONT);
+  auto request =
+      group_stopped_ && seized_ ? PTRACE_LISTEN : (single_step_ ? PTRACE_SINGLESTEP : PTRACE_CONT);
   if (ptrace(request, pid_, nullptr,
              reinterpret_cast<void*>(static_cast<intptr_t>(resume_signal_))) == -1) {
     last_error_ = debug::ErrnoStatus(errno, "Could not resume task.");

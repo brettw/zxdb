@@ -47,12 +47,13 @@ bool MessageLoopLinux::Init(std::string* error_message) {
     Cleanup();
     return false;
   }
-  signal_fd_watch_ = WatchFD(WatchMode::kRead, signal_fd_.get(),
-      [this](int, bool readable, bool, bool) {
+  signal_fd_watch_ =
+      WatchFD(WatchMode::kRead, signal_fd_.get(), [this](int, bool readable, bool, bool) {
         if (!readable)
           return;
         signalfd_siginfo info;
-        while (HANDLE_EINTR(read(signal_fd_.get(), &info, sizeof(info))) == sizeof(info)) {}
+        while (HANDLE_EINTR(read(signal_fd_.get(), &info, sizeof(info))) == sizeof(info)) {
+        }
         DrainChildSignals();
       });
   return true;

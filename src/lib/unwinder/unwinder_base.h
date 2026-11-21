@@ -5,9 +5,10 @@
 #ifndef SRC_LIB_UNWINDER_UNWINDER_BASE_H_
 #define SRC_LIB_UNWINDER_UNWINDER_BASE_H_
 
+#include <lib/fit/function.h>
+
 #include <vector>
 
-#include <lib/fit/function.h>
 #include "src/lib/unwinder/error.h"
 #include "src/lib/unwinder/frame.h"
 

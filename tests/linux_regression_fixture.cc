@@ -1,17 +1,17 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
-#include <sys/stat.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include <chrono>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <thread>
-#include <filesystem>
 #include <string_view>
+#include <thread>
 
 #include "src/developer/debug/debug_agent/linux_utils.h"
 
@@ -26,8 +26,8 @@ int CheckShutdown(const char* mode, const char* debugger, const char* inferior) 
   std::string marker_path = std::string(directory) + "/released";
   std::ofstream script(script_path);
   script << "[zxdb] set console-mode = shell\n[zxdb] status\nConnected to\n"
-         << "[zxdb] break StepFirst\nCreated Breakpoint\n[zxdb] run " << inferior
-         << " shutdown " << marker_path << "\non bp 1\n";
+         << "[zxdb] break StepFirst\nCreated Breakpoint\n[zxdb] run " << inferior << " shutdown "
+         << marker_path << "\non bp 1\n";
   if (std::string_view(mode) == "detach")
     script << "[zxdb] detach\ndetached.\n";
   if (std::string_view(mode) == "frontend-crash")
@@ -79,7 +79,8 @@ int CheckShutdown(const char* mode, const char* debugger, const char* inferior) 
       break;
     } else if (std::chrono::steady_clock::now() >= deadline) {
       kill(-child, SIGKILL);
-      while (waitpid(-1, &status, 0) > 0 || errno == EINTR) {}
+      while (waitpid(-1, &status, 0) > 0 || errno == EINTR) {
+      }
       failed = true;
       break;
     } else {
@@ -136,7 +137,7 @@ int main(int argc, char** argv) {
   close(fd);
   std::error_code error;
   std::filesystem::copy_file("/proc/self/exe", path,
-                            std::filesystem::copy_options::overwrite_existing, error);
+                             std::filesystem::copy_options::overwrite_existing, error);
   if (error || chmod(path, 0700) != 0) {
     unlink(path);
     return 1;

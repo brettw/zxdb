@@ -4,9 +4,9 @@
 
 #include "src/developer/debug/zxdb/symbols/source_file_indexer.h"
 
-#include <gtest/gtest.h>
-
 #include <thread>
+
+#include <gtest/gtest.h>
 
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program_llvm.h"
@@ -214,8 +214,7 @@ TEST_P(SourceFileIndexerTest, MergesInJobOrder) {
   for (size_t i = offsets.size(); i > 0; i--)
     jobs.push_back(MakeJob(sections, static_cast<uint32_t>(i - 1), offsets[i - 1]));
 
-  SourceFileIndexer indexer(std::move(jobs),
-                            {.thread_count = threads ? 2 : 0});
+  SourceFileIndexer indexer(std::move(jobs), {.thread_count = threads ? 2 : 0});
   EXPECT_EQ(threads ? 2u : 0u, indexer.worker_count());
 
   SourceFileIndexer::FileIndex files;
@@ -339,8 +338,7 @@ TEST_P(SourceFileIndexerStrxTest, ResolvesWithUnit) {
   ASSERT_TRUE(program.ok());
   EXPECT_FALSE(LineFileTable::FromEntries(program.value().header_files()).GetFileName(0));
 
-  SourceFileIndexer indexer(std::move(jobs),
-                            {.thread_count = threads ? 2 : 0});
+  SourceFileIndexer indexer(std::move(jobs), {.thread_count = threads ? 2 : 0});
 
   // Index::CreateIndex() extracts and frees each unit's DIEs while the workers run. Do the same,
   // so FinishInto() must extract the unit DIE again for the string offsets table.

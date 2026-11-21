@@ -5,9 +5,8 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_MOCK_SYMBOL_DATA_PROVIDER_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_MOCK_SYMBOL_DATA_PROVIDER_H_
 
-#include <span>
-
 #include <map>
+#include <span>
 
 #include "src/developer/debug/shared/mock_memory.h"
 #include "src/developer/debug/zxdb/symbols/symbol_data_provider.h"

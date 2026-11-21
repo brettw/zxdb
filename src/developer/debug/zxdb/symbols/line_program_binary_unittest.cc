@@ -2,9 +2,9 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <gtest/gtest.h>
-
 #include <filesystem>
+
+#include <gtest/gtest.h>
 
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
@@ -193,10 +193,8 @@ std::string FixturePath(const char* name) {
 TEST(LineProgramBinary, DecodesTestBinaries) {
   std::string data_dir = TestSymbolModule::GetTestDataDir();
   std::vector<std::string> binaries = {
-      TestSymbolModule::GetTestFileName(),
-      TestSymbolModule::GetCheckedInTestFileName(),
-      data_dir + "fission/fission",
-      data_dir + "fission/main.dwo",
+      TestSymbolModule::GetTestFileName(), TestSymbolModule::GetCheckedInTestFileName(),
+      data_dir + "fission/fission",        data_dir + "fission/main.dwo",
       data_dir + "fission/other.dwo",
   };
   for (const auto& entry : std::filesystem::directory_iterator(data_dir + "line_table"))

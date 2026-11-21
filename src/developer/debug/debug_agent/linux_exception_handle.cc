@@ -21,8 +21,8 @@ LinuxExceptionHandle::LinuxExceptionHandle(fxl::RefPtr<LinuxTask> task, const si
       info_(info) {
   // TRAP_BRKPT can also be a program's ICEBP; only a pending debugger step
   // authorizes interpreting it as step completion.
-  if (info.si_signo == SIGTRAP &&
-      (info.si_code == TRAP_BRKPT || info.si_code == TRAP_TRACE) && !task_->single_step())
+  if (info.si_signo == SIGTRAP && (info.si_code == TRAP_BRKPT || info.si_code == TRAP_TRACE) &&
+      !task_->single_step())
     type_ = debug_ipc::ExceptionType::kGeneral;
   if (info.si_signo == SIGTRAP && info.si_code == TRAP_BRKPT) {
     if (auto regs = linux::ReadGeneralRegisters(task_->pid()); regs && regs->rip) {
@@ -94,8 +94,8 @@ debug_ipc::ExceptionRecord LinuxExceptionHandle::GetRecord() const {
   record.linux_code = info_.si_code;
   if (info_.si_code <= 0)
     record.linux_sender_pid = info_.si_pid;
-  else if (info_.si_signo == SIGSEGV || info_.si_signo == SIGBUS ||
-           info_.si_signo == SIGILL || info_.si_signo == SIGFPE || info_.si_signo == SIGTRAP)
+  else if (info_.si_signo == SIGSEGV || info_.si_signo == SIGBUS || info_.si_signo == SIGILL ||
+           info_.si_signo == SIGFPE || info_.si_signo == SIGTRAP)
     record.linux_address = reinterpret_cast<uint64_t>(info_.si_addr);
   return record;
 }

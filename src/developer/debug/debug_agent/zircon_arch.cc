@@ -2,12 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/developer/debug/debug_agent/arch.h"
-
 #include <zircon/features.h>
 #include <zircon/status.h>
 #include <zircon/syscalls.h>
 
+#include "src/developer/debug/debug_agent/arch.h"
 #include "src/developer/debug/shared/logging/logging.h"
 
 namespace debug_agent {

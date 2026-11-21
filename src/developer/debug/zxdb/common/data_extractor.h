@@ -6,12 +6,11 @@
 #define SRC_DEVELOPER_DEBUG_ZXDB_COMMON_DATA_EXTRACTOR_H_
 
 #include <stdint.h>
-
-#include <span>
 #include <string.h>
 
 #include <algorithm>
 #include <optional>
+#include <span>
 
 namespace zxdb {
 

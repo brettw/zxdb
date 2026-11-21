@@ -5,8 +5,9 @@
 #ifndef SRC_DEVELOPER_DEBUG_SHARED_MESSAGE_LOOP_LINUX_H_
 #define SRC_DEVELOPER_DEBUG_SHARED_MESSAGE_LOOP_LINUX_H_
 
-#include <sys/types.h>
 #include <signal.h>
+#include <sys/types.h>
+
 #include <memory>
 
 #include "src/developer/debug/shared/message_loop_poll.h"

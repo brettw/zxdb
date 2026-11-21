@@ -4,9 +4,8 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf_location.h"
 
-#include <span>
-
 #include <limits>
+#include <span>
 
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugLoc.h"

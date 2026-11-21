@@ -75,9 +75,8 @@ LocalAgentResult ForkLocalAgent(bool inherited_sigpipe_ignored, bool debug_mode)
     // Close the handles the frontend uses.
     client_write.reset();
     agent_read.reset();
-    int exit_code =
-        RunLocalAgent(std::move(client_read), std::move(agent_write),
-                      inherited_sigpipe_ignored, debug_mode);
+    int exit_code = RunLocalAgent(std::move(client_read), std::move(agent_write),
+                                  inherited_sigpipe_ignored, debug_mode);
     return LocalAgentResult(LocalAgentResult::kInForked, exit_code);
   }
 
@@ -86,8 +85,8 @@ LocalAgentResult ForkLocalAgent(bool inherited_sigpipe_ignored, bool debug_mode)
   agent_write.reset();
 
   // The other end gets returned as the Bidi pipe.
-  auto bidi_pipe = std::make_unique<debug::BufferedBidiPipe>(std::move(agent_read),
-                                                             std::move(client_write));
+  auto bidi_pipe =
+      std::make_unique<debug::BufferedBidiPipe>(std::move(agent_read), std::move(client_write));
 
   return LocalAgentResult(child_pid, std::move(bidi_pipe));
 }

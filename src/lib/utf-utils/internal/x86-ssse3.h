@@ -123,8 +123,8 @@ class Ssse3 {
       return Vector(_mm_alignr_epi8(*this, *prev, size_t{16} - N));
     }
 
-    __attribute__((__target__("ssse3"))) Vector Lookup16(
-        const std::array<uint8_t, 16> &table) const {
+    __attribute__((__target__("ssse3"))) Vector
+    Lookup16(const std::array<uint8_t, 16> &table) const {
       return Vector(_mm_shuffle_epi8(Vector::SetRepeat16(table), *this));
     }
 

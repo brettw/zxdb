@@ -828,7 +828,6 @@ TEST(ProcessBreakpoint, HitCount) {
   ASSERT_EQ(0u, process_delegate.bps().size());
 }
 
-
 namespace {
 class FailingMemoryProcess : public MockProcessHandle {
  public:
@@ -855,8 +854,7 @@ class FailingMemoryProcess : public MockProcessHandle {
   bool fail_write = false;
 };
 
-
-}
+}  // namespace
 
 TEST(ProcessBreakpoint, FailedRestorationRetainsOwnership) {
   TestProcessDelegate delegate;

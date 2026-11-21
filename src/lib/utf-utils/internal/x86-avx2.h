@@ -128,8 +128,8 @@ class Avx2 {
                                        size_t{16} - N));
     }
 
-    __attribute__((__target__("avx2"))) Vector Lookup16(
-        const std::array<uint8_t, 16> &table) const {
+    __attribute__((__target__("avx2"))) Vector
+    Lookup16(const std::array<uint8_t, 16> &table) const {
       return Vector(_mm256_shuffle_epi8(Vector::SetRepeat16(table), *this));
     }
 

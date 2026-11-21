@@ -38,7 +38,7 @@ struct LineRow {
   // table can give a line above the int range. Such a line gives 0, which means no line.
   int line_number() const {
     return line <= static_cast<uint32_t>(std::numeric_limits<int>::max()) ? static_cast<int>(line)
-                                                                           : 0;
+                                                                          : 0;
   }
 
   bool operator==(const LineRow& other) const = default;

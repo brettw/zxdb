@@ -1,0 +1,58 @@
+#!/bin/sh
+# Formats the tracked C and C++ files of the repository with clang-format.
+#
+#   scripts/clang-format          Reformats the files in place.
+#   scripts/clang-format --check  Lists the files that need formatting and fails if there are any.
+#
+# Set CLANG_FORMAT to choose the clang-format binary. The style is in .clang-format files. Their
+# directories, such as third_party/, can turn formatting off with DisableFormat.
+set -eu
+
+expected_major=19
+
+mode=fix
+case "${1-}" in
+  "") ;;
+  --check) mode=check ;;
+  *) echo "usage: $0 [--check]" >&2; exit 2 ;;
+esac
+
+if [ -z "${CLANG_FORMAT-}" ]; then
+  CLANG_FORMAT=$(command -v clang-format-$expected_major || command -v clang-format || true)
+fi
+if [ -z "$CLANG_FORMAT" ]; then
+  echo "error: clang-format not found. Install clang-format $expected_major or set CLANG_FORMAT." >&2
+  exit 1
+fi
+
+# Other clang-format versions format some code differently than the version the repository uses.
+version=$("$CLANG_FORMAT" --version | sed -n 's/.*version \([0-9][0-9]*\)\..*/\1/p')
+if [ "$version" != "$expected_major" ]; then
+  echo "warning: $CLANG_FORMAT is version ${version:-unknown}, expected $expected_major." >&2
+fi
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$repo_root"
+
+jobs=$(nproc 2>/dev/null || echo 4)
+files() {
+  git ls-files -z -- '*.c' '*.cc' '*.cpp' '*.h'
+}
+
+if [ "$mode" = fix ]; then
+  files | xargs -0 -r -n 50 -P "$jobs" "$CLANG_FORMAT" -i
+  exit 0
+fi
+
+# Check each file by itself and print the names of the ones that would change. Parallel jobs would
+# interleave the warnings of a combined run.
+export CLANG_FORMAT
+unformatted=$(files | xargs -0 -r -n 50 -P "$jobs" sh -c '
+  for f; do
+    "$CLANG_FORMAT" --dry-run -Werror "$f" >/dev/null 2>&1 || echo "$f"
+  done' sh | sort)
+if [ -n "$unformatted" ]; then
+  echo "$unformatted"
+  echo "These files need formatting. Run scripts/clang-format to fix them." >&2
+  exit 1
+fi

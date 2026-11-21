@@ -9,10 +9,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <cstdlib>
 #include <chrono>
-#include <thread>
+#include <cstdlib>
 #include <memory>
+#include <thread>
 
 #include "src/developer/debug/debug_agent/posix/eintr_wrapper.h"
 #include "src/developer/debug/ipc/protocol.h"

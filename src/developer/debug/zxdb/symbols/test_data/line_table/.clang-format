@@ -1,0 +1,4 @@
+# The line table tests expect the functions in these fixtures at exact source lines. See
+# line_program_binary_unittest.cc. Reformatting could move them, so keep the layout by hand.
+DisableFormat: true
+SortIncludes: false

@@ -5,10 +5,10 @@
 #ifndef SRC_DEVELOPER_DEBUG_SHARED_REGISTER_INFO_H_
 #define SRC_DEVELOPER_DEBUG_SHARED_REGISTER_INFO_H_
 
-#include <span>
 #include <stdint.h>
 
 #include <optional>
+#include <span>
 #include <string>
 
 #include "src/developer/debug/shared/arch.h"

@@ -499,8 +499,7 @@ std::vector<debug::RegisterValue> DebuggedThread::WriteRegisters(
   }
 
   std::vector<debug::RegisterValue> written = thread_handle_->WriteRegisters(regs);
-  if (rip_change && std::any_of(written.begin(), written.end(),
-      [rip_id, &ip](const auto& value) {
+  if (rip_change && std::any_of(written.begin(), written.end(), [rip_id, &ip](const auto& value) {
         return value.id == rip_id && value.GetValue() == ip->GetValue();
       }))
     current_breakpoint_ = nullptr;

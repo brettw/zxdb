@@ -6,6 +6,7 @@
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_LOCATION_H_
 
 #include <lib/fit/function.h>
+
 #include <span>
 
 #include "src/developer/debug/zxdb/symbols/arch.h"

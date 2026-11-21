@@ -4,8 +4,9 @@
 
 #include "src/developer/debug/debug_agent/elf_utils.h"
 
-#include <gtest/gtest.h>
 #include <link.h>
+
+#include <gtest/gtest.h>
 #undef PT_LOAD  // The fixtures use elflib::PT_LOAD.
 #include "src/developer/debug/debug_agent/mock_process_handle.h"
 
@@ -134,8 +135,8 @@ TEST(ElfUtils, DifferentLoadBiases) {
   internal::MergeMmapedModules(modules, maps, [&](uint64_t base) {
     probes.push_back(base);
     uint64_t vaddr = base == 0x400000 ? 0x400000 : 0;
-    return std::optional<internal::ElfSegInfo>({
-        .segment_headers = {{.p_type = elflib::PT_LOAD, .p_vaddr = vaddr, .p_memsz = 0x2000}}});
+    return std::optional<internal::ElfSegInfo>(
+        {.segment_headers = {{.p_type = elflib::PT_LOAD, .p_vaddr = vaddr, .p_memsz = 0x2000}}});
   });
   EXPECT_EQ((std::vector<uint64_t>{0x400000, 0x800000}), probes);
   ASSERT_EQ(2u, modules.size());
@@ -241,11 +242,13 @@ TEST(ElfUtils, MergeMmapedModulesWithHole) {
 
 }  // namespace
 
-
 TEST(ElfUtils, RejectShortAndChangingLoaderReads) {
   MockProcessHandle process(1234);
   int callbacks = 0;
-  auto visit = [&](uint64_t, uint64_t) { ++callbacks; return true; };
+  auto visit = [&](uint64_t, uint64_t) {
+    ++callbacks;
+    return true;
+  };
   process.mock_memory().AddMemory(0x1000, {0});
   EXPECT_TRUE(WalkElfModules(process, 0x1000, visit).has_error());
   r_debug header{};

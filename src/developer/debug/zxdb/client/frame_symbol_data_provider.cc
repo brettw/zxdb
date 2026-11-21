@@ -74,8 +74,7 @@ fxl::RefPtr<SymbolDataProvider> FrameSymbolDataProvider::GetEntryDataProvider() 
       prev_frame->GetSymbolDataProvider());
 }
 
-std::optional<std::span<const uint8_t>> FrameSymbolDataProvider::GetRegister(
-    debug::RegisterID id) {
+std::optional<std::span<const uint8_t>> FrameSymbolDataProvider::GetRegister(debug::RegisterID id) {
   FX_DCHECK(id != debug::RegisterID::kUnknown);
   if (!frame_)
     return std::span<const uint8_t>();  // Synchronously know we don't have the value.

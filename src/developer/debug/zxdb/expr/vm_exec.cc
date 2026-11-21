@@ -203,7 +203,7 @@ Completion VmExecState::ExecOp(const VmOp& op) {
     return ReportError("Execution terminated after max instruction count reached.");
 
   switch (op.op) {
-    // clang-format off
+      // clang-format off
     case VmOpType::kError:          return ExecError(op);
     case VmOpType::kUnary:          return ExecUnary(op);
     case VmOpType::kBinary:         return ExecBinary(op);

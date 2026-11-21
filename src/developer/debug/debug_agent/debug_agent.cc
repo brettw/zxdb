@@ -1068,12 +1068,12 @@ void DebugAgent::LaunchProcess(const debug_ipc::RunBinaryRequest& request,
   reply->process_name = new_process->process_handle().GetName();
 #if defined(__linux__)
   debug::MessageLoop::Current()->PostTask(FROM_HERE,
-      [weak = GetWeakPtr(), pid = reply->process_id]() {
-        if (weak) {
-          if (auto process = weak->GetDebuggedProcess(pid))
-            process->PopulateCurrentThreads();
-        }
-      });
+                                          [weak = GetWeakPtr(), pid = reply->process_id]() {
+                                            if (weak) {
+                                              if (auto process = weak->GetDebuggedProcess(pid))
+                                                process->PopulateCurrentThreads();
+                                            }
+                                          });
 #endif
 }
 

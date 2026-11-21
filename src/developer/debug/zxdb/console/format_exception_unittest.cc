@@ -113,7 +113,6 @@ TEST(FormatException, Arm64ExceptionToString) {
   }
 }
 
-
 TEST(FormatException, LinuxSignalMetadata) {
   ExceptionRecord record;
   record.linux_signal = 11;
@@ -123,7 +122,8 @@ TEST(FormatException, LinuxSignalMetadata) {
   record.linux_signal = 10;
   record.linux_code = -6;
   record.linux_sender_pid = 123;
-  EXPECT_EQ("Linux signal 10 (si_code -6) from PID 123", ExceptionRecordToString(Arch::kX64, record));
+  EXPECT_EQ("Linux signal 10 (si_code -6) from PID 123",
+            ExceptionRecordToString(Arch::kX64, record));
 }
 
 }  // namespace zxdb

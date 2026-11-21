@@ -5,6 +5,7 @@
 #ifndef SRC_LIB_UNWINDER_MEMORY_H_
 #define SRC_LIB_UNWINDER_MEMORY_H_
 
+#include <lib/fit/function.h>
 #include <stdio.h>
 
 #include <cerrno>
@@ -14,7 +15,6 @@
 #include <memory>
 #include <vector>
 
-#include <lib/fit/function.h>
 #include "src/lib/unwinder/error.h"
 
 namespace unwinder {

@@ -4,9 +4,9 @@
 
 #include "src/developer/debug/zxdb/client/elf_memory_region.h"
 
-#include <vector>
-
 #include <zstd.h>
+
+#include <vector>
 
 #include "lib/syslog/cpp/macros.h"
 #include "src/developer/debug/shared/largest_less_or_equal.h"

@@ -21,6 +21,8 @@ sudo apt-get install clang g++ cmake ninja-build llvm-19-dev \
   libdouble-conversion-dev zlib1g-dev libgtest-dev libgmock-dev
 ```
 
+To format code, also install `clang-format`. See [Formatting](#formatting).
+
 The port is tested with Clang 19, LLVM 19, and libstdc++ 14. Older distribution
 releases may need newer compiler and standard library packages. LLVM and zxdb
 must use compatible C++ standard libraries.
@@ -126,6 +128,23 @@ Core selection matters on hybrid CPUs. Keep a baseline test executable and
 alternate runs of the baseline and changed versions. Name demangling is deferred
 until a symbol's display name is requested, so that cost is outside the loading
 measurement. The benchmark also excludes module teardown and later symbol queries.
+
+## Formatting
+
+C and C++ code uses the Fuchsia style in `.clang-format`. Format it with
+clang-format 19, because other versions format some code differently. Debian 13
+provides it in the `clang-format` package.
+
+```sh
+cmake --build build --target format        # Reformat the tracked files.
+cmake --build build --target check-format  # Fail if any file needs formatting.
+```
+
+`scripts/clang-format` does the same without a build directory. Use it with
+`--check` to check only. Code under `third_party/` keeps its upstream style, and
+the line table fixtures in `src/developer/debug/zxdb/symbols/test_data/line_table/`
+keep their source lines for the tests. A `.clang-format` file in each of these
+directories turns formatting off.
 
 ## Imported dependencies and source changes
 

@@ -4,8 +4,6 @@
 
 #include "src/developer/debug/debug_agent/linux_process_handle.h"
 
-#include <algorithm>
-
 #include <fcntl.h>
 #include <inttypes.h>
 #include <signal.h>
@@ -14,6 +12,8 @@
 #include <sys/uio.h>
 #include <sys/wait.h>
 #include <zircon/errors.h>
+
+#include <algorithm>
 
 #include <fbl/unique_fd.h>
 
@@ -119,7 +119,8 @@ debug::Status LinuxProcessHandle::Kill() {
 
 debug::Status LinuxProcessHandle::Attach(ProcessHandleObserver* observer, AttachConfig config) {
   if (!config.claim_exception_channel)
-    return debug::Status("Linux requires a full ptrace attach; observation-only attach is unsupported.");
+    return debug::Status(
+        "Linux requires a full ptrace attach; observation-only attach is unsupported.");
   std::vector<std::unique_ptr<LinuxSuspendHandle>> stops;
   // Freeze every attached task before enumerating again. Attached parents cannot
   // create another thread, and a new kernel child remains in its initial stop.
@@ -150,7 +151,8 @@ debug::Status LinuxProcessHandle::Attach(ProcessHandleObserver* observer, Attach
       }
       if (!linux::ReadGeneralRegisters(pid)) {
         Detach();
-        return debug::Status("Cannot read native x86-64 registers; inferior ABI is unsupported or task exited.");
+        return debug::Status(
+            "Cannot read native x86-64 registers; inferior ABI is unsupported or task exited.");
       }
       added = true;
     }

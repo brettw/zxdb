@@ -21,11 +21,11 @@ namespace internal {
 // Fast saturation to a destination type.
 template <typename Dst, typename Src>
 struct SaturateFastAsmOp {
-  static constexpr bool is_supported =
-      kEnableAsmCode && std::signed_integral<Src> && std::integral<Dst> &&
-      kIntegerBitsPlusSign<Src> <= kIntegerBitsPlusSign<int32_t> &&
-      kIntegerBitsPlusSign<Dst> <= kIntegerBitsPlusSign<int32_t> &&
-      !kIsTypeInRangeForNumericType<Dst, Src>;
+  static constexpr bool is_supported = kEnableAsmCode && std::signed_integral<Src> &&
+                                       std::integral<Dst> &&
+                                       kIntegerBitsPlusSign<Src> <= kIntegerBitsPlusSign<int32_t> &&
+                                       kIntegerBitsPlusSign<Dst> <= kIntegerBitsPlusSign<int32_t> &&
+                                       !kIsTypeInRangeForNumericType<Dst, Src>;
 
   __attribute__((always_inline)) static Dst Do(Src value) {
     int32_t src = value;
@@ -33,15 +33,13 @@ struct SaturateFastAsmOp {
       int32_t result;
       asm("ssat %[dst], %[shift], %[src]"
           : [dst] "=r"(result)
-          : [src] "r"(src), [shift] "n"(
-                                std::min(kIntegerBitsPlusSign<Dst>, 32)));
+          : [src] "r"(src), [shift] "n"(std::min(kIntegerBitsPlusSign<Dst>, 32)));
       return static_cast<Dst>(result);
     } else {
       uint32_t result;
       asm("usat %[dst], %[shift], %[src]"
           : [dst] "=r"(result)
-          : [src] "r"(src), [shift] "n"(
-                                std::min(kIntegerBitsPlusSign<Dst>, 31)));
+          : [src] "r"(src), [shift] "n"(std::min(kIntegerBitsPlusSign<Dst>, 31)));
       return static_cast<Dst>(result);
     }
   }

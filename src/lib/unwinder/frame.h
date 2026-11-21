@@ -53,7 +53,8 @@ struct Frame {
   // which has a predictable and short instruction sequence. This approach is only taken in the case
   // the CFI unwinder failed to find the 'S' augmentation.
   //
-  // [1]: https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=libgcc/unwind-dw2.c;h=883b1c7a13dbdf620e64724a2179ffcbfdfa9c69;hb=HEAD#l498
+  // [1]:
+  // https://gcc.gnu.org/git/?p=gcc.git;a=blob;f=libgcc/unwind-dw2.c;h=883b1c7a13dbdf620e64724a2179ffcbfdfa9c69;hb=HEAD#l498
   // [2]: https://github.com/llvm/llvm-project/blob/main/libunwind/src/DwarfParser.hpp#L395
   bool is_signal_frame = false;
 

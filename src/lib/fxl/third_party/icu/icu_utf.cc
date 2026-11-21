@@ -17,9 +17,9 @@
 *   that would otherwise be too long as macros.
 */
 
-#include <stddef.h>
-
 #include "src/lib/fxl/third_party/icu/icu_utf.h"
+
+#include <stddef.h>
 
 namespace fxl_icu {
 

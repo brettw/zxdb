@@ -125,7 +125,8 @@ std::vector<debug_ipc::Module> GetElfModulesForProcess(const ProcessHandle& proc
       size_t num_read = 0;
       if (process
               .ReadMemory(lmap + offsetof(link_map, l_name), &str_addr, sizeof(str_addr), &num_read)
-              .has_error() || num_read != sizeof(str_addr))
+              .has_error() ||
+          num_read != sizeof(str_addr))
         return false;
 
       if (ReadNullTerminatedString(process, str_addr, &module.name).has_error())
@@ -288,9 +289,8 @@ void MergeMmapedModules(std::vector<debug_ipc::Module>& modules,
       name = *soname;
     }
 
-    modules.push_back(debug_ipc::Module{.name = std::move(name),
-                                        .base = load_bias,
-                                        .build_id = std::move(opt_info->build_id)});
+    modules.push_back(debug_ipc::Module{
+        .name = std::move(name), .base = load_bias, .build_id = std::move(opt_info->build_id)});
   }
 }
 

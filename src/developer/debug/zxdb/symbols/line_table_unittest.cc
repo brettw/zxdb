@@ -4,9 +4,9 @@
 
 #include "src/developer/debug/zxdb/symbols/line_table.h"
 
-#include <gtest/gtest.h>
-
 #include <algorithm>
+
+#include <gtest/gtest.h>
 
 #include "src/developer/debug/zxdb/symbols/line_details.h"
 #include "src/developer/debug/zxdb/symbols/line_table_test_support.h"
@@ -103,7 +103,7 @@ TEST(LineTable, GetRowForAddress) {
   // Valid query for sequence added later.
   result = table.GetRowForAddress(context, 0x1104);
   ASSERT_FALSE(result.empty());
-  EXPECT_EQ(1u, result.symbolizable_index);  // Index within newer sequence.
+  EXPECT_EQ(1u, result.symbolizable_index);              // Index within newer sequence.
   EXPECT_EQ(0x103u, result.get_symbolizable().address);  // Line before queried address.
   EXPECT_EQ(result.symbolizable_index, result.statement_index);
 
@@ -296,9 +296,9 @@ TEST(LineTable, Sequences) {
 
 TEST(LineTable, SequenceViews) {
   // A marker-only sequence is present but cannot cover an address. A default view is absent.
-  LineTable table = MakeLineTable({"file.cc"}, {MakeEndSequenceRow(0x100, 1, 1),
-                                               MakeStatementRow(0x200, 1, 2),
-                                               MakeEndSequenceRow(0x210, 1, 2)});
+  LineTable table =
+      MakeLineTable({"file.cc"}, {MakeEndSequenceRow(0x100, 1, 1), MakeStatementRow(0x200, 1, 2),
+                                  MakeEndSequenceRow(0x210, 1, 2)});
   auto marker_only = table.GetSequenceAt(0);
   EXPECT_FALSE(marker_only.empty());
   EXPECT_TRUE(marker_only.rows().empty());
@@ -394,9 +394,9 @@ TEST(LineTable, OverlappingSequences) {
     uint64_t address;
     uint32_t line;  // 0 means not found.
   };
-  for (Case c : {Case{0x0fff, 0}, Case{0x1000, 1}, Case{0x1010, 1}, Case{0x1020, 2},
-                 Case{0x1030, 1}, Case{0x1044, 3}, Case{0x1048, 1}, Case{0x1050, 0},
-                 Case{0x2008, 4}, Case{0x2010, 0}}) {
+  for (Case c :
+       {Case{0x0fff, 0}, Case{0x1000, 1}, Case{0x1010, 1}, Case{0x1020, 2}, Case{0x1030, 1},
+        Case{0x1044, 3}, Case{0x1048, 1}, Case{0x1050, 0}, Case{0x2008, 4}, Case{0x2010, 0}}) {
     SCOPED_TRACE(c.address);
     LineTable::FoundRow found = table.GetRowForAddress(context, c.address);
     if (c.line == 0) {
@@ -423,20 +423,20 @@ TEST(LineTable, FileNames) {
 
 TEST(LineTable, GetLineDetails) {
   SymbolContext context(0x10000);
-  LineTable table = MakeLineTable(
-      {"file.cc", "other.cc"}, {
-                                   MakeStatementRow(0x100, 1, 5),
-                                   MakeStatementRow(0x104, 1, 5),  // Same line.
-                                   MakeStatementRow(0x108, 1, 0),  // Compiler-generated.
-                                   MakeStatementRow(0x10c, 1, 5),
-                                   // Two rows at one address. The last one describes the code.
-                                   MakeStatementRow(0x110, 2, 7),
-                                   MakeStatementRow(0x110, 1, 8),
-                                   MakeEndSequenceRow(0x118, 1, 8),
-                                   // The next sequence has the same line but isn't joined.
-                                   MakeStatementRow(0x118, 1, 8),
-                                   MakeEndSequenceRow(0x120, 1, 8),
-                               });
+  LineTable table = MakeLineTable({"file.cc", "other.cc"},
+                                  {
+                                      MakeStatementRow(0x100, 1, 5),
+                                      MakeStatementRow(0x104, 1, 5),  // Same line.
+                                      MakeStatementRow(0x108, 1, 0),  // Compiler-generated.
+                                      MakeStatementRow(0x10c, 1, 5),
+                                      // Two rows at one address. The last one describes the code.
+                                      MakeStatementRow(0x110, 2, 7),
+                                      MakeStatementRow(0x110, 1, 8),
+                                      MakeEndSequenceRow(0x118, 1, 8),
+                                      // The next sequence has the same line but isn't joined.
+                                      MakeStatementRow(0x118, 1, 8),
+                                      MakeEndSequenceRow(0x120, 1, 8),
+                                  });
 
   LineDetails details =
       table.GetLineDetails(context, 0x10106, LineTable::LineExtentMode::kSameLine, "/build");

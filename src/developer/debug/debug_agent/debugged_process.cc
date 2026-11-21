@@ -589,7 +589,8 @@ void DebuggedProcess::OnExec() {
   dl_debug_addr_ = linux::GetLdSoDebugAddress(koid());
   if (uint64_t address = linux::GetLdSoBreakpointAddress(koid())) {
     loader_breakpoint_ = std::make_unique<Breakpoint>(debug_agent_, true);
-    auto status = loader_breakpoint_->SetSettings("Internal shared library load breakpoint", koid(), address);
+    auto status =
+        loader_breakpoint_->SetSettings("Internal shared library load breakpoint", koid(), address);
     if (status.has_error())
       LOGS(Warn) << status.message();
   }

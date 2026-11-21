@@ -6,6 +6,7 @@
 #define SRC_LIB_UUID_UUID_H_
 
 #include <string.h>
+
 #include <array>
 #include <cstdint>
 #include <iosfwd>

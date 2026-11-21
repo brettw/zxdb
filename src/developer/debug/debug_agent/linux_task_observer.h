@@ -8,6 +8,7 @@
 #include <signal.h>
 
 #include <memory>
+
 #include "src/lib/fxl/memory/ref_ptr.h"
 
 namespace debug_agent {

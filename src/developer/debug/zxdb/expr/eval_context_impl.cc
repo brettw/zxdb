@@ -4,8 +4,9 @@
 
 #include "src/developer/debug/zxdb/expr/eval_context_impl.h"
 
-#include <span>
 #include <lib/syslog/cpp/macros.h>
+
+#include <span>
 
 #include "src/developer/debug/shared/message_loop.h"
 #include "src/developer/debug/shared/register_info.h"
