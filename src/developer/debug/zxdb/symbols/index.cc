@@ -174,14 +174,15 @@ class UnitIndexer {
  public:
   // All passed-in objects must outlive this class.
   explicit UnitIndexer(const DwarfUnit& unit, int32_t dwo_index)
-      : unit_(unit), dwo_index_(dwo_index), scanner_(unit), name_decoder_(*unit.GetBinary()) {
+      : unit_(unit),
+        dwo_index_(dwo_index),
+        scanner_(unit),
+        name_decoder_(*unit.GetBinary(), kNameAttrs),
+        type_decoder_(*unit.GetBinary(), kTypeAttrs) {
     // The indexable array is 1:1 with the scanner entries.
     indexable_.resize(scanner_.die_count());
 
     path_.reserve(8);  // Don't want to reallocate.
-
-    // Set up the name decoder to extract to this local.
-    name_decoder_.AddCString(llvm::dwarf::DW_AT_name, &name_decoder_name_);
   }
 
   // Forces indexing to go through the slow path (AddStandaloneEntryToIndex() instead of
@@ -246,34 +247,21 @@ class UnitIndexer {
 
   // Used to decode names for DIEs in the second pass when we find one we need that wasn't extracted
   // in the first.
+  static constexpr llvm::dwarf::Attribute kNameAttrs[] = {llvm::dwarf::DW_AT_name};
   DwarfDieDecoder name_decoder_;
-  std::optional<const char*> name_decoder_name_;
+
+  // Used to decode the types of template parameters.
+  static constexpr llvm::dwarf::Attribute kTypeAttrs[] = {llvm::dwarf::DW_AT_type};
+  DwarfDieDecoder type_decoder_;
 };
 
 // The symbol storage will be filled with the indexable entries.
 void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
-  DwarfDieDecoder decoder(*unit_.GetBinary());
-
-  // The offset of the declaration. This can be unit-relative or .debug_info-relative (global).
-  llvm::DWARFDie decl_die;
-  decoder.AddReference(llvm::dwarf::DW_AT_specification, &decl_die);
-
-  std::optional<bool> is_declaration;
-  decoder.AddBool(llvm::dwarf::DW_AT_declaration, &is_declaration);
-
-  bool has_const_value = false;
-  decoder.AddPresenceCheck(llvm::dwarf::DW_AT_const_value, &has_const_value);
-
-  std::optional<bool> is_main_subprogram;
-  decoder.AddBool(llvm::dwarf::DW_AT_main_subprogram, &is_main_subprogram);
-
-  std::optional<const char*> name;
-  decoder.AddCString(llvm::dwarf::DW_AT_name, &name);
-
-  bool has_abstract_origin = false;
-  decoder.AddPresenceCheck(llvm::dwarf::DW_AT_abstract_origin, &has_abstract_origin);
-
-  // IF YOU ADD MORE ATTRIBUTES HERE don't forget to reset() them before Decode().
+  static constexpr llvm::dwarf::Attribute kAttrs[] = {
+      llvm::dwarf::DW_AT_specification, llvm::dwarf::DW_AT_declaration,
+      llvm::dwarf::DW_AT_const_value,   llvm::dwarf::DW_AT_main_subprogram,
+      llvm::dwarf::DW_AT_name,          llvm::dwarf::DW_AT_abstract_origin};
+  DwarfDieDecoder decoder(*unit_.GetBinary(), kAttrs);
 
   for (; !scanner_.done(); scanner_.Advance()) {
     const llvm::DWARFDebugInfoEntry* die = scanner_.Prepare();
@@ -293,23 +281,12 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
         continue;
     }
 
-    // This DIE is of the type we want to index so decode. Must reset all output vars first.
-    is_declaration.reset();
-    has_const_value = false;
-    decl_die = llvm::DWARFDie();
-    is_main_subprogram.reset();
-    name.reset();
-    has_abstract_origin = false;
+    // This DIE is of the type we want to index so decode.
     if (!decoder.Decode(llvm::DWARFDie(unit_.GetLLVMUnit(), die)))
       continue;
 
-    // Compute the offset of a separate declaration if this DIE has one.
-    uint64_t decl_offset = 0;
-    if (decl_die)
-      decl_offset = decl_die.getOffset();
-
     if (kind == IndexNode::Kind::kVar && die->getTag() == llvm::dwarf::DW_TAG_member &&
-        !has_const_value) {
+        !decoder.Has(llvm::dwarf::DW_AT_const_value)) {
       // An abstract origin can supply the constant value, so confirm its presence after decoding.
       //
       // In C++ everything with a const_value will generally also be external (i.e. "static") which
@@ -337,15 +314,10 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
       // Unfortunately, we need to decode again here to get the actual type instantiation. This
       // should be relatively quick and there should still be an overall speedup when using
       // -gsimple-template-names due to the drastically reduced symbol size.
-      llvm::DWARFDie type_die;
-      DwarfDieDecoder type_decoder(*unit_.GetBinary());
-      type_decoder.AddReference(llvm::dwarf::DW_AT_type, &type_die);
-
-      if (!type_decoder.Decode(llvm::DWARFDie(unit_.GetLLVMUnit(), die))) {
+      if (!type_decoder_.Decode(llvm::DWARFDie(unit_.GetLLVMUnit(), die)))
         continue;
-      }
 
-      if (type_die.isValid()) {
+      if (llvm::DWARFDie type_die = type_decoder_.GetReference(llvm::dwarf::DW_AT_type)) {
         AddTemplateParameterToName(fixup_template_name, type_die.getShortName());
         parent.set_name(std::move(fixup_template_name));
         parent.set_has_modified_template_name();
@@ -354,15 +326,24 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
       continue;
     }
 
+    // Compute the offset of a separate declaration if this DIE has one. This can be unit-relative
+    // or .debug_info-relative (global).
+    uint64_t decl_offset = 0;
+    if (llvm::DWARFDie decl_die = decoder.GetReference(llvm::dwarf::DW_AT_specification))
+      decl_offset = decl_die.getOffset();
+
     FX_DCHECK(scanner_.die_index() < indexable_.size());
+    std::optional<bool> is_declaration = decoder.GetBool(llvm::dwarf::DW_AT_declaration);
     auto ref_kind = is_declaration && *is_declaration ? IndexNode::SymbolRef::kDwarfDeclaration
                                                       : IndexNode::SymbolRef::kDwarf;
 
-    indexable_[scanner_.die_index()] =
-        NamedSymbolRef(ref_kind, dwo_index_, unit_.GetDieRef(die->getOffset()), kind,
-                       name ? *name : "", decl_offset, has_abstract_origin);
+    std::optional<const char*> name = decoder.GetCString(llvm::dwarf::DW_AT_name);
+    indexable_[scanner_.die_index()] = NamedSymbolRef(
+        ref_kind, dwo_index_, unit_.GetDieRef(die->getOffset()), kind, name ? *name : "",
+        decl_offset, decoder.Has(llvm::dwarf::DW_AT_abstract_origin));
 
     // Check for "main" function annotation.
+    std::optional<bool> is_main_subprogram = decoder.GetBool(llvm::dwarf::DW_AT_main_subprogram);
     if (kind == IndexNode::Kind::kFunction && is_main_subprogram && *is_main_subprogram)
       main_functions->emplace_back(IndexNode::SymbolRef::kDwarf, dwo_index_,
                                    unit_.GetDieRef(die->getOffset()));
@@ -440,9 +421,10 @@ IndexNode::Kind UnitIndexer::GetKindForDie(const llvm::DWARFDebugInfoEntry* die)
 }
 
 const char* UnitIndexer::GetDieName(uint32_t index) {
-  name_decoder_name_.reset();
-  if (name_decoder_.Decode(unit_.GetLLVMDieAtIndex(index)) && name_decoder_name_)
-    return *name_decoder_name_;
+  if (name_decoder_.Decode(unit_.GetLLVMDieAtIndex(index))) {
+    if (std::optional<const char*> name = name_decoder_.GetCString(llvm::dwarf::DW_AT_name))
+      return *name;
+  }
   return "";
 }
 
@@ -755,22 +737,18 @@ void Index::IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, bool forc
 // for just that compilation unit. The skeleton unit has the addr_base which defines how addresses
 // are relocated from the link-independent .dwo file, as well as the line table.
 void Index::IndexSkeletonCompileUnit(const DwarfUnit& unit, const llvm::DWARFDie& unit_die) {
-  DwarfDieDecoder unit_decoder(*unit.GetBinary());
-
-  std::optional<const char*> dwo_name;
-  unit_decoder.AddCString(llvm::dwarf::DW_AT_dwo_name, &dwo_name);
-
-  std::optional<const char*> gnu_dwo_name;
-  unit_decoder.AddCString(llvm::dwarf::DW_AT_GNU_dwo_name, &gnu_dwo_name);
-
-  std::optional<const char*> comp_dir;
-  unit_decoder.AddCString(llvm::dwarf::DW_AT_comp_dir, &comp_dir);
-
-  std::optional<uint64_t> addr_base;
-  unit_decoder.AddSectionOffset(llvm::dwarf::DW_AT_addr_base, &addr_base);
-
+  static constexpr llvm::dwarf::Attribute kAttrs[] = {
+      llvm::dwarf::DW_AT_dwo_name, llvm::dwarf::DW_AT_GNU_dwo_name, llvm::dwarf::DW_AT_comp_dir,
+      llvm::dwarf::DW_AT_addr_base};
+  DwarfDieDecoder unit_decoder(*unit.GetBinary(), kAttrs);
   if (!unit_decoder.Decode(unit_die))
     return;
+
+  std::optional<const char*> dwo_name = unit_decoder.GetCString(llvm::dwarf::DW_AT_dwo_name);
+  std::optional<const char*> gnu_dwo_name =
+      unit_decoder.GetCString(llvm::dwarf::DW_AT_GNU_dwo_name);
+  std::optional<const char*> comp_dir = unit_decoder.GetCString(llvm::dwarf::DW_AT_comp_dir);
+  std::optional<uint64_t> addr_base = unit_decoder.GetSectionOffset(llvm::dwarf::DW_AT_addr_base);
   if ((!dwo_name && !gnu_dwo_name) || !addr_base)
     return;  // Need a name for the .dwo file to work, plus an address.
 

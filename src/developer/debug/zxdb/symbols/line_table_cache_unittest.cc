@@ -41,11 +41,10 @@ std::optional<std::string> DecodeDeclFile(llvm::DWARFContext& context, llvm::DWA
   for (size_t i = 0; i < child_index; i++)
     die = die.getSibling();
 
-  DwarfDieDecoder decoder(&context);
-  std::optional<std::string> decl_file;
-  decoder.AddFile(llvm::dwarf::DW_AT_decl_file, &decl_file);
+  static constexpr llvm::dwarf::Attribute kAttrs[] = {llvm::dwarf::DW_AT_decl_file};
+  DwarfDieDecoder decoder(&context, kAttrs);
   EXPECT_TRUE(decoder.Decode(die));
-  return decl_file;
+  return decoder.GetFile(llvm::dwarf::DW_AT_decl_file);
 }
 
 }  // namespace
@@ -152,7 +151,7 @@ TEST(LineTableCache, UnitWithoutLineTable) {
   EXPECT_EQ(std::nullopt, DecodeDeclFile(sections.mutable_context(), unit, 0));
 }
 
-TEST(DwarfDieDecoder, AddFileDefinedByProgram) {
+TEST(DwarfDieDecoder, GetFileDefinedByProgram) {
   // DW_AT_decl_file can reference a file that DW_LNE_define_file adds.
   LineTableTestSections sections;
   uint64_t offset = AddDefineFileTable(sections);
@@ -165,7 +164,7 @@ TEST(DwarfDieDecoder, AddFileDefinedByProgram) {
   EXPECT_EQ(std::nullopt, DecodeDeclFile(sections.mutable_context(), unit, 2));
 }
 
-TEST(DwarfDieDecoder, AddFileStrx) {
+TEST(DwarfDieDecoder, GetFileStrx) {
   // File names with DW_FORM_strx1 resolve through the unit's string offsets table.
   Builder builder(5);
   builder.set_string_form(Builder::StringForm::kStrx1);

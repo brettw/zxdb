@@ -364,7 +364,7 @@ decoded rows (`DecodeAndCheck()`).
   the file table once, also after a second decode (`DefineFile`). A file
   defined in a table without header files, and an opcode length shorter than
   the operands (`DefineFileEdgeCases`). `DW_AT_decl_file` can reference the
-  defined file (`DwarfDieDecoder.AddFileDefinedByProgram`).
+  defined file (`DwarfDieDecoder.GetFileDefinedByProgram`).
 - The file scan with `DW_LNE_define_file` (`DefineFileScan`):
   - A row that references a file before the opcode that defines it, with and
     without later rows for that file, and in a stripped sequence.
@@ -485,11 +485,11 @@ decoded rows (`DecodeAndCheck()`).
 - Without `DW_LNE_define_file`, decoding keeps the header's table, and
   `Clear()` drops it (`SharesHeaderTableWithoutDefineFile`).
 - A line table offset outside the section (`BadLineTable`), and a unit
-  without `DW_AT_stmt_list`, for which `AddFile()` finds no file
+  without `DW_AT_stmt_list`, for which `GetFile()` finds no file
   (`UnitWithoutLineTable`).
-- `DwarfDieDecoder::AddFile()` with a header file, a file that
+- `DwarfDieDecoder::GetFile()` with a header file, a file that
   `DW_LNE_define_file` adds, an index that no table has
-  (`AddFileDefinedByProgram`), and a `DW_FORM_strx1` name (`AddFileStrx`).
+  (`GetFileDefinedByProgram`), and a `DW_FORM_strx1` name (`GetFileStrx`).
 
 **LineTable queries** (`line_table_unittest.cc`, `find_line_unittest.cc`)
 

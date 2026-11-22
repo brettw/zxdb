@@ -5,49 +5,65 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_DIE_DECODER_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_DIE_DECODER_H_
 
+#include <array>
 #include <optional>
+#include <span>
 #include <string>
-#include <utility>
+#include <vector>
 
-#include "lib/fit/function.h"
 #include "llvm/BinaryFormat/Dwarf.h"
-#include "llvm/DebugInfo/DWARF/DWARFDataExtractor.h"
+#include "llvm/DebugInfo/DWARF/DWARFDie.h"
+#include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
+#include "src/developer/debug/zxdb/symbols/const_value.h"
 #include "src/lib/fxl/macros.h"
 
 namespace llvm {
 class DWARFUnit;
 class DWARFContext;
-class DWARFDataExtractor;
-class DWARFDebugInfoEntry;
-class DWARFDie;
-class DWARFFormValue;
 }  // namespace llvm
 
 namespace zxdb {
 
-class ConstValue;
 class DwarfBinary;
 
 // Decodes the desired attributes of a given DWARF Debug Info Entry ("DIE").
 //
-// This transparently follows DW_AT_abstract_origin attributes. This is used to implement
-// "inheritance" of DIEs.
+// The caller gives a table of the attributes it wants when it creates the decoder. Decode() reads
+// one DIE and keeps the raw form value of each attribute in the table. The Get*() functions then
+// convert the kept values. Decode() clears the values of the previous DIE, so one decoder can
+// decode many DIEs.
 //
-// To use, create once for the unit and register the output variables with the Add* functions. Then
-// loop through the relevant entries. In the loop first reset() the output variables (so you can
-// tell which were set), then call Decode().
+//   static constexpr llvm::dwarf::Attribute kAttrs[] = {llvm::dwarf::DW_AT_name,
+//                                                       llvm::dwarf::DW_AT_type};
+//   DwarfDieDecoder decoder(binary, kAttrs);
+//   if (!decoder.Decode(die))
+//     return Error();
+//   std::optional<const char*> name = decoder.GetCString(llvm::dwarf::DW_AT_name);
+//   llvm::DWARFDie type = decoder.GetReference(llvm::dwarf::DW_AT_type);
+//
+// The decoder doesn't allocate memory. It keeps the values in a fixed array, so a table can have
+// at most kMaxAttributes attributes.
+//
+// This transparently follows DW_AT_abstract_origin attributes. This is used to implement
+// "inheritance" of DIEs. An attribute on a DIE overrides the same attribute on its abstract origin.
 class DwarfDieDecoder {
  public:
-  // Callback for handling form values. This takes the unit in addition to the form value.
-  // llvm::DWARFFormValue::getUnit() exists but this won't always be set (depending on the decode
-  // path, currently the implicit constant path ignores it) and there's currently no API to set it
-  // explicitly. As a result, if the unit is needed, always use the passed-in parameter rather than
+  static constexpr size_t kMaxAttributes = 16;
+
+  // One attribute that Decode() found. The unit is the unit of the DIE that has the attribute. An
+  // abstract origin can be in a different unit than the decoded DIE.
+  //
+  // llvm::DWARFFormValue::getUnit() exists but this won't always be set (the implicit constant
+  // path doesn't set it). As a result, if the unit is needed, always use the unit here rather than
   // getUnit().
-  using AttributeHandler = fit::function<void(llvm::DWARFUnit*, const llvm::DWARFFormValue&)>;
+  struct AttributeValue {
+    llvm::DWARFUnit* unit = nullptr;  // Null when the attribute isn't present.
+    llvm::DWARFFormValue form;
+  };
 
   // DW_AT_high_pc is special: If it is of class "address", it's an address, and if it's of class
   // "constant" it's an unsigned integer offset from the low PC. This struct encodes whether it was
-  // a constant or not in the output. Use with AddHighPC().
+  // a constant or not in the output. Use with GetHighPC().
   struct HighPC {
     HighPC() = default;
     HighPC(bool c, uint64_t v) : is_constant(c), value(v) {}
@@ -56,43 +72,58 @@ class DwarfDieDecoder {
     uint64_t value = 0;
   };
 
-  // The context/binary must outlive this class. Prefer the DwarfBinary version when possible.
-  explicit DwarfDieDecoder(llvm::DWARFContext* context);
-  explicit DwarfDieDecoder(DwarfBinary& binary);
+  // The context or binary, and the attribute table, must outlive this class. A static constexpr
+  // array is a good attribute table. Prefer the DwarfBinary version when possible.
+  DwarfDieDecoder(llvm::DWARFContext* context, std::span<const llvm::dwarf::Attribute> attributes);
+  DwarfDieDecoder(DwarfBinary& binary, std::span<const llvm::dwarf::Attribute> attributes);
   ~DwarfDieDecoder();
 
-  // Adds a check for the given attribute. If the attribute is encountered, the given boolean will
-  // be set to true. You can share a bool pointer between different calls to AddPresenceCheck() to
-  // check if any of a set of attributes is available. It does not check the type of validity of the
-  // attribute.
-  //
-  // The output pointer must remain valid until the last call to Decode() has returned.
-  void AddPresenceCheck(llvm::dwarf::Attribute attribute, bool* present);
+  // Decodes one DIE. Returns true on success, false means the DIE was corrupt. After a failure, the
+  // values are incomplete.
+  bool Decode(const llvm::DWARFDie& die);
 
-  // These register for a given attribute, and call the similarly-named function in
-  // llvm::DWARFFormValue to extract the attribute and place it into the given output variable.
+  // The functions below get the values of the last decoded DIE. The attribute must be in the table
+  // given to the constructor.
   //
-  // The output pointers must remain valid until the last call to Decode() has returned.
-  void AddBool(llvm::dwarf::Attribute attribute, std::optional<bool>* output);
-  void AddUnsignedConstant(llvm::dwarf::Attribute attribute, std::optional<uint64_t>* output);
-  void AddSignedConstant(llvm::dwarf::Attribute attribute, std::optional<int64_t>* output);
-  void AddAddress(llvm::dwarf::Attribute attribute, std::optional<uint64_t>* output);
-  void AddHighPC(std::optional<HighPC>* output);
-  void AddCString(llvm::dwarf::Attribute attribute, std::optional<const char*>* output);
-  void AddConstValue(llvm::dwarf::Attribute attribute, ConstValue* const_value);
-  void AddSectionOffset(llvm::dwarf::Attribute attribute, std::optional<uint64_t>* offset);
-  void AddBlock(llvm::dwarf::Attribute attribute, std::optional<std::vector<uint8_t>>* block);
+  // The functions that return an optional return nullopt when the attribute isn't present or when
+  // its form can't be converted to the requested type.
+
+  // Returns true when the attribute is present. This doesn't check the form of the attribute.
+  bool Has(llvm::dwarf::Attribute attribute) const;
+
+  // Returns the raw value, or null when the attribute isn't present. Use this for attributes that
+  // can have more than one encoding.
+  const AttributeValue* GetValue(llvm::dwarf::Attribute attribute) const;
+
+  // These call the similarly-named function in llvm::DWARFFormValue.
+  std::optional<bool> GetBool(llvm::dwarf::Attribute attribute) const;
+  std::optional<uint64_t> GetUnsignedConstant(llvm::dwarf::Attribute attribute) const;
+  std::optional<int64_t> GetSignedConstant(llvm::dwarf::Attribute attribute) const;
+  std::optional<uint64_t> GetAddress(llvm::dwarf::Attribute attribute) const;
+  std::optional<const char*> GetCString(llvm::dwarf::Attribute attribute) const;
+
+  // The returned section offset is the raw value. The caller must find the ELF section that it
+  // references and interpret it.
+  std::optional<uint64_t> GetSectionOffset(llvm::dwarf::Attribute attribute) const;
+
+  // Accepts the block and exprloc form classes.
+  std::optional<std::vector<uint8_t>> GetBlock(llvm::dwarf::Attribute attribute) const;
+
+  // Returns an unset ConstValue when the attribute isn't present or has an unsupported form.
+  ConstValue GetConstValue(llvm::dwarf::Attribute attribute) const;
+
+  // Requires DW_AT_high_pc in the attribute table.
+  std::optional<HighPC> GetHighPC() const;
 
   // For cross-DIE references. Note that the resulting DIE may not be in the same unit. If the
-  // attribute doesn't exist or is invalid, this DIE will be !isValid().
-  void AddReference(llvm::dwarf::Attribute attribute, llvm::DWARFDie* output);
+  // attribute doesn't exist or is invalid, the returned DIE will be !isValid().
+  llvm::DWARFDie GetReference(llvm::dwarf::Attribute attribute) const;
 
-  // Extract a file name. File names (e.g. for DW_AT_decl_file) are not strings but rather indices
-  // into the file name table for the corresponding unit. This accessor resolves the string
-  // automatically.
-  void AddFile(llvm::dwarf::Attribute attribute, std::optional<std::string>* output);
+  // Gets a file name. File names (e.g. for DW_AT_decl_file) are not strings but rather indices
+  // into the file name table for the corresponding unit. This function resolves the string.
+  std::optional<std::string> GetFile(llvm::dwarf::Attribute attribute) const;
 
-  // A special handler to get the parent of the most deep abstract origin.
+  // Returns the parent of the deepest abstract origin of the last decoded DIE.
   //
   // Most DIEs can have an "abstract origin" which is another DIE that underlays values.
   // Theoretically abstract origins can be linked into arbitrarily long chains. In the current Clang
@@ -106,24 +137,13 @@ class DwarfDieDecoder {
   // the parent of the abstract origin will be the namespace or class that lexically encloses that
   // function.
   //
-  // This function will cause the parent of the deepest abstract origin to be placed into the given
-  // output when the DIE is decoded.
-  //
-  // If there is no abstract origin, this will be filled in with the regular parent of the DIE. The
-  // only case the output should be !isValid() is when decoding a toplevel DIE with no parent.
-  void AddAbstractParent(llvm::DWARFDie* output);
+  // If there is no abstract origin, this returns the regular parent of the DIE. The only case the
+  // result should be !isValid() is when decoding a toplevel DIE with no parent.
+  llvm::DWARFDie GetAbstractParent() const;
 
-  // Extracts data with a custom callback. When the attribute is encountered, the callback is
-  // executed with the associated form value. This can be used to cover attributes that could be
-  // encoded using multiple different encodings.
-  void AddCustom(llvm::dwarf::Attribute attribute, AttributeHandler callback);
-
-  // Decode one info entry. Returns true on success, false means the DIE was corrupt. The outputs
-  // for each encountered attribute will be set.
-  bool Decode(const llvm::DWARFDie& die);
-
- public:
-  using Dispatch = std::pair<llvm::dwarf::Attribute, AttributeHandler>;
+ private:
+  // Returns the index of the attribute in attributes_, or attributes_.size() if it isn't there.
+  size_t FindIndex(llvm::dwarf::Attribute attribute) const;
 
   // Backend for Decode() above.
   //
@@ -134,25 +154,20 @@ class DwarfDieDecoder {
   bool DecodeInternal(const llvm::DWARFDie& die, int abstract_origin_refs_to_follow);
 
   // Decodes a cross-DIE reference. Return value will be !isValid() on failure.
-  llvm::DWARFDie DecodeReference(llvm::DWARFUnit* unit, const llvm::DWARFFormValue& form);
+  llvm::DWARFDie DecodeReference(llvm::DWARFUnit* unit, const llvm::DWARFFormValue& form) const;
 
   llvm::DWARFContext* context_;
   const DwarfBinary* binary_ = nullptr;
 
-  // Normally there will be few attributes and a brute-force search through a contiguous array will
-  // be faster than a map lookup.
-  std::vector<Dispatch> attrs_;
+  std::span<const llvm::dwarf::Attribute> attributes_;
 
-  // Non-null indicates that the caller has requested the abstract parent (see AddAbstractParent()
-  // above) be computed. This variable will hold the desired output location for the parent of the
-  // decoded DIE.
-  llvm::DWARFDie* abstract_parent_ = nullptr;
+  // The values of the last decoded DIE, with the same indices as attributes_. Decode() fills the
+  // value of an attribute only once, so the DIE nearest to the decoded DIE in the abstract origin
+  // chain gives the value.
+  std::array<AttributeValue, kMaxAttributes> values_;
 
-  // Used during decode. This should be cleared each time a new DIE is decoded and tracks which
-  // attributes have been seen across recursive calls of DecodeInternal (following abstract
-  // references). This prevents us from decoding the same attribute more than once across abstract
-  // origins (we always want the first one).
-  std::vector<llvm::dwarf::Attribute> seen_attrs_;
+  // The deepest DIE in the abstract origin chain of the last decoded DIE. See GetAbstractParent().
+  llvm::DWARFDie deepest_die_;
 
   FXL_DISALLOW_COPY_AND_ASSIGN(DwarfDieDecoder);
 };

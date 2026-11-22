@@ -13,14 +13,12 @@ namespace {
 
 // Returns the DW_AT_Name for the given DIE or the empty string on failure.
 std::string GetDIEName(llvm::DWARFContext* context, const llvm::DWARFDie& die) {
-  DwarfDieDecoder decoder(context);
-
-  std::optional<const char*> name;
-  decoder.AddCString(llvm::dwarf::DW_AT_name, &name);
-
-  if (!decoder.Decode(die) || !name)
+  static constexpr llvm::dwarf::Attribute kAttrs[] = {llvm::dwarf::DW_AT_name};
+  DwarfDieDecoder decoder(context, kAttrs);
+  if (!decoder.Decode(die))
     return std::string();
-  return std::string(*name);
+  std::optional<const char*> name = decoder.GetCString(llvm::dwarf::DW_AT_name);
+  return name ? std::string(*name) : std::string();
 }
 
 }  // namespace
