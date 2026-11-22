@@ -707,6 +707,45 @@ TEST(DwarfSymbolFactory, TypeUnitReference) {
     GTEST_SKIP() << "The GCC type unit fixtures weren't built.";
 }
 
+TEST(DwarfSymbolFactory, AddrxOffsetLowPc) {
+  // A DW_AT_low_pc of DW_FORM_LLVM_addrx_offset is an address table entry plus an offset.
+  std::string path = TestSymbolModule::GetTestDataDir() + "addrx_offset/clang_addrx_offset.so";
+  if (!std::filesystem::exists(path))
+    GTEST_SKIP() << "The fixture needs Clang.";
+
+  TestSymbolModule setup(path, "");
+  ASSERT_TRUE(setup.Init().ok());
+  llvm::DWARFContext* context = setup.symbols()->binary()->GetLLVMContext();
+  const std::map<std::string, llvm::ELF::Elf64_Sym>& elf_symbols =
+      setup.symbols()->binary()->GetELFSymbols();
+
+  int addrx_offset_count = 0;
+  for (const char* name : {"AddrxOffsetFirst", "AddrxOffsetSecond", "AddrxOffsetThird"}) {
+    SCOPED_TRACE(name);
+
+    // Count the functions whose fixture uses the form that this test is for.
+    llvm::DWARFDie die =
+        GetFirstDieOfTagAndName(context, context->getUnitAtIndex(0), DwarfTag::kSubprogram, name);
+    ASSERT_TRUE(die);
+    static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kLowPc};
+    DwarfDieDecoder decoder(context, kAttrs);
+    ASSERT_TRUE(decoder.Decode(die));
+    const DwarfDieDecoder::AttributeValue* low_pc = decoder.GetValue(DwarfAttr::kLowPc);
+    ASSERT_TRUE(low_pc);
+    if (static_cast<DwarfForm>(low_pc->form.getForm()) == DwarfForm::kLlvmAddrxOffset)
+      addrx_offset_count++;
+
+    // The function starts at the address of its ELF symbol.
+    fxl::RefPtr<Function> function = GetFunctionWithName(setup.symbols(), {name});
+    ASSERT_TRUE(function);
+    auto elf_symbol = elf_symbols.find(function->linkage_name());
+    ASSERT_NE(elf_symbols.end(), elf_symbol);
+    ASSERT_FALSE(function->code_ranges().empty());
+    EXPECT_EQ(elf_symbol->second.st_value, function->code_ranges()[0].begin());
+  }
+  EXPECT_EQ(2, addrx_offset_count);
+}
+
 // TODO(brettw) test using statements. See GetUsing() in type_test.cc
 
 }  // namespace zxdb

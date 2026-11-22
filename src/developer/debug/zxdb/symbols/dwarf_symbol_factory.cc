@@ -13,6 +13,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFSection.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/shared/logging/logging.h"
+#include "src/developer/debug/zxdb/common/checked_math.h"
 #include "src/developer/debug/zxdb/symbols/array_type.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
 #include "src/developer/debug/zxdb/symbols/call_site.h"
@@ -1240,7 +1241,18 @@ std::optional<uint64_t> DwarfSymbolFactory::GetAddrFromFormValue(
   }
 
   uint64_t addr = 0;
-  if (IsAddrXForm(form)) {
+  if (form == DwarfForm::kLlvmAddrxOffset) {
+    // The value has an index into the address table in the high 32 bits and an offset from that
+    // address in the low 32 bits. An optimized-out base address stays optimized out.
+    uint64_t value = form_value.getRawUValue();
+    std::optional<uint64_t> base = GetAddrFromIndex(unit, value >> 32);
+    if (!base || *base == std::numeric_limits<uint64_t>::max())
+      return std::nullopt;
+    std::optional<uint64_t> sum = CheckedAdd(*base, value & 0xffffffff);
+    if (!sum)
+      return std::nullopt;
+    addr = *sum;
+  } else if (IsAddrXForm(form)) {
     // Lookup in the address table.
     uint64_t index = form_value.getRawUValue();
     if (std::optional<uint64_t> opt_addr = GetAddrFromIndex(unit, index)) {

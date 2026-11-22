@@ -339,6 +339,26 @@ if(ZXDB_GXX)
 endif()
 add_custom_target(zxdb_type_unit_fixtures DEPENDS ${type_unit_fixture_outputs})
 add_dependencies(zxdb_tests zxdb_type_unit_fixtures)
+# A Clang binary whose functions use DW_FORM_LLVM_addrx_offset for DW_AT_low_pc.
+# dwarf_symbol_factory_unittest.cc checks the function addresses. The fixture needs Clang.
+set(addrx_offset_fixture_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/addrx_offset")
+set(addrx_offset_fixture_source
+  "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/addrx_offset/addrx_offset_fixture.cc")
+set(addrx_offset_fixture_outputs)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set(output "${addrx_offset_fixture_dir}/clang_addrx_offset.so")
+  add_custom_command(
+    OUTPUT "${output}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${addrx_offset_fixture_dir}"
+    COMMAND "${CMAKE_CXX_COMPILER}" -g -gdwarf-5 -O0 -mllvm -minimize-addr-in-v5=Form -shared -fPIC
+      -Wl,--build-id "-fdebug-prefix-map=${PROJECT_SOURCE_DIR}=../.." -o "${output}"
+      "${addrx_offset_fixture_source}"
+    DEPENDS "${addrx_offset_fixture_source}"
+    VERBATIM)
+  list(APPEND addrx_offset_fixture_outputs "${output}")
+endif()
+add_custom_target(zxdb_addrx_offset_fixtures DEPENDS ${addrx_offset_fixture_outputs})
+add_dependencies(zxdb_tests zxdb_addrx_offset_fixtures)
 # A .dwo file with a type unit that references the .debug_line.dwo table. Only the .dwo goes into the
 # fixture directory: the object file has relocations that the comparison test doesn't apply.
 set(line_table_split_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/line_table_split")
