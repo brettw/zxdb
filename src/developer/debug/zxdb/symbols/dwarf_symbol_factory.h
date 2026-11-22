@@ -5,6 +5,9 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_SYMBOL_FACTORY_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_SYMBOL_FACTORY_H_
 
+#include <span>
+
+#include <llvm/BinaryFormat/Dwarf.h>
 #include <llvm/DebugInfo/DWARF/DWARFAddressRange.h>
 #include <llvm/Support/Error.h>  // For llvm::Expected.
 
@@ -25,6 +28,7 @@ class AddressRanges;
 class BaseType;
 class CompileUnit;
 class DwarfBinaryImpl;
+class DwarfDieDecoder;
 class LazySymbol;
 class ModuleSymbols;
 class UncachedLazySymbol;
@@ -70,6 +74,10 @@ class DwarfSymbolFactory : public SymbolFactory {
   UncachedLazySymbol MakeUncachedLazy(const llvm::DWARFDie& die) const;
 
   llvm::DWARFContext* GetLLVMContext() const;
+
+  // Makes a decoder for the given attribute table. The decoder uses the binary, so it finds type
+  // unit signatures and file tables in the binary's caches.
+  DwarfDieDecoder MakeDecoder(std::span<const llvm::dwarf::Attribute> attributes) const;
 
   // Internal version that creates a symbol from a Die.
   fxl::RefPtr<Symbol> DecodeSymbol(const llvm::DWARFDie& die) const;

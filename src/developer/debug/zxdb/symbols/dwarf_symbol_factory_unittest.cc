@@ -4,15 +4,18 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf_symbol_factory.h"
 
+#include <filesystem>
 #include <initializer_list>
 
 #include <gtest/gtest.h>
 
+#include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "src/developer/debug/shared/string_util.h"
 #include "src/developer/debug/zxdb/symbols/array_type.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
 #include "src/developer/debug/zxdb/symbols/collection.h"
 #include "src/developer/debug/zxdb/symbols/data_member.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_test_util.h"
 #include "src/developer/debug/zxdb/symbols/enumeration.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
@@ -639,6 +642,64 @@ TEST(DwarfSymbolFactory, TemplateParams) {
   auto second_type = second_param->type().Get()->As<Type>();
   ASSERT_TRUE(second_type);
   EXPECT_EQ("int", second_type->GetFullName());
+}
+
+TEST(DwarfSymbolFactory, TypeUnitReference) {
+  // GCC references types in type units directly with DW_FORM_ref_sig8. The DWARF 4 fixture has the
+  // type units in .debug_types and the DWARF 5 fixture has them in .debug_info.
+  bool found_fixture = false;
+  for (const char* name : {"gcc_dwarf4", "gcc_dwarf5"}) {
+    SCOPED_TRACE(name);
+    std::string path = TestSymbolModule::GetTestDataDir() + "type_unit/" + name + ".so";
+    if (!std::filesystem::exists(path))
+      continue;  // The GCC fixtures are optional.
+    found_fixture = true;
+
+    TestSymbolModule setup(path, "");
+    ASSERT_TRUE(setup.Init().ok());
+
+    // Check that the fixture has the reference form that this test is for.
+    llvm::DWARFContext* context = setup.symbols()->binary()->GetLLVMContext();
+    llvm::DWARFDie var_die;
+    for (const std::unique_ptr<llvm::DWARFUnit>& unit : context->info_section_units()) {
+      if (unit->isTypeUnit())
+        continue;
+      var_die = GetFirstDieOfTagAndName(context, unit.get(), llvm::dwarf::DW_TAG_variable,
+                                        "type_unit_outer");
+      if (var_die)
+        break;
+    }
+    ASSERT_TRUE(var_die);
+    std::optional<llvm::DWARFFormValue> type_form = var_die.find(llvm::dwarf::DW_AT_type);
+    ASSERT_TRUE(type_form);
+    ASSERT_EQ(llvm::dwarf::DW_FORM_ref_sig8, type_form->getForm());
+
+    ResolveOptions options;
+    options.symbolize = true;
+    std::vector<Location> locs = setup.symbols()->ResolveInputLocation(
+        SymbolContext::ForRelativeAddresses(),
+        InputLocation(TestSymbolModule::SplitName("type_unit_outer")), options);
+    ASSERT_EQ(1u, locs.size());
+    const Variable* var = locs[0].symbol().Get()->As<Variable>();
+    ASSERT_TRUE(var);
+
+    const Collection* outer = var->type().Get()->As<Collection>();
+    ASSERT_TRUE(outer);
+    EXPECT_EQ("TypeUnitOuter", outer->GetFullName());
+    ASSERT_EQ(2u, outer->data_members().size());
+
+    const DataMember* inner = outer->data_members()[0].Get()->As<DataMember>();
+    ASSERT_TRUE(inner);
+    EXPECT_EQ("inner", inner->GetAssignedName());
+    EXPECT_EQ("TypeUnitInner", inner->type().Get()->GetFullName());
+
+    const DataMember* ptr = outer->data_members()[1].Get()->As<DataMember>();
+    ASSERT_TRUE(ptr);
+    EXPECT_EQ("ptr", ptr->GetAssignedName());
+    EXPECT_EQ("TypeUnitInner*", ptr->type().Get()->GetFullName());
+  }
+  if (!found_fixture)
+    GTEST_SKIP() << "The GCC type unit fixtures weren't built.";
 }
 
 // TODO(brettw) test using statements. See GetUsing() in type_test.cc

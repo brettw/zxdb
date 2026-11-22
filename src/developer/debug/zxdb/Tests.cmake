@@ -313,6 +313,29 @@ if(ZXDB_GXX)
   zxdb_add_line_table_fixture(gcc_dwarf4_gc "${ZXDB_GXX}" -gdwarf-4 -O2 -Wl,--gc-sections)
   zxdb_add_line_table_fixture(gcc_dwarf5 "${ZXDB_GXX}" -gdwarf-5 -O0)
 endif()
+# GCC binaries with type units, in .debug_types for DWARF 4 and in .debug_info for DWARF 5. GCC
+# references the types in type units directly with DW_FORM_ref_sig8. dwarf_symbol_factory_unittest.cc
+# resolves these references. The fixtures are optional.
+set(type_unit_fixture_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/type_unit")
+set(type_unit_fixture_source
+  "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/type_unit/type_unit_fixture.cc")
+set(type_unit_fixture_outputs)
+if(ZXDB_GXX)
+  foreach(version 4 5)
+    set(output "${type_unit_fixture_dir}/gcc_dwarf${version}.so")
+    add_custom_command(
+      OUTPUT "${output}"
+      COMMAND "${CMAKE_COMMAND}" -E make_directory "${type_unit_fixture_dir}"
+      COMMAND "${ZXDB_GXX}" -g -gdwarf-${version} -fdebug-types-section -shared -fPIC
+        -Wl,--build-id "-fdebug-prefix-map=${PROJECT_SOURCE_DIR}=../.." -o "${output}"
+        "${type_unit_fixture_source}"
+      DEPENDS "${type_unit_fixture_source}"
+      VERBATIM)
+    list(APPEND type_unit_fixture_outputs "${output}")
+  endforeach()
+endif()
+add_custom_target(zxdb_type_unit_fixtures DEPENDS ${type_unit_fixture_outputs})
+add_dependencies(zxdb_tests zxdb_type_unit_fixtures)
 # A .dwo file with a type unit that references the .debug_line.dwo table. Only the .dwo goes into the
 # fixture directory: the object file has relocations that the comparison test doesn't apply.
 set(line_table_split_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/line_table_split")
