@@ -85,6 +85,23 @@ const char* GetVendorFormName(DwarfForm form) {
 
 }  // namespace
 
+bool DwarfFormIsBlock(DwarfForm form) {
+  return form == DwarfForm::kBlock || form == DwarfForm::kBlock1 || form == DwarfForm::kBlock2 ||
+         form == DwarfForm::kBlock4;
+}
+
+bool DwarfFormIsConstant(DwarfForm form) {
+  return form == DwarfForm::kData1 || form == DwarfForm::kData2 || form == DwarfForm::kData4 ||
+         form == DwarfForm::kData8 || form == DwarfForm::kData16 || form == DwarfForm::kSdata ||
+         form == DwarfForm::kUdata || form == DwarfForm::kImplicitConst;
+}
+
+bool DwarfFormIsAddress(DwarfForm form) {
+  return form == DwarfForm::kAddr || form == DwarfForm::kAddrx || form == DwarfForm::kAddrx1 ||
+         form == DwarfForm::kAddrx2 || form == DwarfForm::kAddrx3 || form == DwarfForm::kAddrx4 ||
+         form == DwarfForm::kGnuAddrIndex || form == DwarfForm::kLlvmAddrxOffset;
+}
+
 std::string DwarfFormToString(DwarfForm form, bool include_number) {
   unsigned int_form = static_cast<unsigned>(form);
   const char* name = nullptr;

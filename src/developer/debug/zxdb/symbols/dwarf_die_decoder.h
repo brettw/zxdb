@@ -81,6 +81,11 @@ class DwarfDieDecoder {
   // values are incomplete.
   bool Decode(const llvm::DWARFDie& die);
 
+  // Controls whether Decode() follows DW_AT_abstract_origin attributes. The default is true. When
+  // false, Decode() reads only the given DIE. GetAbstractParent() then gives the parent of that
+  // DIE.
+  void set_follow_abstract_origins(bool follow) { follow_abstract_origins_ = follow; }
+
   // The functions below get the values of the last decoded DIE. The attribute must be in the table
   // given to the constructor.
   //
@@ -168,8 +173,15 @@ class DwarfDieDecoder {
   // The deepest DIE in the abstract origin chain of the last decoded DIE. See GetAbstractParent().
   llvm::DWARFDie deepest_die_;
 
+  bool follow_abstract_origins_ = true;
+
   FXL_DISALLOW_COPY_AND_ASSIGN(DwarfDieDecoder);
 };
+
+// Returns the DIE that the DW_AT_abstract_origin attribute of the given DIE references. This
+// doesn't follow the abstract origin of that DIE. Returns an invalid DIE if the DIE has no abstract
+// origin or the reference is invalid.
+llvm::DWARFDie GetAbstractOrigin(const llvm::DWARFDie& die);
 
 }  // namespace zxdb
 

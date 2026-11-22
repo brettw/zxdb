@@ -6,8 +6,6 @@
 
 #include <algorithm>
 
-#include <llvm/BinaryFormat/Dwarf.h>
-
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFDataExtractor.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugInfoEntry.h"
@@ -834,11 +832,12 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeInheritedFrom(const llvm::DWARFDie
   std::vector<uint8_t> offset_expression;
   if (const DwarfDieDecoder::AttributeValue* value =
           decoder.GetValue(DwarfAttr::kDataMemberLocation)) {
-    if (value->form.isFormClass(llvm::DWARFFormValue::FC_Exprloc)) {
+    DwarfForm form = static_cast<DwarfForm>(value->form.getForm());
+    if (form == DwarfForm::kExprloc) {
       // Location expression.
       llvm::ArrayRef<uint8_t> block = *value->form.getAsBlock();
       offset_expression.assign(block.data(), block.data() + block.size());
-    } else if (value->form.isFormClass(llvm::DWARFFormValue::FC_Constant)) {
+    } else if (DwarfFormIsConstant(form)) {
       // Constant value.
       member_offset = value->form.getAsUnsignedConstant();
     }
@@ -1176,7 +1175,7 @@ std::optional<AddressRange> DwarfSymbolFactory::GetLowHighEncodedCodeRange(
   const DwarfDieDecoder::AttributeValue* low = decoder.GetValue(DwarfAttr::kLowPc);
   const DwarfDieDecoder::AttributeValue* high = decoder.GetValue(DwarfAttr::kHighPc);
   // Note that the "high pc" has an offset form so don't check that it has an FC_Address form yet.
-  if (!low || !high || !low->form.isFormClass(llvm::DWARFFormValue::FC_Address)) {
+  if (!low || !high || !DwarfFormIsAddress(static_cast<DwarfForm>(low->form.getForm()))) {
     return std::nullopt;
   }
 
@@ -1234,15 +1233,14 @@ llvm::Expected<llvm::DWARFAddressRangesVector> DwarfSymbolFactory::GetCodeRanges
 
 std::optional<uint64_t> DwarfSymbolFactory::GetAddrFromFormValue(
     llvm::DWARFUnit* unit, const llvm::DWARFFormValue& form_value) const {
-  llvm::dwarf::Form form = form_value.getForm();
-  if (!llvm::dwarf::doesFormBelongToClass(form, llvm::DWARFFormValue::FC_Address,
-                                          unit->getVersion())) {
+  DwarfForm form = static_cast<DwarfForm>(form_value.getForm());
+  if (!DwarfFormIsAddress(form)) {
     // Not an address type.
     return std::nullopt;
   }
 
   uint64_t addr = 0;
-  if (IsAddrXForm(static_cast<DwarfForm>(form))) {
+  if (IsAddrXForm(form)) {
     // Lookup in the address table.
     uint64_t index = form_value.getRawUValue();
     if (std::optional<uint64_t> opt_addr = GetAddrFromIndex(unit, index)) {

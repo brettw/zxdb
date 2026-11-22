@@ -559,7 +559,7 @@ void UnitIndexer::AddStandaloneEntryToIndex(uint32_t index_me, IndexNode* index_
 
   // When walking the dependency path, the abstract origin (if any) encodes the lexical scope
   // (see has_abstract_origin() declaration above).
-  if (llvm::DWARFDie ao = die.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_abstract_origin))
+  if (llvm::DWARFDie ao = GetAbstractOrigin(die))
     die = ao;
 
   // Stores the reverse path to the node we're inserting. This includes all scopes like namespaces
@@ -600,7 +600,7 @@ bool UnitIndexer::GetAbstractOriginIndex(uint32_t source, uint32_t* abstract_ori
   if (!die)
     return false;  // Internal error, maybe symbols corrupt.
 
-  llvm::DWARFDie ao = die.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_abstract_origin);
+  llvm::DWARFDie ao = GetAbstractOrigin(die);
   if (!ao)
     return false;  // Symbols corrupt.
   if (ao.getDwarfUnit() != unit_.GetLLVMUnit())

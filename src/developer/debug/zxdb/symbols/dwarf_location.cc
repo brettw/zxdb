@@ -180,8 +180,8 @@ VariableLocation DecodeDwarf5LocationReference(llvm::DWARFUnit* unit,
 
 VariableLocation DecodeVariableLocation(llvm::DWARFUnit* unit, const llvm::DWARFFormValue& form,
                                         const UncachedLazySymbol& source) {
-  if (form.isFormClass(llvm::DWARFFormValue::FC_Block) ||
-      form.isFormClass(llvm::DWARFFormValue::FC_Exprloc)) {
+  DwarfForm form_code = static_cast<DwarfForm>(form.getForm());
+  if (DwarfFormIsBlock(form_code) || form_code == DwarfForm::kExprloc) {
     // These forms are both a block of data which is interpreted as a DWARF expression. There is no
     // validity range for this so assume the expression is valid as long as the variable is in
     // scope.

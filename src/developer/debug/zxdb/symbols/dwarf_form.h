@@ -142,6 +142,19 @@ enum class DwarfForm : int {
   kLlvmAddrxOffset = 0x2001,
 };
 
+// These return true if the form is of the given class (DWARF 5 section 7.5.5). These are the
+// classes that zxdb checks. The "exprloc" class has only kExprloc, so it doesn't need a function.
+//
+// The "constant" class has kData1 to kData16, kSdata, kUdata, and kImplicitConst. In DWARF 2 and 3,
+// kData4 and kData8 can also be section offsets. DwarfFormIsConstant() returns true for them in all
+// DWARF versions.
+bool DwarfFormIsBlock(DwarfForm form);
+bool DwarfFormIsConstant(DwarfForm form);
+
+// Returns true if the form is of the "address" class (DWARF 5 section 7.5.5). These forms hold an
+// address or an index into the address table of the unit. Includes the GNU and LLVM extensions.
+bool DwarfFormIsAddress(DwarfForm form);
+
 // Converts the form to a string, optionally including the numeric value. Invalid or unknown values
 // will be formatted as "<undefined>" and will always include the numeric value.
 std::string DwarfFormToString(DwarfForm form, bool include_number = false);

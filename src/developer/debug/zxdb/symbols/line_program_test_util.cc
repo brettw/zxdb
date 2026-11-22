@@ -400,7 +400,7 @@ void LineTableTestSections::AddCompileUnit(uint16_t version, std::optional<uint6
   std::vector<uint8_t> body;
   AppendInteger(body, version, 2);
   if (version >= 5) {
-    body.push_back(1);          // DW_UT_compile.
+    body.push_back(kUnitTypeCompile);
     body.push_back(8);          // Address size.
     AppendInteger(body, 0, 4);  // Abbreviation offset.
   } else {

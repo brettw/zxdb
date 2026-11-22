@@ -5,6 +5,7 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_DEBUG_NAMES_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_DEBUG_NAMES_H_
 
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -37,6 +38,11 @@ std::vector<DebugNamesEntry> FindDebugNamesEntries(const llvm::DWARFDebugNames& 
 std::vector<DebugNamesEntry> FindDebugNamesPrefixEntries(const llvm::DWARFDebugNames& debug_names,
                                                          const DwarfBinary& binary,
                                                          std::string_view prefix);
+
+// Returns true if the .debug_names table at the offset of the section uses the 32-bit DWARF format.
+// Returns false for a 64-bit table, and when the section has no room for the unit length at the
+// offset.
+bool IsDwarf32DebugNamesTable(std::span<const char> section, uint64_t offset);
 
 }  // namespace zxdb
 

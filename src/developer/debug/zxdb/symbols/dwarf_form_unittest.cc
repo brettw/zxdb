@@ -26,4 +26,45 @@ TEST(DwarfForm, DwarfFormToString) {
   EXPECT_EQ("<undefined (0x1f00)>", DwarfFormToString(static_cast<DwarfForm>(0x1f00)));
 }
 
+TEST(DwarfForm, DwarfFormIsBlock) {
+  EXPECT_TRUE(DwarfFormIsBlock(DwarfForm::kBlock));
+  EXPECT_TRUE(DwarfFormIsBlock(DwarfForm::kBlock1));
+  EXPECT_TRUE(DwarfFormIsBlock(DwarfForm::kBlock2));
+  EXPECT_TRUE(DwarfFormIsBlock(DwarfForm::kBlock4));
+
+  EXPECT_FALSE(DwarfFormIsBlock(DwarfForm::kNone));
+  EXPECT_FALSE(DwarfFormIsBlock(DwarfForm::kExprloc));
+  EXPECT_FALSE(DwarfFormIsBlock(DwarfForm::kData16));
+}
+
+TEST(DwarfForm, DwarfFormIsConstant) {
+  for (DwarfForm form :
+       {DwarfForm::kData1, DwarfForm::kData2, DwarfForm::kData4, DwarfForm::kData8,
+        DwarfForm::kData16, DwarfForm::kSdata, DwarfForm::kUdata, DwarfForm::kImplicitConst}) {
+    EXPECT_TRUE(DwarfFormIsConstant(form)) << DwarfFormToString(form);
+  }
+
+  EXPECT_FALSE(DwarfFormIsConstant(DwarfForm::kNone));
+  EXPECT_FALSE(DwarfFormIsConstant(DwarfForm::kFlag));
+  EXPECT_FALSE(DwarfFormIsConstant(DwarfForm::kAddr));
+  EXPECT_FALSE(DwarfFormIsConstant(DwarfForm::kRef4));
+  EXPECT_FALSE(DwarfFormIsConstant(DwarfForm::kSecOffset));
+  EXPECT_FALSE(DwarfFormIsConstant(DwarfForm::kBlock1));
+}
+
+TEST(DwarfForm, DwarfFormIsAddress) {
+  EXPECT_TRUE(DwarfFormIsAddress(DwarfForm::kAddr));
+  EXPECT_TRUE(DwarfFormIsAddress(DwarfForm::kAddrx));
+  EXPECT_TRUE(DwarfFormIsAddress(DwarfForm::kAddrx1));
+  EXPECT_TRUE(DwarfFormIsAddress(DwarfForm::kAddrx4));
+  EXPECT_TRUE(DwarfFormIsAddress(DwarfForm::kGnuAddrIndex));
+  EXPECT_TRUE(DwarfFormIsAddress(DwarfForm::kLlvmAddrxOffset));
+
+  EXPECT_FALSE(DwarfFormIsAddress(DwarfForm::kNone));
+  EXPECT_FALSE(DwarfFormIsAddress(DwarfForm::kData8));
+  EXPECT_FALSE(DwarfFormIsAddress(DwarfForm::kUdata));
+  EXPECT_FALSE(DwarfFormIsAddress(DwarfForm::kRefAddr));
+  EXPECT_FALSE(DwarfFormIsAddress(DwarfForm::kSecOffset));
+}
+
 }  // namespace zxdb

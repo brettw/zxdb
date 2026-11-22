@@ -1040,7 +1040,7 @@ TEST(LineProgram, IndexedStringByteOrder) {
                                        0};
         std::vector<uint8_t> info;
         put(info, 5, 2);
-        info.push_back(llvm::dwarf::DW_UT_compile);
+        info.push_back(kUnitTypeCompile);
         info.push_back(8);          // Address size.
         put(info, 0, offset_size);  // Abbreviation offset.
         AppendUleb(info, 1);

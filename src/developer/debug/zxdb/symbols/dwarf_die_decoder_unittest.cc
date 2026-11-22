@@ -19,8 +19,6 @@ namespace zxdb {
 
 namespace {
 
-using namespace llvm::dwarf;
-
 // Abbreviation codes of the test unit.
 enum Abbrev : uint8_t {
   kCompileUnitAbbrev = 1,
@@ -148,7 +146,7 @@ class DwarfDieDecoderTest : public testing::Test {
   void WriteInfo() {
     AppendInteger(info_, 0, 4);  // Unit length, set below.
     AppendInteger(info_, 5, 2);  // Version.
-    info_.push_back(DW_UT_compile);
+    info_.push_back(kUnitTypeCompile);
     info_.push_back(8);          // Address size.
     AppendInteger(info_, 0, 4);  // Abbreviation offset.
 
@@ -265,6 +263,37 @@ TEST_F(DwarfDieDecoderTest, AbstractOrigin) {
   ASSERT_TRUE(decoder.Decode(GetDie(unit_offset())));
   EXPECT_STREQ("unit", decoder.GetCString(DwarfAttr::kName).value_or(""));
   EXPECT_FALSE(decoder.GetAbstractParent().isValid());
+}
+
+TEST_F(DwarfDieDecoderTest, DontFollowAbstractOrigins) {
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName, DwarfAttr::kDeclLine,
+                                         DwarfAttr::kAbstractOrigin};
+  DwarfDieDecoder decoder(context(), kAttrs);
+  decoder.set_follow_abstract_origins(false);
+  ASSERT_TRUE(decoder.Decode(GetDie(concrete_offset())));
+
+  // Only the concrete DIE gives values. The name is on the abstract origin.
+  EXPECT_FALSE(decoder.Has(DwarfAttr::kName));
+  EXPECT_EQ(20u, decoder.GetUnsignedConstant(DwarfAttr::kDeclLine));
+  EXPECT_EQ(GetDie(origin_offset()), decoder.GetReference(DwarfAttr::kAbstractOrigin));
+
+  // The abstract parent is the parent of the concrete DIE.
+  EXPECT_EQ(GetDie(unit_offset()), decoder.GetAbstractParent());
+
+  // A DIE that is its own abstract origin is decoded once.
+  ASSERT_TRUE(decoder.Decode(GetDie(cycle_offset())));
+  EXPECT_STREQ("cycle", decoder.GetCString(DwarfAttr::kName).value_or(""));
+}
+
+TEST_F(DwarfDieDecoderTest, GetAbstractOrigin) {
+  // Only the first link in the chain is followed.
+  EXPECT_EQ(GetDie(origin_offset()), GetAbstractOrigin(GetDie(concrete_offset())));
+  EXPECT_EQ(GetDie(cycle_offset()), GetAbstractOrigin(GetDie(cycle_offset())));
+
+  // DIEs without an abstract origin.
+  EXPECT_FALSE(GetAbstractOrigin(GetDie(origin_offset())).isValid());
+  EXPECT_FALSE(GetAbstractOrigin(GetDie(unit_offset())).isValid());
+  EXPECT_FALSE(GetAbstractOrigin(llvm::DWARFDie()).isValid());
 }
 
 TEST_F(DwarfDieDecoderTest, Forms) {

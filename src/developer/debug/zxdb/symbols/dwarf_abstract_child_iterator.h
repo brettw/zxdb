@@ -8,11 +8,7 @@
 #include <optional>
 #include <vector>
 
-#include "llvm/BinaryFormat/Dwarf.h"
-
-namespace llvm {
-class DWARFDie;
-}  // namespace llvm
+#include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 
 namespace zxdb {
 
@@ -103,7 +99,8 @@ namespace zxdb {
 //   0x000005ce:       NULL
 
 // llvm::DWARFDies are not easily mockable and this logic is complex. As a result, this
-// iterator is templatized so the unit test can specify a different DIE implementation.
+// iterator is templatized so the unit test can specify a different DIE implementation. The
+// iterator calls GetAbstractOrigin() for the DIE type, so a test DIE type needs an overload of it.
 template <class Die>
 class DwarfAbstractChildIteratorBase {
  public:
@@ -161,9 +158,7 @@ class DwarfAbstractChildIteratorBase {
     // we get to them.
     void AddCurIterAbstractOrigin() {
       if (has_next_abstract_origin() && !cur_iter_at_end()) {
-        if (Die origin =
-                (*cur_iter_)->getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_abstract_origin);
-            origin.isValid())
+        if (Die origin = GetAbstractOrigin(**cur_iter_); origin.isValid())
           seen_origin_dies_.push_back(origin.getOffset());
       }
     }
@@ -221,8 +216,7 @@ class DwarfAbstractChildIteratorBase {
 
 template <class Die>
 DwarfAbstractChildIteratorBase<Die>::Iter::Iter(const Die& concrete) : cur_die_(concrete) {
-  next_abstract_origin_ =
-      cur_die_.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_abstract_origin);
+  next_abstract_origin_ = GetAbstractOrigin(cur_die_);
 
   // Only need to track seen DIEs if there's an abstract origin. In the common case where will be
   // no abstract origin.
@@ -258,8 +252,7 @@ void DwarfAbstractChildIteratorBase<Die>::Iter::UpdateAfterIteratorChange() {
     // Got to the end of this abstract origin, advance to the next one.
     cur_die_ = next_abstract_origin_;
     cur_iter_ = cur_die_.begin();
-    next_abstract_origin_ =
-        cur_die_.getAttributeValueAsReferencedDie(llvm::dwarf::DW_AT_abstract_origin);
+    next_abstract_origin_ = GetAbstractOrigin(cur_die_);
 
     if (has_next_abstract_origin())
       seen_origin_dies_.push_back(cur_die_.getOffset());

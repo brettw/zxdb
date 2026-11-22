@@ -28,6 +28,9 @@ namespace zxdb {
 class LineTableTestSections;
 
 // Appends an unsigned LEB128 value to raw test data.
+// The unit type of a DWARF 5 compile unit header (DW_UT_compile).
+constexpr uint8_t kUnitTypeCompile = 0x01;
+
 void AppendUleb(std::vector<uint8_t>& out, uint64_t value);
 void AppendUleb(std::vector<uint8_t>& out, DwarfForm form);
 

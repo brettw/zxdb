@@ -6,7 +6,6 @@
 
 #include <lib/syslog/cpp/macros.h>
 
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
 #include "llvm/DebugInfo/DWARF/DWARFTypeUnit.h"
@@ -127,8 +126,8 @@ std::optional<std::vector<uint8_t>> DwarfDieDecoder::GetBlock(DwarfAttr attribut
   const AttributeValue* value = GetValue(attribute);
   if (!value)
     return std::nullopt;
-  if (!value->form.isFormClass(llvm::DWARFFormValue::FC_Block) &&
-      !value->form.isFormClass(llvm::DWARFFormValue::FC_Exprloc))
+  DwarfForm form = static_cast<DwarfForm>(value->form.getForm());
+  if (!DwarfFormIsBlock(form) && form != DwarfForm::kExprloc)
     return std::nullopt;
 
   std::optional<llvm::ArrayRef<uint8_t>> block = value->form.getAsBlock();
@@ -150,7 +149,7 @@ ConstValue DwarfDieDecoder::GetConstValue(DwarfAttr attribute) const {
   } else if (form_code == DwarfForm::kSdata) {
     if (std::optional<int64_t> opt_signed = form.getAsSignedConstant())
       return ConstValue(static_cast<int64_t>(*opt_signed));
-  } else if (form.isFormClass(llvm::DWARFFormValue::FC_Block)) {
+  } else if (DwarfFormIsBlock(form_code)) {
     std::optional<llvm::ArrayRef<uint8_t>> block = form.getAsBlock();
     if (block && !block->empty())
       return ConstValue(std::vector<uint8_t>(block->begin(), block->end()));
@@ -164,10 +163,11 @@ std::optional<DwarfDieDecoder::HighPC> DwarfDieDecoder::GetHighPC() const {
     return std::nullopt;
 
   const llvm::DWARFFormValue& form = value->form;
-  if (form.isFormClass(llvm::DWARFFormValue::FC_Constant)) {
+  DwarfForm form_code = static_cast<DwarfForm>(form.getForm());
+  if (DwarfFormIsConstant(form_code)) {
     if (std::optional<uint64_t> as_constant = form.getAsUnsignedConstant())
       return HighPC(true, *as_constant);
-  } else if (form.isFormClass(llvm::DWARFFormValue::FC_Address)) {
+  } else if (DwarfFormIsAddress(form_code)) {
     if (std::optional<uint64_t> as_addr = form.getAsAddress())
       return HighPC(false, *as_addr);
   }
@@ -257,9 +257,10 @@ bool DwarfDieDecoder::DecodeInternal(const llvm::DWARFDie& die,
     size_t index = FindIndex(attr);
     bool wanted = index < attributes_.size() && !values_[index].unit;
 
-    // Abstract origins are always decoded so they can be followed after the loop. This doesn't
-    // check for duplicates so the decoder can follow more than one link in the chain.
-    bool is_abstract_origin = attr == DwarfAttr::kAbstractOrigin;
+    // When following abstract origins, they are always decoded so they can be followed after the
+    // loop. This doesn't check for duplicates so the decoder can follow more than one link in the
+    // chain.
+    bool is_abstract_origin = follow_abstract_origins_ && attr == DwarfAttr::kAbstractOrigin;
 
     if (!wanted && !is_abstract_origin) {
       // Skip over the attribute to go to the next.
@@ -338,6 +339,18 @@ llvm::DWARFDie DwarfDieDecoder::DecodeReference(llvm::DWARFUnit* unit,
       break;
   }
   return llvm::DWARFDie();
+}
+
+llvm::DWARFDie GetAbstractOrigin(const llvm::DWARFDie& die) {
+  if (!die.isValid())
+    return llvm::DWARFDie();
+
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kAbstractOrigin};
+  DwarfDieDecoder decoder(&die.getDwarfUnit()->getContext(), kAttrs);
+  decoder.set_follow_abstract_origins(false);
+  if (!decoder.Decode(die))
+    return llvm::DWARFDie();
+  return decoder.GetReference(DwarfAttr::kAbstractOrigin);
 }
 
 }  // namespace zxdb

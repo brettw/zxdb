@@ -16,6 +16,7 @@
 #include "src/developer/debug/zxdb/symbols/collection.h"
 #include "src/developer/debug/zxdb/symbols/data_member.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_test_util.h"
 #include "src/developer/debug/zxdb/symbols/enumeration.h"
@@ -671,9 +672,12 @@ TEST(DwarfSymbolFactory, TypeUnitReference) {
         break;
     }
     ASSERT_TRUE(var_die);
-    std::optional<llvm::DWARFFormValue> type_form = var_die.find(llvm::dwarf::DW_AT_type);
-    ASSERT_TRUE(type_form);
-    ASSERT_EQ(DwarfForm::kRefSig8, static_cast<DwarfForm>(type_form->getForm()));
+    static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kType};
+    DwarfDieDecoder decoder(context, kAttrs);
+    ASSERT_TRUE(decoder.Decode(var_die));
+    const DwarfDieDecoder::AttributeValue* type_value = decoder.GetValue(DwarfAttr::kType);
+    ASSERT_TRUE(type_value);
+    ASSERT_EQ(DwarfForm::kRefSig8, static_cast<DwarfForm>(type_value->form.getForm()));
 
     ResolveOptions options;
     options.symbolize = true;

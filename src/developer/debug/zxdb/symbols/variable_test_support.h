@@ -16,7 +16,6 @@ namespace zxdb {
 // Returns a Variable for the given range with the given location description.
 // Example:
 //
-//    #include "llvm/BinaryFormat/Dwarf.h"
 //
 //    auto var = MakeVariableForTest(
 //        "var", my_type, 0x1000, 0x2000, { llvm::dwarf::DW_OP_reg0 });

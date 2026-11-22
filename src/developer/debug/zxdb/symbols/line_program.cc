@@ -10,7 +10,6 @@
 #include <cinttypes>
 #include <limits>
 
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/line_sequence.h"
 

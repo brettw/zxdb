@@ -60,11 +60,6 @@ class TestDie {
   iterator end() { return children_.end(); }
 
   // DWARFDie implementation (enough for the iterator).
-  TestDie getAttributeValueAsReferencedDie(llvm::dwarf::Attribute attr) const {
-    // Only expect abstract origin queries in this test.
-    EXPECT_EQ(attr, llvm::dwarf::DW_AT_abstract_origin);
-    return const_cast<TestDie*>(this)->abstract_origin();
-  }
   bool isValid() const { return is_valid_; }
   uint64_t getOffset() const { return offset_; }
 
@@ -75,6 +70,11 @@ class TestDie {
 
   Vector children_;
 };
+
+// The iterator finds this overload by argument-dependent lookup.
+TestDie GetAbstractOrigin(const TestDie& die) {
+  return const_cast<TestDie&>(die).abstract_origin();
+}
 
 using TestIterator = DwarfAbstractChildIteratorBase<TestDie>;
 

@@ -119,15 +119,15 @@ bool TryScanNameIndexPrefixFast(const llvm::DWARFDebugNames& debug_names, const 
     return false;
   }
 
-  llvm::DWARFDebugNames::Header hdr = name_index.getHeader();
-  if (hdr.Format != llvm::dwarf::DWARF32) {
-    return false;
-  }
-
   llvm::StringRef names_sec = context->getDWARFObj().getNamesSection().Data;
   llvm::StringRef str_sec = context->getDWARFObj().getStrSection();
   std::span<const char> names_data(names_sec.data(), names_sec.size());
   std::span<const char> str_data(str_sec.data(), str_sec.size());
+
+  if (!IsDwarf32DebugNamesTable(names_data, name_index.getUnitOffset()))
+    return false;
+
+  llvm::DWARFDebugNames::Header hdr = name_index.getHeader();
 
   uint64_t str_offsets_base = name_index.getOffsets().StringOffsetsBase;
   uint64_t table_bytes = static_cast<uint64_t>(hdr.NameCount) * sizeof(uint32_t);
@@ -155,6 +155,18 @@ bool TryScanNameIndexPrefixFast(const llvm::DWARFDebugNames& debug_names, const 
 }
 
 }  // namespace
+
+bool IsDwarf32DebugNamesTable(std::span<const char> section, uint64_t offset) {
+  // A 64-bit table starts with the escape value 0xffffffff in place of its 32-bit unit length. The
+  // escape value is the same in both byte orders.
+  if (offset > section.size() || section.size() - offset < 4)
+    return false;
+  for (size_t i = 0; i < 4; i++) {
+    if (static_cast<uint8_t>(section[offset + i]) != 0xff)
+      return true;
+  }
+  return false;
+}
 
 std::vector<DebugNamesEntry> FindDebugNamesEntries(const llvm::DWARFDebugNames& debug_names,
                                                    std::string_view name) {
