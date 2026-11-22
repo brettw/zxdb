@@ -13,6 +13,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/common/checked_math.h"
 #include "src/developer/debug/zxdb/common/data_extractor.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 
 namespace zxdb {
 
@@ -113,14 +114,14 @@ VariableLocation DecodeDwarf5LocationReference(llvm::DWARFUnit* unit,
 
   // Compute the byte offset into the .debug_loclists section of the location list.
   uint64_t list_offset = 0;
-  switch (form.getForm()) {
-    case llvm::dwarf::DW_FORM_sec_offset: {
+  switch (static_cast<DwarfForm>(form.getForm())) {
+    case DwarfForm::kSecOffset: {
       // A byte offset into the .debug_loclists section.
       list_offset = *form.getAsSectionOffset();
       break;
     }
 
-    case llvm::dwarf::DW_FORM_loclistx: {
+    case DwarfForm::kLoclistx: {
       // The form value is an index into the unit's location list table.
       uint64_t list_index = *form.getAsSectionOffset();
 

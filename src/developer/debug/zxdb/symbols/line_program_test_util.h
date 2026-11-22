@@ -18,6 +18,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
 #include "src/developer/debug/zxdb/symbols/line_row.h"
@@ -28,6 +29,11 @@ class LineTableTestSections;
 
 // Appends an unsigned LEB128 value to raw test data.
 void AppendUleb(std::vector<uint8_t>& out, uint64_t value);
+void AppendUleb(std::vector<uint8_t>& out, DwarfForm form);
+
+// Returns the form as one byte, for raw test data in braced lists. The form must fit in a one-byte
+// unsigned LEB128 value.
+uint8_t FormByte(DwarfForm form);
 
 // Appends a fixed-size integer in the requested byte order.
 void AppendInteger(std::vector<uint8_t>& out, uint64_t value, size_t size,

@@ -26,6 +26,7 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_abstract_child_iterator.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_location.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit_impl.h"
@@ -91,10 +92,10 @@ std::optional<size_t> ReadArraySubrange(DwarfDieDecoder& range_decoder,
 
 // Returns true if the form uses any of the addr "x" encodings (relocatable references to the
 // address table).
-bool IsAddrXForm(llvm::dwarf::Form form) {
-  return form == llvm::dwarf::DW_FORM_addrx || form == llvm::dwarf::DW_FORM_addrx1 ||
-         form == llvm::dwarf::DW_FORM_addrx2 || form == llvm::dwarf::DW_FORM_addrx3 ||
-         form == llvm::dwarf::DW_FORM_addrx4 || form == llvm::dwarf::DW_FORM_GNU_addr_index;
+bool IsAddrXForm(DwarfForm form) {
+  return form == DwarfForm::kAddrx || form == DwarfForm::kAddrx1 || form == DwarfForm::kAddrx2 ||
+         form == DwarfForm::kAddrx3 || form == DwarfForm::kAddrx4 ||
+         form == DwarfForm::kGnuAddrIndex;
 }
 
 DwarfDieRef GetDieRef(const llvm::DWARFDie& die) {
@@ -738,9 +739,10 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeEnum(const llvm::DWARFDie& die) co
     std::optional<uint64_t> enumerator_value;
     if (const DwarfDieDecoder::AttributeValue* value =
             enumerator_decoder.GetValue(DwarfAttr::kConstValue)) {
-      if (value->form.getForm() == llvm::dwarf::DW_FORM_udata) {
+      DwarfForm form = static_cast<DwarfForm>(value->form.getForm());
+      if (form == DwarfForm::kUdata) {
         enumerator_value = value->form.getAsUnsignedConstant();
-      } else if (value->form.getForm() == llvm::dwarf::DW_FORM_sdata) {
+      } else if (form == DwarfForm::kSdata) {
         // Cast signed values to unsigned.
         if (std::optional<int64_t> signed_value = value->form.getAsSignedConstant()) {
           is_signed = true;
@@ -1130,8 +1132,8 @@ AddressRanges DwarfSymbolFactory::GetCodeRanges(const llvm::DWARFDie& die) const
 
   // Got a range list, decode.
   llvm::DWARFAddressRangesVector ranges;
-  switch (form_value->getForm()) {
-    case llvm::dwarf::DW_FORM_rnglistx: {
+  switch (static_cast<DwarfForm>(form_value->getForm())) {
+    case DwarfForm::kRnglistx: {
       llvm::Expected<llvm::DWARFAddressRangesVector> opt_ranges =
           GetCodeRangesFromRangelistXIndex(die, *form_value->getAsSectionOffset());
       if (!opt_ranges)
@@ -1140,7 +1142,7 @@ AddressRanges DwarfSymbolFactory::GetCodeRanges(const llvm::DWARFDie& die) const
       break;
     }
 
-    case llvm::dwarf::DW_FORM_sec_offset: {
+    case DwarfForm::kSecOffset: {
       // These encodings do not support Debug Fission (requiring lookup in the main symbol file if
       // the current one is a DWO) so we can have LLVM look it up in the current unit directly.
       llvm::Expected<llvm::DWARFAddressRangesVector> opt_ranges =
@@ -1240,7 +1242,7 @@ std::optional<uint64_t> DwarfSymbolFactory::GetAddrFromFormValue(
   }
 
   uint64_t addr = 0;
-  if (IsAddrXForm(form_value.getForm())) {
+  if (IsAddrXForm(static_cast<DwarfForm>(form))) {
     // Lookup in the address table.
     uint64_t index = form_value.getRawUValue();
     if (std::optional<uint64_t> opt_addr = GetAddrFromIndex(die, index)) {

@@ -8,8 +8,10 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <limits>
 
 #include "llvm/BinaryFormat/Dwarf.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/line_sequence.h"
 
 // The header parser reads the fields of the header in order (DWARF 5 section 6.2.4). Like LLVM, it
@@ -557,128 +559,133 @@ struct FormValue {
 ErrOr<FormValue> ReadForm(DataReader& reader, uint64_t form, size_t offset_size,
                           uint8_t address_size, const LineStringSections& strings,
                           bool little_endian) {
-  using namespace llvm::dwarf;
-
   // DW_FORM_indirect gives the actual form in the data. LLVM follows any number of them.
-  while (form == DW_FORM_indirect && reader.ok())
+  while (form == static_cast<uint64_t>(DwarfForm::kIndirect) && reader.ok())
     form = reader.Uleb();
   if (!reader.ok())
     return Err("The form value is truncated.");
 
+  // A value outside the range of DwarfForm is an unknown form. Checking it before the cast keeps a
+  // large value from becoming a known form.
+  if (form > static_cast<uint64_t>(std::numeric_limits<int>::max()))
+    return Err("Unknown form 0x%" PRIx64 ".", form);
+
   FormValue value;
-  switch (form) {
-    case DW_FORM_implicit_const:
+  switch (static_cast<DwarfForm>(form)) {
+    case DwarfForm::kImplicitConst:
       // The value is in an abbreviation, which line tables don't have. LLVM reads nothing and
       // uses 0.
       break;
-    case DW_FORM_string:
+    case DwarfForm::kString:
       value.string = reader.CString();
       break;
-    case DW_FORM_line_strp:
+    case DwarfForm::kLineStrp:
       value.string = StringAt(strings.line_str, reader.Fixed(offset_size));
       break;
-    case DW_FORM_strp:
+    case DwarfForm::kStrp:
       value.string = StringAt(strings.str, reader.Fixed(offset_size));
       break;
-    case DW_FORM_strx:
-    case DW_FORM_GNU_str_index:
+    case DwarfForm::kStrx:
+    case DwarfForm::kGnuStrIndex:
       value.string = IndexedString(strings, reader.Uleb(), little_endian);
       break;
-    case DW_FORM_strx1:
-    case DW_FORM_strx2:
-    case DW_FORM_strx3:
-    case DW_FORM_strx4:
-      value.string = IndexedString(strings, reader.Fixed(form - DW_FORM_strx1 + 1), little_endian);
+    case DwarfForm::kStrx1:
+    case DwarfForm::kStrx2:
+    case DwarfForm::kStrx3:
+    case DwarfForm::kStrx4:
+      value.string =
+          IndexedString(strings, reader.Fixed(form - static_cast<uint64_t>(DwarfForm::kStrx1) + 1),
+                        little_endian);
       break;
-    case DW_FORM_strp_sup:
-    case DW_FORM_GNU_strp_alt:
+    case DwarfForm::kStrpSup:
+    case DwarfForm::kGnuStrpAlt:
       // Strings in a supplementary file can't be decoded.
       reader.Skip(offset_size);
       break;
-    case DW_FORM_data1:
-    case DW_FORM_flag:
+    case DwarfForm::kData1:
+    case DwarfForm::kFlag:
       value.constant = reader.Fixed(1);
       break;
-    case DW_FORM_data2:
+    case DwarfForm::kData2:
       value.constant = reader.Fixed(2);
       break;
-    case DW_FORM_data4:
+    case DwarfForm::kData4:
       value.constant = reader.Fixed(4);
       break;
-    case DW_FORM_data8:
+    case DwarfForm::kData8:
       value.constant = reader.Fixed(8);
       break;
-    case DW_FORM_udata:
+    case DwarfForm::kUdata:
       value.constant = reader.Uleb();
       break;
-    case DW_FORM_flag_present:
+    case DwarfForm::kFlagPresent:
       value.constant = 1;
       break;
-    case DW_FORM_data16:
+    case DwarfForm::kData16:
       // LLVM treats this as a constant and as a 16-byte block. The constant is the block size.
       reader.Skip(16);
       value.constant = 16;
       value.block_size = 16;
       break;
-    case DW_FORM_block1:
+    case DwarfForm::kBlock1:
       value.block_size = reader.Fixed(1);
       reader.Skip(value.block_size);
       break;
-    case DW_FORM_block2:
+    case DwarfForm::kBlock2:
       value.block_size = reader.Fixed(2);
       reader.Skip(value.block_size);
       break;
-    case DW_FORM_block4:
+    case DwarfForm::kBlock4:
       value.block_size = reader.Fixed(4);
       reader.Skip(value.block_size);
       break;
-    case DW_FORM_block:
-    case DW_FORM_exprloc:
+    case DwarfForm::kBlock:
+    case DwarfForm::kExprloc:
       value.block_size = reader.Uleb();
       reader.Skip(value.block_size);
       break;
     // The forms below have no constant, string, or block value in LLVM. This includes the
     // reference forms, which aren't constants even though their encodings are.
-    case DW_FORM_ref1:
+    case DwarfForm::kRef1:
       reader.Skip(1);
       break;
-    case DW_FORM_ref2:
+    case DwarfForm::kRef2:
       reader.Skip(2);
       break;
-    case DW_FORM_ref4:
-    case DW_FORM_ref_sup4:
+    case DwarfForm::kRef4:
+    case DwarfForm::kRefSup4:
       reader.Skip(4);
       break;
-    case DW_FORM_ref8:
-    case DW_FORM_ref_sig8:
-    case DW_FORM_ref_sup8:
+    case DwarfForm::kRef8:
+    case DwarfForm::kRefSig8:
+    case DwarfForm::kRefSup8:
       reader.Skip(8);
       break;
-    case DW_FORM_sdata:
+    case DwarfForm::kSdata:
       reader.SkipSleb();
       break;
-    case DW_FORM_ref_udata:
-    case DW_FORM_addrx:
-    case DW_FORM_loclistx:
-    case DW_FORM_rnglistx:
-    case DW_FORM_GNU_addr_index:
+    case DwarfForm::kRefUdata:
+    case DwarfForm::kAddrx:
+    case DwarfForm::kLoclistx:
+    case DwarfForm::kRnglistx:
+    case DwarfForm::kGnuAddrIndex:
       reader.SkipUleb();
       break;
-    case DW_FORM_addr:
+    case DwarfForm::kAddr:
       reader.Skip(address_size);
       break;
-    case DW_FORM_sec_offset:
-    case DW_FORM_ref_addr:
-    case DW_FORM_GNU_ref_alt:
+    case DwarfForm::kSecOffset:
+    case DwarfForm::kRefAddr:
+    case DwarfForm::kGnuRefAlt:
       reader.Skip(offset_size);
       break;
-    case DW_FORM_addrx1:
-    case DW_FORM_addrx2:
-    case DW_FORM_addrx3:
-    case DW_FORM_addrx4:
-      reader.Skip(form - DW_FORM_addrx1 + 1);
+    case DwarfForm::kAddrx1:
+    case DwarfForm::kAddrx2:
+    case DwarfForm::kAddrx3:
+    case DwarfForm::kAddrx4:
+      reader.Skip(form - static_cast<uint64_t>(DwarfForm::kAddrx1) + 1);
       break;
-    case DW_FORM_LLVM_addrx_offset:
+    case DwarfForm::kLlvmAddrxOffset:
       reader.SkipUleb();
       reader.Skip(4);
       break;

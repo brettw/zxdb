@@ -13,6 +13,7 @@
 #include "src/developer/debug/zxdb/common/file_util.h"
 #include "src/developer/debug/zxdb/symbols/const_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_table_cache.h"
 
@@ -142,10 +143,11 @@ ConstValue DwarfDieDecoder::GetConstValue(DwarfAttr attribute) const {
     return ConstValue();
 
   const llvm::DWARFFormValue& form = value->form;
-  if (form.getForm() == llvm::dwarf::DW_FORM_udata) {
+  DwarfForm form_code = static_cast<DwarfForm>(form.getForm());
+  if (form_code == DwarfForm::kUdata) {
     if (std::optional<uint64_t> opt_unsigned = form.getAsUnsignedConstant())
       return ConstValue(*opt_unsigned);
-  } else if (form.getForm() == llvm::dwarf::DW_FORM_sdata) {
+  } else if (form_code == DwarfForm::kSdata) {
     if (std::optional<int64_t> opt_signed = form.getAsSignedConstant())
       return ConstValue(static_cast<int64_t>(*opt_signed));
   } else if (form.isFormClass(llvm::DWARFFormValue::FC_Block)) {
@@ -294,12 +296,12 @@ bool DwarfDieDecoder::DecodeInternal(const llvm::DWARFDie& die,
 
 llvm::DWARFDie DwarfDieDecoder::DecodeReference(llvm::DWARFUnit* unit,
                                                 const llvm::DWARFFormValue& form) const {
-  switch (form.getForm()) {
-    case llvm::dwarf::DW_FORM_ref1:
-    case llvm::dwarf::DW_FORM_ref2:
-    case llvm::dwarf::DW_FORM_ref4:
-    case llvm::dwarf::DW_FORM_ref8:
-    case llvm::dwarf::DW_FORM_ref_udata: {
+  switch (static_cast<DwarfForm>(form.getForm())) {
+    case DwarfForm::kRef1:
+    case DwarfForm::kRef2:
+    case DwarfForm::kRef4:
+    case DwarfForm::kRef8:
+    case DwarfForm::kRefUdata: {
       // A DWARF "form" is the way a value is encoded in the file. These
       // are all relative location of DIEs within the same unit.
       auto ref_value = form.getAsReferenceUVal();
@@ -307,14 +309,14 @@ llvm::DWARFDie DwarfDieDecoder::DecodeReference(llvm::DWARFUnit* unit,
         return unit->getDIEForOffset(unit->getOffset() + *ref_value);
       break;
     }
-    case llvm::dwarf::DW_FORM_ref_addr: {
+    case DwarfForm::kRefAddr: {
       // This is an absolute DIE address which can be used across units.
       auto ref_value = form.getAsReferenceUVal();
       if (ref_value)
         return context_->getDIEForOffset(*ref_value);
       break;
     }
-    case llvm::dwarf::DW_FORM_ref_sig8: {
+    case DwarfForm::kRefSig8: {
       auto ref_value = form.getAsReferenceUVal();
       if (ref_value) {
         if (binary_) {

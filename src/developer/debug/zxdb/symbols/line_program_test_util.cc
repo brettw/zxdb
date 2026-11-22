@@ -68,6 +68,15 @@ void AppendUleb(std::vector<uint8_t>& out, uint64_t value) {
   } while (value);
 }
 
+void AppendUleb(std::vector<uint8_t>& out, DwarfForm form) {
+  AppendUleb(out, static_cast<uint64_t>(form));
+}
+
+uint8_t FormByte(DwarfForm form) {
+  FX_CHECK(static_cast<int>(form) >= 0 && static_cast<int>(form) < 0x80);
+  return static_cast<uint8_t>(form);
+}
+
 void AppendInteger(std::vector<uint8_t>& out, uint64_t value, size_t size, bool little_endian) {
   for (size_t i = 0; i < size; i++) {
     size_t shift = little_endian ? i : size - 1 - i;
