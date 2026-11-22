@@ -30,6 +30,19 @@ namespace zxdb {
 // emission rules of llvm::DWARFDebugLine::LineTable::parse(). Line tables with more than one
 // operation per instruction (VLIW) aren't supported, and their headers fail to parse.
 
+// Content types of the entry formats of DWARF 5 directory and file tables (DWARF 5 section 7.22).
+// The parser reads kLnctPath, kLnctDirectoryIndex, and kLnctMd5, and skips the others.
+enum : uint16_t {
+  kLnctPath = 0x01,
+  kLnctDirectoryIndex = 0x02,
+  kLnctTimestamp = 0x03,
+  kLnctSize = 0x04,
+  kLnctMd5 = 0x05,
+
+  // LLVM extension for the source text of a file.
+  kLnctLlvmSource = 0x2001,
+};
+
 // The string sections that the names in a line table can reference. Strings are views into these
 // sections. Collect them on the thread that owns the DWARFContext. After that they don't change,
 // so any thread can use them. See line_program_llvm.h for the LLVM adapter.

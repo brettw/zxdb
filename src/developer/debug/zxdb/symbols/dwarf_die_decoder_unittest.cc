@@ -12,6 +12,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_op.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 #include "src/developer/debug/zxdb/symbols/line_program_test_util.h"
 
 namespace zxdb {
@@ -85,11 +86,11 @@ class DwarfDieDecoderTest : public testing::Test {
     out.push_back(0);
   }
 
-  void AddAbbrev(uint8_t code, Tag tag, bool has_children,
+  void AddAbbrev(uint8_t code, DwarfTag tag, bool has_children,
                  const std::vector<std::pair<DwarfAttr, DwarfForm>>& specs,
                  std::optional<int64_t> implicit_const = std::nullopt) {
     AppendUleb(abbrev_, code);
-    AppendUleb(abbrev_, tag);
+    AppendUleb(abbrev_, static_cast<uint64_t>(tag));
     abbrev_.push_back(has_children ? 1 : 0);
     for (const auto& [attr, form] : specs) {
       AppendUleb(abbrev_, static_cast<uint64_t>(attr));
@@ -105,21 +106,22 @@ class DwarfDieDecoderTest : public testing::Test {
   }
 
   void WriteAbbrevs() {
-    AddAbbrev(kCompileUnitAbbrev, DW_TAG_compile_unit, true,
+    AddAbbrev(kCompileUnitAbbrev, DwarfTag::kCompileUnit, true,
               {{DwarfAttr::kName, DwarfForm::kString}});
-    AddAbbrev(kNamespaceAbbrev, DW_TAG_namespace, true, {{DwarfAttr::kName, DwarfForm::kString}});
-    AddAbbrev(kOriginAbbrev, DW_TAG_subprogram, false,
+    AddAbbrev(kNamespaceAbbrev, DwarfTag::kNamespace, true,
+              {{DwarfAttr::kName, DwarfForm::kString}});
+    AddAbbrev(kOriginAbbrev, DwarfTag::kSubprogram, false,
               {{DwarfAttr::kName, DwarfForm::kString},
                {DwarfAttr::kDeclLine, DwarfForm::kData1},
                {DwarfAttr::kExternal, DwarfForm::kFlagPresent},
                {DwarfAttr::kByteSize, DwarfForm::kImplicitConst}},
               kImplicitByteSize);
-    AddAbbrev(kConcreteAbbrev, DW_TAG_subprogram, false,
+    AddAbbrev(kConcreteAbbrev, DwarfTag::kSubprogram, false,
               {{DwarfAttr::kAbstractOrigin, DwarfForm::kRef4},
                {DwarfAttr::kDeclLine, DwarfForm::kData1},
                {DwarfAttr::kLowPc, DwarfForm::kAddr},
                {DwarfAttr::kHighPc, DwarfForm::kData4}});
-    AddAbbrev(kFormsAbbrev, DW_TAG_variable, false,
+    AddAbbrev(kFormsAbbrev, DwarfTag::kVariable, false,
               {{DwarfAttr::kDeclaration, DwarfForm::kFlag},
                {DwarfAttr::kArtificial, DwarfForm::kFlag},
                {DwarfAttr::kConstValue, DwarfForm::kSdata},
@@ -128,14 +130,14 @@ class DwarfDieDecoderTest : public testing::Test {
                {DwarfAttr::kType, DwarfForm::kRef4},
                {DwarfAttr::kCount, DwarfForm::kImplicitConst}},
               kImplicitCount);
-    AddAbbrev(kOtherFormsAbbrev, DW_TAG_variable, false,
+    AddAbbrev(kOtherFormsAbbrev, DwarfTag::kVariable, false,
               {{DwarfAttr::kConstValue, DwarfForm::kUdata},
                {DwarfAttr::kHighPc, DwarfForm::kAddr},
                {DwarfAttr::kLocation, DwarfForm::kBlock1}});
     AddAbbrev(
-        kCycleAbbrev, DW_TAG_variable, false,
+        kCycleAbbrev, DwarfTag::kVariable, false,
         {{DwarfAttr::kAbstractOrigin, DwarfForm::kRef4}, {DwarfAttr::kName, DwarfForm::kString}});
-    AddAbbrev(kDuplicateAbbrev, DW_TAG_variable, false,
+    AddAbbrev(kDuplicateAbbrev, DwarfTag::kVariable, false,
               {{DwarfAttr::kName, DwarfForm::kString}, {DwarfAttr::kName, DwarfForm::kString}});
     abbrev_.push_back(0);  // End of the abbreviations.
   }

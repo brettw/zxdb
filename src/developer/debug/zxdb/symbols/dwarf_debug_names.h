@@ -8,9 +8,9 @@
 #include <string_view>
 #include <vector>
 
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/DebugInfo/DWARF/DWARFAcceleratorTable.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 
 namespace zxdb {
 
@@ -19,7 +19,7 @@ class DwarfBinary;
 // Represents a matching entry resolved from the DWARF v5 .debug_names accelerator table.
 struct DebugNamesEntry {
   DwarfDieRef die_ref;
-  llvm::dwarf::Tag tag = llvm::dwarf::DW_TAG_null;
+  DwarfTag tag = DwarfTag::kNone;
 
   auto operator<=>(const DebugNamesEntry& other) const = default;
 };

@@ -6,6 +6,7 @@
 
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 
 namespace zxdb {
 
@@ -32,8 +33,11 @@ std::optional<uint64_t> GetUnitLineTableOffset(llvm::DWARFUnit& unit) {
   llvm::DWARFDie unit_die = unit.getUnitDIE();
   if (!unit_die)
     return std::nullopt;
-  std::optional<uint64_t> stmt_list =
-      llvm::dwarf::toSectionOffset(unit_die.find(llvm::dwarf::DW_AT_stmt_list));
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kStmtList};
+  DwarfDieDecoder decoder(&unit.getContext(), kAttrs);
+  if (!decoder.Decode(unit_die))
+    return std::nullopt;
+  std::optional<uint64_t> stmt_list = decoder.GetSectionOffset(DwarfAttr::kStmtList);
   if (!stmt_list)
     return std::nullopt;
   return *stmt_list + unit.getLineTableOffset();

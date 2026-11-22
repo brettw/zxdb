@@ -24,7 +24,7 @@ namespace {
 // or lexical block. Skipping function-local variables avoids extracting compilation units during
 // module-wide variable lookups.
 bool IsLocalVariableEntry(const llvm::DWARFDebugNames::Entry& entry) {
-  if (entry.tag() != llvm::dwarf::DW_TAG_variable || !entry.hasParentInformation()) {
+  if (static_cast<DwarfTag>(entry.tag()) != DwarfTag::kVariable || !entry.hasParentInformation()) {
     return false;
   }
 
@@ -39,10 +39,9 @@ bool IsLocalVariableEntry(const llvm::DWARFDebugNames::Entry& entry) {
     return false;
   }
 
-  llvm::dwarf::Tag parent_tag = parent->tag();
-  return parent_tag == llvm::dwarf::DW_TAG_subprogram ||
-         parent_tag == llvm::dwarf::DW_TAG_inlined_subroutine ||
-         parent_tag == llvm::dwarf::DW_TAG_lexical_block;
+  DwarfTag parent_tag = static_cast<DwarfTag>(parent->tag());
+  return parent_tag == DwarfTag::kSubprogram || parent_tag == DwarfTag::kInlinedSubroutine ||
+         parent_tag == DwarfTag::kLexicalBlock;
 }
 
 std::optional<DwarfDieRef> ResolveEntryDieRef(const llvm::DWARFDebugNames::Entry& entry) {
@@ -170,7 +169,7 @@ std::vector<DebugNamesEntry> FindDebugNamesEntries(const llvm::DWARFDebugNames& 
     }
 
     if (seen.insert(*die_ref).second) {
-      results.push_back({.die_ref = *die_ref, .tag = entry.tag()});
+      results.push_back({.die_ref = *die_ref, .tag = static_cast<DwarfTag>(entry.tag())});
     }
   }
 

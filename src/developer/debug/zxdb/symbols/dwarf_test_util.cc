@@ -35,10 +35,10 @@ llvm::DWARFUnit* GetUnitWithNameEndingIn(llvm::DWARFContext* context, llvm::DWAR
 }
 
 llvm::DWARFDie GetFirstDieOfTagAndName(llvm::DWARFContext* context, llvm::DWARFUnit* unit,
-                                       llvm::dwarf::Tag tag, const std::string& name) {
+                                       DwarfTag tag, const std::string& name) {
   for (unsigned i = 0; i < unit->getNumDIEs(); i++) {
     llvm::DWARFDie die = unit->getDIEAtIndex(i);
-    if (die.getTag() == tag) {
+    if (static_cast<DwarfTag>(die.getTag()) == tag) {
       if (GetDIEName(context, die) == name)
         return die;
     }

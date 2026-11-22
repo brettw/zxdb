@@ -252,11 +252,12 @@ UncachedLazySymbol DwarfSymbolFactory::MakeUncachedLazy(const llvm::DWARFDie& di
 
 fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeFunction(const llvm::DWARFDie& die, DwarfTag tag,
                                                        bool is_specification) const {
-  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kSpecification, DwarfAttr::kName,
-                                         DwarfAttr::kLinkageName,   DwarfAttr::kType,
-                                         DwarfAttr::kDeclFile,      DwarfAttr::kDeclLine,
-                                         DwarfAttr::kCallFile,      DwarfAttr::kCallLine,
-                                         DwarfAttr::kFrameBase,     DwarfAttr::kObjectPointer};
+  static constexpr DwarfAttr kAttrs[] = {
+      DwarfAttr::kSpecification, DwarfAttr::kName,     DwarfAttr::kLinkageName,
+      DwarfAttr::kType,          DwarfAttr::kDeclFile, DwarfAttr::kDeclLine,
+      DwarfAttr::kCallFile,      DwarfAttr::kCallLine, DwarfAttr::kFrameBase,
+      DwarfAttr::kObjectPointer, DwarfAttr::kLowPc,    DwarfAttr::kHighPc,
+      DwarfAttr::kRanges};
 
   DwarfDieDecoder decoder = MakeDecoder(kAttrs);
   if (!decoder.Decode(die))
@@ -306,7 +307,7 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeFunction(const llvm::DWARFDie& die
     function->set_assigned_name(*name);
   if (linkage_name)
     function->set_linkage_name(*linkage_name);
-  function->set_code_ranges(GetCodeRanges(die));
+  function->set_code_ranges(GetCodeRanges(decoder));
   if (decl_file) {
     function->set_decl_line(MakeFileLine(die.getDwarfUnit(), decl_file, decl_line,
                                          delegate_->GetBuildDirForSymbolFactory()));
@@ -328,22 +329,22 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeFunction(const llvm::DWARFDie& die
   std::vector<LazySymbol> template_params;
   std::vector<LazySymbol> call_sites;
   for (const llvm::DWARFDie& child : DwarfAbstractChildIterator(die)) {
-    switch (child.getTag()) {
-      case llvm::dwarf::DW_TAG_formal_parameter:
+    switch (static_cast<DwarfTag>(child.getTag())) {
+      case DwarfTag::kFormalParameter:
         parameters.push_back(MakeLazy(child));
         break;
-      case llvm::dwarf::DW_TAG_variable:
+      case DwarfTag::kVariable:
         variables.push_back(MakeLazy(child));
         break;
-      case llvm::dwarf::DW_TAG_inlined_subroutine:
-      case llvm::dwarf::DW_TAG_lexical_block:
+      case DwarfTag::kInlinedSubroutine:
+      case DwarfTag::kLexicalBlock:
         inner_blocks.push_back(MakeLazy(child));
         break;
-      case llvm::dwarf::DW_TAG_template_type_parameter:
-      case llvm::dwarf::DW_TAG_template_value_parameter:
+      case DwarfTag::kTemplateTypeParameter:
+      case DwarfTag::kTemplateValueParameter:
         template_params.push_back(MakeLazy(child));
         break;
-      case llvm::dwarf::DW_TAG_call_site:
+      case DwarfTag::kCallSite:
         call_sites.push_back(MakeLazy(child));
         break;
       default:
@@ -412,7 +413,7 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeArrayType(const llvm::DWARFDie& di
   DwarfDieDecoder range_decoder = MakeDecoder(kArraySubrangeAttrs);
   std::vector<std::optional<size_t>> subrange_sizes;
   for (const llvm::DWARFDie& child : die) {
-    if (child.getTag() == llvm::dwarf::DW_TAG_subrange_type)
+    if (static_cast<DwarfTag>(child.getTag()) == DwarfTag::kSubrangeType)
       subrange_sizes.push_back(ReadArraySubrange(range_decoder, child));
   }
 
@@ -471,7 +472,7 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeCallSite(const llvm::DWARFDie& die
   // Decode parameters.
   std::vector<LazySymbol> parameters;
   for (const llvm::DWARFDie& child : die) {
-    if (child.getTag() == llvm::dwarf::DW_TAG_call_site_parameter)
+    if (static_cast<DwarfTag>(child.getTag()) == DwarfTag::kCallSiteParameter)
       parameters.push_back(MakeLazy(child));
   }
 
@@ -551,20 +552,20 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeCollection(const llvm::DWARFDie& d
   std::vector<LazySymbol> template_params;
   LazySymbol variant_part;
   for (const llvm::DWARFDie& child : die) {
-    switch (child.getTag()) {
-      case llvm::dwarf::DW_TAG_inheritance:
+    switch (static_cast<DwarfTag>(child.getTag())) {
+      case DwarfTag::kInheritance:
         inheritance.push_back(MakeLazy(child));
         break;
-      case llvm::dwarf::DW_TAG_member:
+      case DwarfTag::kMember:
         data.push_back(MakeLazy(child));
         break;
-      case llvm::dwarf::DW_TAG_variant_part:
+      case DwarfTag::kVariantPart:
         // Currently we only support one variant_part per struct. This could be expanded to a vector
         // if a compiler generates such a structure.
         variant_part = MakeLazy(child);
         break;
-      case llvm::dwarf::DW_TAG_template_type_parameter:
-      case llvm::dwarf::DW_TAG_template_value_parameter:
+      case DwarfTag::kTemplateTypeParameter:
+      case DwarfTag::kTemplateValueParameter:
         template_params.push_back(MakeLazy(child));
         break;
       default:
@@ -731,7 +732,7 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeEnum(const llvm::DWARFDie& die) co
   bool is_signed = false;
   Enumeration::Map map;
   for (const llvm::DWARFDie& child : die) {
-    if (child.getTag() != llvm::dwarf::DW_TAG_enumerator)
+    if (static_cast<DwarfTag>(child.getTag()) != DwarfTag::kEnumerator)
       continue;
     if (!enumerator_decoder.Decode(child))
       continue;
@@ -784,8 +785,8 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeFunctionType(const llvm::DWARFDie&
   // Handle sub-DIEs (this only has parameters).
   std::vector<LazySymbol> parameters;
   for (const llvm::DWARFDie& child : die) {
-    switch (child.getTag()) {
-      case llvm::dwarf::DW_TAG_formal_parameter:
+    switch (static_cast<DwarfTag>(child.getTag())) {
+      case DwarfTag::kFormalParameter:
         parameters.push_back(MakeLazy(child));
         break;
       default:
@@ -859,7 +860,10 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeInheritedFrom(const llvm::DWARFDie
 
 fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeLexicalBlock(const llvm::DWARFDie& die) const {
   auto block = fxl::MakeRefCounted<CodeBlock>(DwarfTag::kLexicalBlock);
-  block->set_code_ranges(GetCodeRanges(die));
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kLowPc, DwarfAttr::kHighPc, DwarfAttr::kRanges};
+  DwarfDieDecoder decoder = MakeDecoder(kAttrs);
+  if (decoder.Decode(die))
+    block->set_code_ranges(GetCodeRanges(decoder));
 
   // Handle sub-DIEs: child blocks and variables.
   //
@@ -868,15 +872,15 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeLexicalBlock(const llvm::DWARFDie&
   std::vector<LazySymbol> variables;
   std::vector<LazySymbol> call_sites;
   for (const llvm::DWARFDie& child : die) {
-    switch (child.getTag()) {
-      case llvm::dwarf::DW_TAG_variable:
+    switch (static_cast<DwarfTag>(child.getTag())) {
+      case DwarfTag::kVariable:
         variables.push_back(MakeLazy(child));
         break;
-      case llvm::dwarf::DW_TAG_inlined_subroutine:
-      case llvm::dwarf::DW_TAG_lexical_block:
+      case DwarfTag::kInlinedSubroutine:
+      case DwarfTag::kLexicalBlock:
         inner_blocks.push_back(MakeLazy(child));
         break;
-      case llvm::dwarf::DW_TAG_call_site:
+      case DwarfTag::kCallSite:
         call_sites.push_back(MakeLazy(child));
         break;
       default:
@@ -1076,7 +1080,7 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeVariant(const llvm::DWARFDie& die)
   // Collect the data members.
   std::vector<LazySymbol> members;
   for (const llvm::DWARFDie& child : die) {
-    if (child.getTag() == llvm::dwarf::DW_TAG_member)
+    if (static_cast<DwarfTag>(child.getTag()) == DwarfTag::kMember)
       members.push_back(MakeLazy(child));
   }
 
@@ -1104,38 +1108,35 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeVariantPart(const llvm::DWARFDie& 
   // but we will have already found that above via reference.
   std::vector<LazySymbol> variants;
   for (const llvm::DWARFDie& child : die) {
-    if (child.getTag() == llvm::dwarf::DW_TAG_variant)
+    if (static_cast<DwarfTag>(child.getTag()) == DwarfTag::kVariant)
       variants.push_back(MakeLazy(child));
   }
 
   return fxl::MakeRefCounted<VariantPart>(MakeLazy(discriminant), std::move(variants));
 }
 
-AddressRanges DwarfSymbolFactory::GetCodeRanges(const llvm::DWARFDie& die) const {
-  // It would be trivially more efficient to get the DW_AT_ranges, etc. attributes out when we're
-  // iterating through the DIE. But the address ranges have several different forms and also vary
-  // between DWARF versions 4 and 5 and this code isn't called too often.
+AddressRanges DwarfSymbolFactory::GetCodeRanges(const DwarfDieDecoder& decoder) const {
   AddressRanges::RangeVector code_ranges;
 
   // First check for a single range on the DIE.
-  if (std::optional<AddressRange> range = GetLowHighEncodedCodeRange(die)) {
+  if (std::optional<AddressRange> range = GetLowHighEncodedCodeRange(decoder)) {
     AppendAddressRange(range->begin(), range->end(), &code_ranges);
     // With only one range we know it's canonical.
     return AddressRanges(AddressRanges::kCanonical, std::move(code_ranges));
   }
 
-  std::optional<llvm::DWARFFormValue> form_value = die.find(llvm::dwarf::DW_AT_ranges);
-  if (!form_value) {
+  const DwarfDieDecoder::AttributeValue* ranges_value = decoder.GetValue(DwarfAttr::kRanges);
+  if (!ranges_value) {
     // This DIE has no address ranges.
     return AddressRanges();
   }
 
   // Got a range list, decode.
   llvm::DWARFAddressRangesVector ranges;
-  switch (static_cast<DwarfForm>(form_value->getForm())) {
+  switch (static_cast<DwarfForm>(ranges_value->form.getForm())) {
     case DwarfForm::kRnglistx: {
-      llvm::Expected<llvm::DWARFAddressRangesVector> opt_ranges =
-          GetCodeRangesFromRangelistXIndex(die, *form_value->getAsSectionOffset());
+      llvm::Expected<llvm::DWARFAddressRangesVector> opt_ranges = GetCodeRangesFromRangelistXIndex(
+          ranges_value->unit, *ranges_value->form.getAsSectionOffset());
       if (!opt_ranges)
         return AddressRanges();
       ranges = std::move(opt_ranges.get());
@@ -1146,7 +1147,7 @@ AddressRanges DwarfSymbolFactory::GetCodeRanges(const llvm::DWARFDie& die) const
       // These encodings do not support Debug Fission (requiring lookup in the main symbol file if
       // the current one is a DWO) so we can have LLVM look it up in the current unit directly.
       llvm::Expected<llvm::DWARFAddressRangesVector> opt_ranges =
-          die.getDwarfUnit()->findRnglistFromOffset(*form_value->getAsSectionOffset());
+          ranges_value->unit->findRnglistFromOffset(*ranges_value->form.getAsSectionOffset());
       if (!opt_ranges)
         return AddressRanges();
       ranges = std::move(opt_ranges.get());
@@ -1169,19 +1170,19 @@ AddressRanges DwarfSymbolFactory::GetCodeRanges(const llvm::DWARFDie& die) const
   return AddressRanges(AddressRanges::kNonCanonical, std::move(code_ranges));
 }
 
-// Similar to llvm::DWARFDie::getLowAndHighPC but works in our implementat ion debug fission.
+// Similar to llvm::DWARFDie::getLowAndHighPC but works in our implementation of debug fission.
 std::optional<AddressRange> DwarfSymbolFactory::GetLowHighEncodedCodeRange(
-    const llvm::DWARFDie& die) const {
-  std::optional<llvm::DWARFFormValue> low_form = die.find(llvm::dwarf::DW_AT_low_pc);
-  std::optional<llvm::DWARFFormValue> high_form = die.find(llvm::dwarf::DW_AT_high_pc);
+    const DwarfDieDecoder& decoder) const {
+  const DwarfDieDecoder::AttributeValue* low = decoder.GetValue(DwarfAttr::kLowPc);
+  const DwarfDieDecoder::AttributeValue* high = decoder.GetValue(DwarfAttr::kHighPc);
   // Note that the "high pc" has an offset form so don't check that it has an FC_Address form yet.
-  if (!low_form || !high_form || !low_form->isFormClass(llvm::DWARFFormValue::FC_Address)) {
+  if (!low || !high || !low->form.isFormClass(llvm::DWARFFormValue::FC_Address)) {
     return std::nullopt;
   }
 
   // Low range.
   uint64_t low_addr = 0;
-  if (std::optional<uint64_t> opt_low_addr = GetAddrFromFormValue(die, *low_form)) {
+  if (std::optional<uint64_t> opt_low_addr = GetAddrFromFormValue(low->unit, low->form)) {
     low_addr = *opt_low_addr;
   } else {
     // The low address must be a valid address type.
@@ -1190,10 +1191,10 @@ std::optional<AddressRange> DwarfSymbolFactory::GetLowHighEncodedCodeRange(
 
   // High range, this can be encoded as an address or an offset according to the form class.
   uint64_t high_addr = 0;
-  if (std::optional<uint64_t> opt_high_addr = GetAddrFromFormValue(die, *high_form)) {
+  if (std::optional<uint64_t> opt_high_addr = GetAddrFromFormValue(high->unit, high->form)) {
     // Encoded as an address.
     high_addr = *opt_high_addr;
-  } else if (std::optional<uint64_t> opt_offset = high_form->getAsUnsignedConstant()) {
+  } else if (std::optional<uint64_t> opt_offset = high->form.getAsUnsignedConstant()) {
     // Encoded as an offset from the base of the range.
     high_addr = low_addr + *opt_offset;
   } else {
@@ -1220,20 +1221,19 @@ std::optional<AddressRange> DwarfSymbolFactory::GetLowHighEncodedCodeRange(
 // This function returns LLVM types so it can have the same return value as the LLVM lookups for the
 // other address ranges forms.
 llvm::Expected<llvm::DWARFAddressRangesVector> DwarfSymbolFactory::GetCodeRangesFromRangelistXIndex(
-    const llvm::DWARFDie& die, uint64_t index) const {
+    llvm::DWARFUnit* unit, uint64_t index) const {
   if (CompileUnit* skeleton_unit = delegate_->GetSkeletonCompileUnit()) {
     // This is a DWO object so we use the main binary's DWARF unit corresponding to this file to
     // look up the data.
     return skeleton_unit->dwarf_unit()->GetLLVMUnit()->findRnglistFromIndex(index);
   }
 
-  // This is not a DWO object and we use the current DIE's unit for all information.
-  return die.getDwarfUnit()->findRnglistFromIndex(index);
+  // This is not a DWO object and we use the unit of the attribute for all information.
+  return unit->findRnglistFromIndex(index);
 }
 
 std::optional<uint64_t> DwarfSymbolFactory::GetAddrFromFormValue(
-    const llvm::DWARFDie& die, const llvm::DWARFFormValue& form_value) const {
-  llvm::DWARFUnit* unit = die.getDwarfUnit();
+    llvm::DWARFUnit* unit, const llvm::DWARFFormValue& form_value) const {
   llvm::dwarf::Form form = form_value.getForm();
   if (!llvm::dwarf::doesFormBelongToClass(form, llvm::DWARFFormValue::FC_Address,
                                           unit->getVersion())) {
@@ -1245,7 +1245,7 @@ std::optional<uint64_t> DwarfSymbolFactory::GetAddrFromFormValue(
   if (IsAddrXForm(static_cast<DwarfForm>(form))) {
     // Lookup in the address table.
     uint64_t index = form_value.getRawUValue();
-    if (std::optional<uint64_t> opt_addr = GetAddrFromIndex(die, index)) {
+    if (std::optional<uint64_t> opt_addr = GetAddrFromIndex(unit, index)) {
       addr = *opt_addr;
     } else {
       return std::nullopt;
@@ -1263,7 +1263,7 @@ std::optional<uint64_t> DwarfSymbolFactory::GetAddrFromFormValue(
   return addr;
 }
 
-std::optional<uint64_t> DwarfSymbolFactory::GetAddrFromIndex(const llvm::DWARFDie& die,
+std::optional<uint64_t> DwarfSymbolFactory::GetAddrFromIndex(llvm::DWARFUnit* unit,
                                                              uint64_t index) const {
   std::optional<llvm::object::SectionedAddress> addr;
   if (CompileUnit* skeleton_unit = delegate_->GetSkeletonCompileUnit()) {
@@ -1271,8 +1271,8 @@ std::optional<uint64_t> DwarfSymbolFactory::GetAddrFromIndex(const llvm::DWARFDi
     // look up the data.
     addr = skeleton_unit->dwarf_unit()->GetLLVMUnit()->getAddrOffsetSectionItem(index);
   } else {
-    // Look up in the unit for this DIE.
-    addr = die.getDwarfUnit()->getAddrOffsetSectionItem(index);
+    // Look up in the given unit.
+    addr = unit->getAddrOffsetSectionItem(index);
   }
 
   if (!addr) {

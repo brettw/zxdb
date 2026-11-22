@@ -12,6 +12,7 @@
 #include "src/developer/debug/zxdb/common/ref_ptr_to.h"
 #include "src/developer/debug/zxdb/symbols/address_range_map_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/lazy_symbol.h"
 
@@ -138,8 +139,8 @@ void DwarfUnitImpl::EnsureFuncAddrMap() const {
 void DwarfUnitImpl::AddDieToFuncAddr(const DwarfBinary& binary, const llvm::DWARFDie& die,
                                      AddressRangeMapBuilder& builder) const {
   // Add all functions and inlines to the map.
-  llvm::dwarf::Tag tag = die.getTag();
-  if (tag == llvm::dwarf::DW_TAG_subprogram || tag == llvm::dwarf::DW_TAG_inlined_subroutine) {
+  DwarfTag tag = static_cast<DwarfTag>(die.getTag());
+  if (tag == DwarfTag::kSubprogram || tag == DwarfTag::kInlinedSubroutine) {
     auto lazy_func = binary.GetSymbolFactory()->MakeLazy(GetDieRef(die.getOffset()));
     if (const Function* func = lazy_func.Get()->As<Function>()) {
       builder.AddRanges(func->code_ranges(), die.getOffset());

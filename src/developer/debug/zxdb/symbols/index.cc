@@ -284,7 +284,8 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
     if (!decoder.Decode(llvm::DWARFDie(unit_.GetLLVMUnit(), die)))
       continue;
 
-    if (kind == IndexNode::Kind::kVar && die->getTag() == llvm::dwarf::DW_TAG_member &&
+    if (kind == IndexNode::Kind::kVar &&
+        static_cast<DwarfTag>(die->getTag()) == DwarfTag::kMember &&
         !decoder.Has(DwarfAttr::kConstValue)) {
       // An abstract origin can supply the constant value, so confirm its presence after decoding.
       //
@@ -714,7 +715,7 @@ void Index::IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, bool forc
   if (!unit_die.isValid())
     return;
 
-  if (static_cast<int>(unit_die.getTag()) == static_cast<int>(DwarfTag::kSkeletonUnit)) {
+  if (static_cast<DwarfTag>(unit_die.getTag()) == DwarfTag::kSkeletonUnit) {
     IndexSkeletonCompileUnit(unit, unit_die);
   } else {
     // Normal compilation unit.

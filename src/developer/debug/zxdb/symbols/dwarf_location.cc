@@ -19,6 +19,19 @@ namespace zxdb {
 
 namespace {
 
+// Location list entry kinds (DWARF 5 section 7.7.3).
+enum : uint8_t {
+  kLleEndOfList = 0x00,
+  kLleBaseAddressx = 0x01,
+  kLleStartxEndx = 0x02,
+  kLleStartxLength = 0x03,
+  kLleOffsetPair = 0x04,
+  kLleDefaultLocation = 0x05,
+  kLleBaseAddress = 0x06,
+  kLleStartEnd = 0x07,
+  kLleStartLength = 0x08,
+};
+
 // Reads a DWARF 5 counted location description from the given data extractor. Returns nullopt on
 // failure.
 std::optional<DwarfExpr> ExtractCountedLocationDescription(DataExtractor& ext,
@@ -272,11 +285,11 @@ VariableLocation DecodeDwarf5LocationList(
       return VariableLocation();
 
     switch (*type_or) {
-      case llvm::dwarf::DW_LLE_end_of_list: {
+      case kLleEndOfList: {
         return VariableLocation(std::move(entries), std::move(default_expr));
       }
 
-      case llvm::dwarf::DW_LLE_base_address: {
+      case kLleBaseAddress: {
         // One target address operand that indicates the new base address.
         auto new_base_or = ext.Read<TargetPointer>();
         if (!new_base_or)
@@ -286,7 +299,7 @@ VariableLocation DecodeDwarf5LocationList(
         break;
       }
 
-      case llvm::dwarf::DW_LLE_base_addressx: {
+      case kLleBaseAddressx: {
         // Like base_address but the operand us a ULEB128 index into the .debug_addr section
         // that indicates the new base address.
         auto new_base_i_or = ext.ReadUleb128();
@@ -302,7 +315,7 @@ VariableLocation DecodeDwarf5LocationList(
         break;
       }
 
-      case llvm::dwarf::DW_LLE_start_end: {
+      case kLleStartEnd: {
         // Two target address operands of the start and end address of the entry. Followed by a
         // counted location description for that range.
         auto start_or = ext.Read<TargetPointer>();
@@ -313,7 +326,7 @@ VariableLocation DecodeDwarf5LocationList(
         break;
       }
 
-      case llvm::dwarf::DW_LLE_startx_endx: {
+      case kLleStartxEndx: {
         // Like start_end but the two operands are ULEB128 indices into the .debug_addr section that
         // indicates the start and end addresses of the entry.
         auto start_i_or = ext.ReadUleb128();
@@ -331,7 +344,7 @@ VariableLocation DecodeDwarf5LocationList(
         break;
       }
 
-      case llvm::dwarf::DW_LLE_start_length: {
+      case kLleStartLength: {
         // One target address operand of the start, and a ULEB length that indicates the address
         // range of the entry. Followed by a counted location description.
         auto start_or = ext.Read<TargetPointer>();
@@ -343,7 +356,7 @@ VariableLocation DecodeDwarf5LocationList(
         break;
       }
 
-      case llvm::dwarf::DW_LLE_startx_length: {
+      case kLleStartxLength: {
         // Like start_length but the first operand is a ULEB128 index into the .debug_addr section.
         auto start_i_or = ext.ReadUleb128();
         if (!start_i_or)
@@ -360,7 +373,7 @@ VariableLocation DecodeDwarf5LocationList(
         break;
       }
 
-      case llvm::dwarf::DW_LLE_offset_pair: {
+      case kLleOffsetPair: {
         // Two ULEB128 operands indicating offsets from the base_address of the range of the entry.
         // Followed by a counted location description.
         auto start_off_or = ext.ReadUleb128();
@@ -372,7 +385,7 @@ VariableLocation DecodeDwarf5LocationList(
         break;
       }
 
-      case llvm::dwarf::DW_LLE_default_location: {
+      case kLleDefaultLocation: {
         // A counted location description that applies when no other ranges do.
         default_expr = ExtractCountedLocationDescription(ext, source);
         if (!default_expr)

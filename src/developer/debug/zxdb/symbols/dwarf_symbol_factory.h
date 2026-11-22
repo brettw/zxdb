@@ -20,6 +20,7 @@ namespace llvm {
 class DWARFContext;
 class DWARFDie;
 class DWARFFormValue;
+class DWARFUnit;
 }  // namespace llvm
 
 namespace zxdb {
@@ -115,22 +116,23 @@ class DwarfSymbolFactory : public SymbolFactory {
   fxl::RefPtr<Symbol> DecodeVariant(const llvm::DWARFDie& die) const;
   fxl::RefPtr<Symbol> DecodeVariantPart(const llvm::DWARFDie& die) const;
 
-  // Generates ranges for a CodeBlock. The attributes may be not present, this function will compute
-  // what it can given the information (which may be an empty vector).
-  AddressRanges GetCodeRanges(const llvm::DWARFDie& die) const;
+  // Generates ranges for a CodeBlock from a decoded DIE. The decoder must have DW_AT_low_pc,
+  // DW_AT_high_pc, and DW_AT_ranges in its attribute table. The attributes may be not present, this
+  // function will compute what it can given the information (which may be an empty vector).
+  AddressRanges GetCodeRanges(const DwarfDieDecoder& decoder) const;
 
   // Returns the single code range if it's encoded with DW_AT_low_pc and DW_AT_high_pc.
-  std::optional<AddressRange> GetLowHighEncodedCodeRange(const llvm::DWARFDie& die) const;
+  std::optional<AddressRange> GetLowHighEncodedCodeRange(const DwarfDieDecoder& decoder) const;
 
-  // Decodes the index for a DW_FORM_rnglistx encoding.
+  // Decodes the index for a DW_FORM_rnglistx encoding. The unit is the unit of the attribute.
   llvm::Expected<llvm::DWARFAddressRangesVector> GetCodeRangesFromRangelistXIndex(
-      const llvm::DWARFDie& die, uint64_t index) const;
+      llvm::DWARFUnit* unit, uint64_t index) const;
 
-  // Looks up an address from the address table, taking account the unit for the DIE. This handles
-  // lookup it up in the main binary in the case of DWOs.
-  std::optional<uint64_t> GetAddrFromFormValue(const llvm::DWARFDie& die,
+  // Looks up an address from the address table, taking account the unit of the attribute. This
+  // handles lookup it up in the main binary in the case of DWOs.
+  std::optional<uint64_t> GetAddrFromFormValue(llvm::DWARFUnit* unit,
                                                const llvm::DWARFFormValue& form) const;
-  std::optional<uint64_t> GetAddrFromIndex(const llvm::DWARFDie& die, uint64_t index) const;
+  std::optional<uint64_t> GetAddrFromIndex(llvm::DWARFUnit* unit, uint64_t index) const;
 
   // These can be null if the module is unloaded but there are still some dangling type references
   // to them.

@@ -7,6 +7,7 @@
 
 #include "llvm/DebugInfo/DWARF/DWARFCompileUnit.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 
 namespace llvm {
 class DWARFContext;
@@ -24,7 +25,7 @@ llvm::DWARFUnit* GetUnitWithNameEndingIn(llvm::DWARFContext* context, llvm::DWAR
 // Returns the first DIE in the unit with the matching tag and DW_AT_Name attribute. If not found,t
 // he returned DIE will be !isValid().
 llvm::DWARFDie GetFirstDieOfTagAndName(llvm::DWARFContext* context, llvm::DWARFUnit* unit,
-                                       llvm::dwarf::Tag tag, const std::string& name);
+                                       DwarfTag tag, const std::string& name);
 
 }  // namespace zxdb
 

@@ -36,7 +36,7 @@ TEST(DwarfDebugNamesTest, LookupBuiltBinary) {
   ASSERT_FALSE(fn_entries.empty());
   bool found_func = false;
   for (const auto& entry : fn_entries) {
-    if (entry.tag == llvm::dwarf::DW_TAG_subprogram) {
+    if (entry.tag == DwarfTag::kSubprogram) {
       found_func = true;
       LazySymbol lazy = module->GetSymbolFactory()->MakeLazy(entry.die_ref);
       const Symbol* sym = lazy.Get();
@@ -54,8 +54,7 @@ TEST(DwarfDebugNamesTest, LookupBuiltBinary) {
   ASSERT_FALSE(class_entries.empty());
   bool found_class = false;
   for (const auto& entry : class_entries) {
-    if (entry.tag == llvm::dwarf::DW_TAG_structure_type ||
-        entry.tag == llvm::dwarf::DW_TAG_class_type) {
+    if (entry.tag == DwarfTag::kStructureType || entry.tag == DwarfTag::kClassType) {
       found_class = true;
       LazySymbol lazy = module->GetSymbolFactory()->MakeLazy(entry.die_ref);
       const Symbol* sym = lazy.Get();
@@ -71,7 +70,7 @@ TEST(DwarfDebugNamesTest, LookupBuiltBinary) {
   ASSERT_FALSE(ns_entries.empty());
   bool found_ns = false;
   for (const auto& entry : ns_entries) {
-    if (entry.tag == llvm::dwarf::DW_TAG_namespace) {
+    if (entry.tag == DwarfTag::kNamespace) {
       found_ns = true;
       LazySymbol lazy = module->GetSymbolFactory()->MakeLazy(entry.die_ref);
       const Symbol* sym = lazy.Get();
@@ -86,7 +85,7 @@ TEST(DwarfDebugNamesTest, LookupBuiltBinary) {
   ASSERT_FALSE(var_entries.empty());
   bool found_var = false;
   for (const auto& entry : var_entries) {
-    if (entry.tag == llvm::dwarf::DW_TAG_variable) {
+    if (entry.tag == DwarfTag::kVariable) {
       found_var = true;
       LazySymbol lazy = module->GetSymbolFactory()->MakeLazy(entry.die_ref);
       const Symbol* sym = lazy.Get();

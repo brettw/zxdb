@@ -711,7 +711,7 @@ ErrOr<std::vector<EntryFormat>> ReadEntryFormat(DataReader& reader) {
     EntryFormat& entry = format.emplace_back();
     entry.content_type = reader.Uleb();
     entry.form = reader.Uleb();
-    if (entry.content_type == llvm::dwarf::DW_LNCT_path)
+    if (entry.content_type == kLnctPath)
       has_path = true;
   }
   if (!reader.ok())
@@ -749,7 +749,7 @@ Err ReadV5Tables(DataReader& reader, size_t offset_size, uint8_t address_size,
           ReadForm(reader, format.form, offset_size, address_size, strings, header->little_endian);
       if (value.has_error())
         return Err();
-      if (format.content_type == llvm::dwarf::DW_LNCT_path)
+      if (format.content_type == kLnctPath)
         dir = value.value().string;
     }
     if (i == 0 && reader.offset() == entry_begin) {
@@ -775,13 +775,13 @@ Err ReadV5Tables(DataReader& reader, size_t offset_size, uint8_t address_size,
       if (value.has_error())
         return Err();
       switch (format.content_type) {
-        case llvm::dwarf::DW_LNCT_path:
+        case kLnctPath:
           file.name = value.value().string;
           break;
-        case llvm::dwarf::DW_LNCT_directory_index:
+        case kLnctDirectoryIndex:
           file.dir_index = value.value().constant;
           break;
-        case llvm::dwarf::DW_LNCT_MD5:
+        case kLnctMd5:
           // LLVM rejects an MD5 that isn't a 16-byte block.
           if (value.value().block_size != 16)
             return Err();

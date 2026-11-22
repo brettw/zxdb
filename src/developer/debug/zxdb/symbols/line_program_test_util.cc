@@ -17,19 +17,6 @@ namespace zxdb {
 
 namespace {
 
-// DWARF 5 line table content types and forms.
-constexpr uint8_t kLnctPath = 1;
-constexpr uint8_t kLnctDirectoryIndex = 2;
-constexpr uint8_t kLnctMd5 = 5;
-constexpr uint8_t kFormData2 = 0x05;
-constexpr uint8_t kFormString = 0x08;
-constexpr uint8_t kFormData1 = 0x0b;
-constexpr uint8_t kFormStrp = 0x0e;
-constexpr uint8_t kFormUdata = 0x0f;
-constexpr uint8_t kFormData16 = 0x1e;
-constexpr uint8_t kFormLineStrp = 0x1f;
-constexpr uint8_t kFormStrx1 = 0x25;
-
 // The offset of the first entry of .debug_str_offsets, after its DWARF 5 header.
 constexpr uint32_t kStrOffsetsBase = 8;
 
@@ -289,18 +276,18 @@ std::vector<uint8_t> LineTableBuilder::Build(LineTableTestSections& sections) co
     auto form_code = [](StringForm form) {
       switch (form) {
         case StringForm::kString:
-          return kFormString;
+          return DwarfForm::kString;
         case StringForm::kLineStrp:
-          return kFormLineStrp;
+          return DwarfForm::kLineStrp;
         case StringForm::kStrp:
-          return kFormStrp;
+          return DwarfForm::kStrp;
         case StringForm::kStrx1:
-          return kFormStrx1;
+          return DwarfForm::kStrx1;
       }
-      return kFormString;
+      return DwarfForm::kString;
     };
     StringForm dir_form = dir_string_form_.value_or(string_form_);
-    uint8_t string_form = form_code(string_form_);
+    DwarfForm string_form = form_code(string_form_);
 
     params.push_back(1);  // Directory entry format count.
     AppendUleb(params, kLnctPath);
@@ -315,18 +302,18 @@ std::vector<uint8_t> LineTableBuilder::Build(LineTableTestSections& sections) co
     AppendUleb(params, kLnctDirectoryIndex);
     switch (dir_index_form_) {
       case DirIndexForm::kUdata:
-        AppendUleb(params, kFormUdata);
+        AppendUleb(params, DwarfForm::kUdata);
         break;
       case DirIndexForm::kData1:
-        AppendUleb(params, kFormData1);
+        AppendUleb(params, DwarfForm::kData1);
         break;
       case DirIndexForm::kData2:
-        AppendUleb(params, kFormData2);
+        AppendUleb(params, DwarfForm::kData2);
         break;
     }
     if (include_md5_) {
       AppendUleb(params, kLnctMd5);
-      AppendUleb(params, kFormData16);
+      AppendUleb(params, DwarfForm::kData16);
     }
     AppendUleb(params, files_.size());
     for (const FileEntry& file : files_) {
@@ -447,14 +434,19 @@ void LineTableTestSections::Finish(uint8_t address_size, bool little_endian) {
   };
   // Abbreviations for AddCompileUnit().
   std::vector<uint8_t> abbrev = {
-      1,    0x11,       1,     // 1: DW_TAG_compile_unit with children.
-      0x10, 0x17,              // DW_AT_stmt_list, DW_FORM_sec_offset.
-      0x72, 0x17,              // DW_AT_str_offsets_base, DW_FORM_sec_offset.
-      0,    0,                 //
-      2,    0x2e,       0,     // 2: DW_TAG_subprogram without children.
-      0x3a, kFormUdata, 0, 0,  // DW_AT_decl_file.
-      3,    0x11,       1,     // 3: DW_TAG_compile_unit without DW_AT_stmt_list.
-      0x72, 0x17,       0, 0,  // DW_AT_str_offsets_base, DW_FORM_sec_offset.
+      1,    0x11,
+      1,           // 1: DW_TAG_compile_unit with children.
+      0x10, 0x17,  // DW_AT_stmt_list, DW_FORM_sec_offset.
+      0x72, 0x17,  // DW_AT_str_offsets_base, DW_FORM_sec_offset.
+      0,    0,     //
+      2,    0x2e,
+      0,  // 2: DW_TAG_subprogram without children.
+      0x3a, FormByte(DwarfForm::kUdata),
+      0,    0,  // DW_AT_decl_file.
+      3,    0x11,
+      1,  // 3: DW_TAG_compile_unit without DW_AT_stmt_list.
+      0x72, 0x17,
+      0,    0,  // DW_AT_str_offsets_base, DW_FORM_sec_offset.
       0,
   };
 

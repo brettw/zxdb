@@ -9,7 +9,9 @@
 #include <gtest/gtest.h>
 
 #include "llvm/BinaryFormat/Dwarf.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program_llvm.h"
 #include "src/developer/debug/zxdb/symbols/line_program_test_util.h"
@@ -827,11 +829,10 @@ TEST(LineProgram, TableEntryPastHeaderLength) {
   {
     // A DWARF 5 directory whose second field crosses the end. The parser drops the whole entry,
     // including its path. The file table after it is lost.
-    using namespace llvm::dwarf;
     std::vector<uint8_t> tables = {
-        2, DW_LNCT_path, FormByte(DwarfForm::kString), 0x81, 0x40, FormByte(DwarfForm::kData4), 1};
+        2, kLnctPath, FormByte(DwarfForm::kString), 0x81, 0x40, FormByte(DwarfForm::kData4), 1};
     tables.insert(tables.end(), {'/', 'b', 0, 1, 2, 3, 4});
-    tables.insert(tables.end(), {1, DW_LNCT_path, FormByte(DwarfForm::kString), 0});  // No files.
+    tables.insert(tables.end(), {1, kLnctPath, FormByte(DwarfForm::kString), 0});  // No files.
     Builder builder(5);
     builder.set_raw_tables(tables);
     builder.set_header_length_adjust(-6);  // The end is inside the DW_FORM_data4 value.
@@ -939,7 +940,6 @@ TEST(LineProgram, ParseErrors) {
 // DW_FORM_strx indices must be inside the string offsets table. An index whose entry offset
 // overflows must not wrap around to a valid entry.
 TEST(LineProgram, IndexedStringBounds) {
-  using namespace llvm::dwarf;
   const std::string str("first.cc\0other.cc\0", 18);
 
   for (uint8_t entry_size : {4, 8}) {
@@ -956,10 +956,10 @@ TEST(LineProgram, IndexedStringBounds) {
 
       // base + index * entry_size is base again after it wraps.
       const uint64_t wrapping_index = (~uint64_t{0} / entry_size) + 1;
-      std::vector<uint8_t> tables = {1, DW_LNCT_path, FormByte(DwarfForm::kString), 1};
+      std::vector<uint8_t> tables = {1, kLnctPath, FormByte(DwarfForm::kString), 1};
       tables.insert(tables.end(), {'/', 'b', 0});
-      tables.insert(tables.end(), {2, DW_LNCT_path, FormByte(DwarfForm::kStrx),
-                                   DW_LNCT_directory_index, FormByte(DwarfForm::kUdata), 3});
+      tables.insert(tables.end(), {2, kLnctPath, FormByte(DwarfForm::kStrx), kLnctDirectoryIndex,
+                                   FormByte(DwarfForm::kUdata), 3});
       for (uint64_t index : {uint64_t{0}, uint64_t{1}, wrapping_index}) {
         AppendUleb(tables, index);
         tables.push_back(0);  // Directory index.
@@ -985,7 +985,6 @@ TEST(LineProgram, IndexedStringBounds) {
 // Nonzero string offsets exercise byte order in both the indexed forms and their offset entries.
 // Real units give the string offsets base and entry width, so the test also checks those.
 TEST(LineProgram, IndexedStringByteOrder) {
-  using namespace llvm::dwarf;
   for (bool little_endian : {false, true}) {
     for (bool dwarf64 : {false, true}) {
       for (DwarfForm form : {DwarfForm::kStrx, DwarfForm::kStrx1, DwarfForm::kStrx2,
@@ -1012,8 +1011,8 @@ TEST(LineProgram, IndexedStringByteOrder) {
         put(offsets, 4, offset_size);
         put(offsets, 13, offset_size);
 
-        std::vector<uint8_t> tables = {
-            1, DW_LNCT_path, FormByte(DwarfForm::kString), 1, '/', 'b', 0, 1, DW_LNCT_path};
+        std::vector<uint8_t> tables = {1, kLnctPath, FormByte(DwarfForm::kString), 1, '/', 'b', 0,
+                                       1, kLnctPath};
         AppendUleb(tables, form);
         AppendUleb(tables, 2);
         for (uint64_t index : {1, 0}) {
@@ -1030,18 +1029,18 @@ TEST(LineProgram, IndexedStringByteOrder) {
         line.Finish(8, little_endian);
 
         std::vector<uint8_t> abbrev = {1,
-                                       DW_TAG_compile_unit,
+                                       static_cast<uint8_t>(DwarfTag::kCompileUnit),
                                        0,
-                                       DW_AT_stmt_list,
+                                       static_cast<uint8_t>(DwarfAttr::kStmtList),
                                        FormByte(DwarfForm::kSecOffset),
-                                       DW_AT_str_offsets_base,
+                                       static_cast<uint8_t>(DwarfAttr::kStrOffsetsBase),
                                        FormByte(DwarfForm::kSecOffset),
                                        0,
                                        0,
                                        0};
         std::vector<uint8_t> info;
         put(info, 5, 2);
-        info.push_back(DW_UT_compile);
+        info.push_back(llvm::dwarf::DW_UT_compile);
         info.push_back(8);          // Address size.
         put(info, 0, offset_size);  // Abbreviation offset.
         AppendUleb(info, 1);
@@ -1176,14 +1175,13 @@ TEST(LineProgram, TruncatedHeaders) {
 // DWARF 5 tables with unusual or invalid entry formats. An error in a table keeps the entries
 // before it and doesn't fail the header.
 TEST(LineProgram, Dwarf5TableFormats) {
-  using namespace llvm::dwarf;
   auto cstr = [](std::vector<uint8_t>& out, const char* str) {
     out.insert(out.end(), str, str + strlen(str) + 1);
   };
   // A directory table with "/build" and "d", using inline strings.
   auto dirs = [&](std::vector<uint8_t>& out) {
     out.push_back(1);
-    AppendUleb(out, DW_LNCT_path);
+    AppendUleb(out, kLnctPath);
     AppendUleb(out, DwarfForm::kString);
     AppendUleb(out, 2);
     cstr(out, "/build");
@@ -1200,14 +1198,14 @@ TEST(LineProgram, Dwarf5TableFormats) {
   {
     Case& c = cases.emplace_back(Case{"no path in the directory format", {}, {}});
     c.tables.push_back(1);
-    AppendUleb(c.tables, DW_LNCT_directory_index);
+    AppendUleb(c.tables, kLnctDirectoryIndex);
     AppendUleb(c.tables, DwarfForm::kUdata);
   }
   {
     Case& c = cases.emplace_back(Case{"no path in the file format", {}, {}});
     dirs(c.tables);
     c.tables.push_back(1);
-    AppendUleb(c.tables, DW_LNCT_directory_index);
+    AppendUleb(c.tables, kLnctDirectoryIndex);
     AppendUleb(c.tables, DwarfForm::kUdata);
     AppendUleb(c.tables, 1);
     AppendUleb(c.tables, 1);
@@ -1217,9 +1215,9 @@ TEST(LineProgram, Dwarf5TableFormats) {
     Case& c = cases.emplace_back(Case{"unknown form in the second entry", {}, {"d/a.cc"}});
     dirs(c.tables);
     c.tables.push_back(2);
-    AppendUleb(c.tables, DW_LNCT_path);
+    AppendUleb(c.tables, kLnctPath);
     AppendUleb(c.tables, DwarfForm::kIndirect);
-    AppendUleb(c.tables, DW_LNCT_directory_index);
+    AppendUleb(c.tables, kLnctDirectoryIndex);
     AppendUleb(c.tables, DwarfForm::kIndirect);
     AppendUleb(c.tables, 2);
     // DW_FORM_indirect gives the form of each value, including a second indirection.
@@ -1235,9 +1233,9 @@ TEST(LineProgram, Dwarf5TableFormats) {
     Case& c = cases.emplace_back(Case{"form above the range of int", {}, {"d/a.cc"}});
     dirs(c.tables);
     c.tables.push_back(2);
-    AppendUleb(c.tables, DW_LNCT_path);
+    AppendUleb(c.tables, kLnctPath);
     AppendUleb(c.tables, DwarfForm::kString);
-    AppendUleb(c.tables, DW_LNCT_directory_index);
+    AppendUleb(c.tables, kLnctDirectoryIndex);
     AppendUleb(c.tables, DwarfForm::kIndirect);
     AppendUleb(c.tables, 2);
     cstr(c.tables, "a.cc");
@@ -1251,11 +1249,11 @@ TEST(LineProgram, Dwarf5TableFormats) {
     Case& c = cases.emplace_back(Case{"MD5 that isn't 16 bytes", {}, {"d/a.cc"}});
     dirs(c.tables);
     c.tables.push_back(3);
-    AppendUleb(c.tables, DW_LNCT_path);
+    AppendUleb(c.tables, kLnctPath);
     AppendUleb(c.tables, DwarfForm::kString);
-    AppendUleb(c.tables, DW_LNCT_directory_index);
+    AppendUleb(c.tables, kLnctDirectoryIndex);
     AppendUleb(c.tables, DwarfForm::kData1);
-    AppendUleb(c.tables, DW_LNCT_MD5);
+    AppendUleb(c.tables, kLnctMd5);
     AppendUleb(c.tables, DwarfForm::kBlock1);
     AppendUleb(c.tables, 2);
     cstr(c.tables, "a.cc");
@@ -1272,17 +1270,17 @@ TEST(LineProgram, Dwarf5TableFormats) {
         cases.emplace_back(Case{"other content types and forms", {}, {"d/a.cc", nullptr, "b.cc"}});
     dirs(c.tables);
     c.tables.push_back(6);
-    AppendUleb(c.tables, DW_LNCT_timestamp);
+    AppendUleb(c.tables, kLnctTimestamp);
     AppendUleb(c.tables, DwarfForm::kData4);
-    AppendUleb(c.tables, DW_LNCT_path);
+    AppendUleb(c.tables, kLnctPath);
     AppendUleb(c.tables, DwarfForm::kString);
-    AppendUleb(c.tables, DW_LNCT_size);
+    AppendUleb(c.tables, kLnctSize);
     AppendUleb(c.tables, DwarfForm::kUdata);
-    AppendUleb(c.tables, DW_LNCT_LLVM_source);
+    AppendUleb(c.tables, kLnctLlvmSource);
     AppendUleb(c.tables, DwarfForm::kString);
     AppendUleb(c.tables, 0x3000);  // An unknown vendor content type.
     AppendUleb(c.tables, DwarfForm::kBlock);
-    AppendUleb(c.tables, DW_LNCT_directory_index);
+    AppendUleb(c.tables, kLnctDirectoryIndex);
     AppendUleb(c.tables, DwarfForm::kData8);
     AppendUleb(c.tables, 3);
     auto entry = [&](const char* name, uint64_t dir) {
@@ -1304,9 +1302,9 @@ TEST(LineProgram, Dwarf5TableFormats) {
         cases.emplace_back(Case{"names that can't be decoded", {}, {nullptr, nullptr, "d/c.cc"}});
     dirs(c.tables);
     c.tables.push_back(3);
-    AppendUleb(c.tables, DW_LNCT_path);
+    AppendUleb(c.tables, kLnctPath);
     AppendUleb(c.tables, DwarfForm::kIndirect);
-    AppendUleb(c.tables, DW_LNCT_directory_index);
+    AppendUleb(c.tables, kLnctDirectoryIndex);
     AppendUleb(c.tables, DwarfForm::kImplicitConst);  // Reads nothing and gives 0.
     AppendUleb(c.tables, 0x2001 + 1);                 // Ignored content type.
     AppendUleb(c.tables, DwarfForm::kUdata);
@@ -1328,9 +1326,9 @@ TEST(LineProgram, Dwarf5TableFormats) {
     Case& c = cases.emplace_back(Case{name, {}, {expected}});
     dirs(c.tables);
     c.tables.push_back(2);
-    AppendUleb(c.tables, DW_LNCT_path);
+    AppendUleb(c.tables, kLnctPath);
     AppendUleb(c.tables, DwarfForm::kString);
-    AppendUleb(c.tables, DW_LNCT_directory_index);
+    AppendUleb(c.tables, kLnctDirectoryIndex);
     AppendUleb(c.tables, form);
     AppendUleb(c.tables, 1);
     cstr(c.tables, "a.cc");
@@ -1351,7 +1349,7 @@ TEST(LineProgram, Dwarf5TableFormats) {
     Case& c = cases.emplace_back(Case{"DW_FORM_strx index above 64 bits", {}, {nullptr}});
     dirs(c.tables);
     c.tables.push_back(1);
-    AppendUleb(c.tables, DW_LNCT_path);
+    AppendUleb(c.tables, kLnctPath);
     AppendUleb(c.tables, DwarfForm::kStrx);
     AppendUleb(c.tables, 2);
     AppendUleb(c.tables, 0);  // No string offsets table here, so no name.
@@ -1362,7 +1360,7 @@ TEST(LineProgram, Dwarf5TableFormats) {
     Case& c = cases.emplace_back(Case{"DW_FORM_sdata INT64_MAX + 1", {}, {"a.cc"}});
     dirs(c.tables);
     c.tables.push_back(2);
-    AppendUleb(c.tables, DW_LNCT_path);
+    AppendUleb(c.tables, kLnctPath);
     AppendUleb(c.tables, DwarfForm::kString);
     AppendUleb(c.tables, 0x3000);  // An ignored vendor field.
     AppendUleb(c.tables, DwarfForm::kSdata);
@@ -1523,10 +1521,9 @@ TEST(LineProgram, DefineFileEdgeCases) {
 // keep their indices. It fails when the count is larger than the header size, so a 40-byte table
 // can't make 2^40 entries.
 TEST(LineProgram, EmptyEntries) {
-  using namespace llvm::dwarf;
-  const std::vector<uint8_t> dirs = {1, DW_LNCT_path, FormByte(DwarfForm::kString), 1, '/', 'b', 0};
+  const std::vector<uint8_t> dirs = {1, kLnctPath, FormByte(DwarfForm::kString), 1, '/', 'b', 0};
   auto empty_format = [](std::vector<uint8_t>& out, uint64_t count) {
-    out.insert(out.end(), {1, DW_LNCT_path, FormByte(DwarfForm::kImplicitConst)});
+    out.insert(out.end(), {1, kLnctPath, FormByte(DwarfForm::kImplicitConst)});
     AppendUleb(out, count);
   };
 
@@ -1559,9 +1556,8 @@ TEST(LineProgram, EmptyEntries) {
     // The file table after the empty directories is still read.
     std::vector<uint8_t> tables;
     empty_format(tables, count);
-    tables.insert(tables.end(),
-                  {2, DW_LNCT_path, FormByte(DwarfForm::kString), DW_LNCT_directory_index,
-                   FormByte(DwarfForm::kUdata), 1, 'a', '.', 'c', 'c', 0, 2});
+    tables.insert(tables.end(), {2, kLnctPath, FormByte(DwarfForm::kString), kLnctDirectoryIndex,
+                                 FormByte(DwarfForm::kUdata), 1, 'a', '.', 'c', 'c', 0, 2});
     Builder builder(5);
     builder.set_raw_tables(tables);
     LineTableTestSections sections;
@@ -1576,8 +1572,8 @@ TEST(LineProgram, EmptyEntries) {
   {
     // A zero-byte entry can have a nonzero directory index. Bulk filling must copy that value.
     std::vector<uint8_t> tables = dirs;
-    tables.insert(tables.end(), {2, DW_LNCT_path, FormByte(DwarfForm::kImplicitConst),
-                                 DW_LNCT_directory_index, FormByte(DwarfForm::kFlagPresent), 3});
+    tables.insert(tables.end(), {2, kLnctPath, FormByte(DwarfForm::kImplicitConst),
+                                 kLnctDirectoryIndex, FormByte(DwarfForm::kFlagPresent), 3});
     Builder builder(5);
     builder.set_raw_tables(tables);
     LineTableTestSections sections;

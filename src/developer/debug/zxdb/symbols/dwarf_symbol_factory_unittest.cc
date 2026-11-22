@@ -665,8 +665,8 @@ TEST(DwarfSymbolFactory, TypeUnitReference) {
     for (const std::unique_ptr<llvm::DWARFUnit>& unit : context->info_section_units()) {
       if (unit->isTypeUnit())
         continue;
-      var_die = GetFirstDieOfTagAndName(context, unit.get(), llvm::dwarf::DW_TAG_variable,
-                                        "type_unit_outer");
+      var_die =
+          GetFirstDieOfTagAndName(context, unit.get(), DwarfTag::kVariable, "type_unit_outer");
       if (var_die)
         break;
     }
