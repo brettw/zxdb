@@ -7,11 +7,11 @@
 
 #include <span>
 
-#include <llvm/BinaryFormat/Dwarf.h>
 #include <llvm/DebugInfo/DWARF/DWARFAddressRange.h>
 #include <llvm/Support/Error.h>  // For llvm::Expected.
 
 #include "src/developer/debug/zxdb/common/address_range.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 #include "src/developer/debug/zxdb/symbols/symbol_factory.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
@@ -77,7 +77,7 @@ class DwarfSymbolFactory : public SymbolFactory {
 
   // Makes a decoder for the given attribute table. The decoder uses the binary, so it finds type
   // unit signatures and file tables in the binary's caches.
-  DwarfDieDecoder MakeDecoder(std::span<const llvm::dwarf::Attribute> attributes) const;
+  DwarfDieDecoder MakeDecoder(std::span<const DwarfAttr> attributes) const;
 
   // Internal version that creates a symbol from a Die.
   fxl::RefPtr<Symbol> DecodeSymbol(const llvm::DWARFDie& die) const;

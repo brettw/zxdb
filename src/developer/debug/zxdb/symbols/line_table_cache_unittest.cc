@@ -41,10 +41,10 @@ std::optional<std::string> DecodeDeclFile(llvm::DWARFContext& context, llvm::DWA
   for (size_t i = 0; i < child_index; i++)
     die = die.getSibling();
 
-  static constexpr llvm::dwarf::Attribute kAttrs[] = {llvm::dwarf::DW_AT_decl_file};
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kDeclFile};
   DwarfDieDecoder decoder(&context, kAttrs);
   EXPECT_TRUE(decoder.Decode(die));
-  return decoder.GetFile(llvm::dwarf::DW_AT_decl_file);
+  return decoder.GetFile(DwarfAttr::kDeclFile);
 }
 
 }  // namespace

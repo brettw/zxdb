@@ -130,8 +130,8 @@ class NamedSymbolRef : public IndexNode::SymbolRef {
 // Returns true if the given abbreviation defines a PC range.
 bool AbbrevHasCode(const llvm::DWARFAbbreviationDeclaration* abbrev) {
   for (const auto spec : abbrev->attributes()) {
-    if (spec.Attr == llvm::dwarf::DW_AT_low_pc || spec.Attr == llvm::dwarf::DW_AT_high_pc ||
-        spec.Attr == llvm::dwarf::DW_AT_ranges)
+    DwarfAttr attr = static_cast<DwarfAttr>(spec.Attr);
+    if (attr == DwarfAttr::kLowPc || attr == DwarfAttr::kHighPc || attr == DwarfAttr::kRanges)
       return true;
   }
   return false;
@@ -140,7 +140,7 @@ bool AbbrevHasCode(const llvm::DWARFAbbreviationDeclaration* abbrev) {
 // Returns true if the given abbreviation defines a "location".
 bool AbbrevHasLocation(const llvm::DWARFAbbreviationDeclaration* abbrev) {
   for (const auto spec : abbrev->attributes()) {
-    if (spec.Attr == llvm::dwarf::DW_AT_location)
+    if (static_cast<DwarfAttr>(spec.Attr) == DwarfAttr::kLocation)
       return true;
   }
   return false;
@@ -247,20 +247,19 @@ class UnitIndexer {
 
   // Used to decode names for DIEs in the second pass when we find one we need that wasn't extracted
   // in the first.
-  static constexpr llvm::dwarf::Attribute kNameAttrs[] = {llvm::dwarf::DW_AT_name};
+  static constexpr DwarfAttr kNameAttrs[] = {DwarfAttr::kName};
   DwarfDieDecoder name_decoder_;
 
   // Used to decode the types of template parameters.
-  static constexpr llvm::dwarf::Attribute kTypeAttrs[] = {llvm::dwarf::DW_AT_type};
+  static constexpr DwarfAttr kTypeAttrs[] = {DwarfAttr::kType};
   DwarfDieDecoder type_decoder_;
 };
 
 // The symbol storage will be filled with the indexable entries.
 void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
-  static constexpr llvm::dwarf::Attribute kAttrs[] = {
-      llvm::dwarf::DW_AT_specification, llvm::dwarf::DW_AT_declaration,
-      llvm::dwarf::DW_AT_const_value,   llvm::dwarf::DW_AT_main_subprogram,
-      llvm::dwarf::DW_AT_name,          llvm::dwarf::DW_AT_abstract_origin};
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kSpecification, DwarfAttr::kDeclaration,
+                                         DwarfAttr::kConstValue,    DwarfAttr::kMainSubprogram,
+                                         DwarfAttr::kName,          DwarfAttr::kAbstractOrigin};
   DwarfDieDecoder decoder(*unit_.GetBinary(), kAttrs);
 
   for (; !scanner_.done(); scanner_.Advance()) {
@@ -286,7 +285,7 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
       continue;
 
     if (kind == IndexNode::Kind::kVar && die->getTag() == llvm::dwarf::DW_TAG_member &&
-        !decoder.Has(llvm::dwarf::DW_AT_const_value)) {
+        !decoder.Has(DwarfAttr::kConstValue)) {
       // An abstract origin can supply the constant value, so confirm its presence after decoding.
       //
       // In C++ everything with a const_value will generally also be external (i.e. "static") which
@@ -317,7 +316,7 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
       if (!type_decoder_.Decode(llvm::DWARFDie(unit_.GetLLVMUnit(), die)))
         continue;
 
-      if (llvm::DWARFDie type_die = type_decoder_.GetReference(llvm::dwarf::DW_AT_type)) {
+      if (llvm::DWARFDie type_die = type_decoder_.GetReference(DwarfAttr::kType)) {
         AddTemplateParameterToName(fixup_template_name, type_die.getShortName());
         parent.set_name(std::move(fixup_template_name));
         parent.set_has_modified_template_name();
@@ -329,21 +328,21 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
     // Compute the offset of a separate declaration if this DIE has one. This can be unit-relative
     // or .debug_info-relative (global).
     uint64_t decl_offset = 0;
-    if (llvm::DWARFDie decl_die = decoder.GetReference(llvm::dwarf::DW_AT_specification))
+    if (llvm::DWARFDie decl_die = decoder.GetReference(DwarfAttr::kSpecification))
       decl_offset = decl_die.getOffset();
 
     FX_DCHECK(scanner_.die_index() < indexable_.size());
-    std::optional<bool> is_declaration = decoder.GetBool(llvm::dwarf::DW_AT_declaration);
+    std::optional<bool> is_declaration = decoder.GetBool(DwarfAttr::kDeclaration);
     auto ref_kind = is_declaration && *is_declaration ? IndexNode::SymbolRef::kDwarfDeclaration
                                                       : IndexNode::SymbolRef::kDwarf;
 
-    std::optional<const char*> name = decoder.GetCString(llvm::dwarf::DW_AT_name);
-    indexable_[scanner_.die_index()] = NamedSymbolRef(
-        ref_kind, dwo_index_, unit_.GetDieRef(die->getOffset()), kind, name ? *name : "",
-        decl_offset, decoder.Has(llvm::dwarf::DW_AT_abstract_origin));
+    std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
+    indexable_[scanner_.die_index()] =
+        NamedSymbolRef(ref_kind, dwo_index_, unit_.GetDieRef(die->getOffset()), kind,
+                       name ? *name : "", decl_offset, decoder.Has(DwarfAttr::kAbstractOrigin));
 
     // Check for "main" function annotation.
-    std::optional<bool> is_main_subprogram = decoder.GetBool(llvm::dwarf::DW_AT_main_subprogram);
+    std::optional<bool> is_main_subprogram = decoder.GetBool(DwarfAttr::kMainSubprogram);
     if (kind == IndexNode::Kind::kFunction && is_main_subprogram && *is_main_subprogram)
       main_functions->emplace_back(IndexNode::SymbolRef::kDwarf, dwo_index_,
                                    unit_.GetDieRef(die->getOffset()));
@@ -404,8 +403,8 @@ IndexNode::Kind UnitIndexer::GetKindForDie(const llvm::DWARFDebugInfoEntry* die)
     case DwarfTag::kMember:
       // Ordinary instance members are not part of the global symbol index.
       for (const auto& spec : abbrev->attributes()) {
-        if (spec.Attr == llvm::dwarf::DW_AT_const_value ||
-            spec.Attr == llvm::dwarf::DW_AT_abstract_origin)
+        DwarfAttr attr = static_cast<DwarfAttr>(spec.Attr);
+        if (attr == DwarfAttr::kConstValue || attr == DwarfAttr::kAbstractOrigin)
           return IndexNode::Kind::kVar;
       }
       return IndexNode::Kind::kNone;
@@ -422,7 +421,7 @@ IndexNode::Kind UnitIndexer::GetKindForDie(const llvm::DWARFDebugInfoEntry* die)
 
 const char* UnitIndexer::GetDieName(uint32_t index) {
   if (name_decoder_.Decode(unit_.GetLLVMDieAtIndex(index))) {
-    if (std::optional<const char*> name = name_decoder_.GetCString(llvm::dwarf::DW_AT_name))
+    if (std::optional<const char*> name = name_decoder_.GetCString(DwarfAttr::kName))
       return *name;
   }
   return "";
@@ -737,18 +736,16 @@ void Index::IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, bool forc
 // for just that compilation unit. The skeleton unit has the addr_base which defines how addresses
 // are relocated from the link-independent .dwo file, as well as the line table.
 void Index::IndexSkeletonCompileUnit(const DwarfUnit& unit, const llvm::DWARFDie& unit_die) {
-  static constexpr llvm::dwarf::Attribute kAttrs[] = {
-      llvm::dwarf::DW_AT_dwo_name, llvm::dwarf::DW_AT_GNU_dwo_name, llvm::dwarf::DW_AT_comp_dir,
-      llvm::dwarf::DW_AT_addr_base};
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kDwoName, DwarfAttr::kGnuDwoName,
+                                         DwarfAttr::kCompDir, DwarfAttr::kAddrBase};
   DwarfDieDecoder unit_decoder(*unit.GetBinary(), kAttrs);
   if (!unit_decoder.Decode(unit_die))
     return;
 
-  std::optional<const char*> dwo_name = unit_decoder.GetCString(llvm::dwarf::DW_AT_dwo_name);
-  std::optional<const char*> gnu_dwo_name =
-      unit_decoder.GetCString(llvm::dwarf::DW_AT_GNU_dwo_name);
-  std::optional<const char*> comp_dir = unit_decoder.GetCString(llvm::dwarf::DW_AT_comp_dir);
-  std::optional<uint64_t> addr_base = unit_decoder.GetSectionOffset(llvm::dwarf::DW_AT_addr_base);
+  std::optional<const char*> dwo_name = unit_decoder.GetCString(DwarfAttr::kDwoName);
+  std::optional<const char*> gnu_dwo_name = unit_decoder.GetCString(DwarfAttr::kGnuDwoName);
+  std::optional<const char*> comp_dir = unit_decoder.GetCString(DwarfAttr::kCompDir);
+  std::optional<uint64_t> addr_base = unit_decoder.GetSectionOffset(DwarfAttr::kAddrBase);
   if ((!dwo_name && !gnu_dwo_name) || !addr_base)
     return;  // Need a name for the .dwo file to work, plus an address.
 

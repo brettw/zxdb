@@ -6,6 +6,7 @@
 
 #include <lib/syslog/cpp/macros.h>
 
+#include "llvm/BinaryFormat/Dwarf.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
 #include "llvm/DebugInfo/DWARF/DWARFTypeUnit.h"
@@ -47,14 +48,12 @@ llvm::DWARFDie GetDIEForSignature(llvm::DWARFContext* context, uint64_t signatur
 
 }  // namespace
 
-DwarfDieDecoder::DwarfDieDecoder(llvm::DWARFContext* context,
-                                 std::span<const llvm::dwarf::Attribute> attributes)
+DwarfDieDecoder::DwarfDieDecoder(llvm::DWARFContext* context, std::span<const DwarfAttr> attributes)
     : context_(context), attributes_(attributes) {
   FX_CHECK(attributes_.size() <= kMaxAttributes);
 }
 
-DwarfDieDecoder::DwarfDieDecoder(DwarfBinary& binary,
-                                 std::span<const llvm::dwarf::Attribute> attributes)
+DwarfDieDecoder::DwarfDieDecoder(DwarfBinary& binary, std::span<const DwarfAttr> attributes)
     : context_(binary.GetLLVMContext()), binary_(&binary), attributes_(attributes) {
   FX_CHECK(attributes_.size() <= kMaxAttributes);
 }
@@ -68,20 +67,18 @@ bool DwarfDieDecoder::Decode(const llvm::DWARFDie& die) {
   return DecodeInternal(die, kMaxAbstractOriginRefsToFollow);
 }
 
-bool DwarfDieDecoder::Has(llvm::dwarf::Attribute attribute) const {
-  return GetValue(attribute) != nullptr;
-}
+bool DwarfDieDecoder::Has(DwarfAttr attribute) const { return GetValue(attribute) != nullptr; }
 
-const DwarfDieDecoder::AttributeValue* DwarfDieDecoder::GetValue(
-    llvm::dwarf::Attribute attribute) const {
+const DwarfDieDecoder::AttributeValue* DwarfDieDecoder::GetValue(DwarfAttr attribute) const {
   size_t index = FindIndex(attribute);
-  FX_DCHECK(index < attributes_.size()) << "The attribute is not in the decoder's table.";
+  FX_DCHECK(index < attributes_.size())
+      << DwarfAttrToString(attribute, true) << " is not in the decoder's table.";
   if (index >= attributes_.size() || !values_[index].unit)
     return nullptr;
   return &values_[index];
 }
 
-std::optional<bool> DwarfDieDecoder::GetBool(llvm::dwarf::Attribute attribute) const {
+std::optional<bool> DwarfDieDecoder::GetBool(DwarfAttr attribute) const {
   if (const AttributeValue* value = GetValue(attribute)) {
     if (std::optional<uint64_t> as_unsigned = value->form.getAsUnsignedConstant())
       return *as_unsigned != 0;
@@ -89,26 +86,25 @@ std::optional<bool> DwarfDieDecoder::GetBool(llvm::dwarf::Attribute attribute) c
   return std::nullopt;
 }
 
-std::optional<uint64_t> DwarfDieDecoder::GetUnsignedConstant(
-    llvm::dwarf::Attribute attribute) const {
+std::optional<uint64_t> DwarfDieDecoder::GetUnsignedConstant(DwarfAttr attribute) const {
   if (const AttributeValue* value = GetValue(attribute))
     return value->form.getAsUnsignedConstant();
   return std::nullopt;
 }
 
-std::optional<int64_t> DwarfDieDecoder::GetSignedConstant(llvm::dwarf::Attribute attribute) const {
+std::optional<int64_t> DwarfDieDecoder::GetSignedConstant(DwarfAttr attribute) const {
   if (const AttributeValue* value = GetValue(attribute))
     return value->form.getAsSignedConstant();
   return std::nullopt;
 }
 
-std::optional<uint64_t> DwarfDieDecoder::GetAddress(llvm::dwarf::Attribute attribute) const {
+std::optional<uint64_t> DwarfDieDecoder::GetAddress(DwarfAttr attribute) const {
   if (const AttributeValue* value = GetValue(attribute))
     return value->form.getAsAddress();
   return std::nullopt;
 }
 
-std::optional<const char*> DwarfDieDecoder::GetCString(llvm::dwarf::Attribute attribute) const {
+std::optional<const char*> DwarfDieDecoder::GetCString(DwarfAttr attribute) const {
   if (const AttributeValue* value = GetValue(attribute)) {
     if (llvm::Expected<const char*> result = value->form.getAsCString())
       return *result;
@@ -118,7 +114,7 @@ std::optional<const char*> DwarfDieDecoder::GetCString(llvm::dwarf::Attribute at
   return std::nullopt;
 }
 
-std::optional<uint64_t> DwarfDieDecoder::GetSectionOffset(llvm::dwarf::Attribute attribute) const {
+std::optional<uint64_t> DwarfDieDecoder::GetSectionOffset(DwarfAttr attribute) const {
   // The getAsSectionOffset() call returns nullopt if the form class doesn't match, so this doesn't
   // need to check it.
   if (const AttributeValue* value = GetValue(attribute))
@@ -126,8 +122,7 @@ std::optional<uint64_t> DwarfDieDecoder::GetSectionOffset(llvm::dwarf::Attribute
   return std::nullopt;
 }
 
-std::optional<std::vector<uint8_t>> DwarfDieDecoder::GetBlock(
-    llvm::dwarf::Attribute attribute) const {
+std::optional<std::vector<uint8_t>> DwarfDieDecoder::GetBlock(DwarfAttr attribute) const {
   const AttributeValue* value = GetValue(attribute);
   if (!value)
     return std::nullopt;
@@ -141,7 +136,7 @@ std::optional<std::vector<uint8_t>> DwarfDieDecoder::GetBlock(
   return std::vector<uint8_t>(block->begin(), block->end());
 }
 
-ConstValue DwarfDieDecoder::GetConstValue(llvm::dwarf::Attribute attribute) const {
+ConstValue DwarfDieDecoder::GetConstValue(DwarfAttr attribute) const {
   const AttributeValue* value = GetValue(attribute);
   if (!value)
     return ConstValue();
@@ -162,7 +157,7 @@ ConstValue DwarfDieDecoder::GetConstValue(llvm::dwarf::Attribute attribute) cons
 }
 
 std::optional<DwarfDieDecoder::HighPC> DwarfDieDecoder::GetHighPC() const {
-  const AttributeValue* value = GetValue(llvm::dwarf::DW_AT_high_pc);
+  const AttributeValue* value = GetValue(DwarfAttr::kHighPc);
   if (!value)
     return std::nullopt;
 
@@ -177,13 +172,13 @@ std::optional<DwarfDieDecoder::HighPC> DwarfDieDecoder::GetHighPC() const {
   return std::nullopt;
 }
 
-llvm::DWARFDie DwarfDieDecoder::GetReference(llvm::dwarf::Attribute attribute) const {
+llvm::DWARFDie DwarfDieDecoder::GetReference(DwarfAttr attribute) const {
   if (const AttributeValue* value = GetValue(attribute))
     return DecodeReference(value->unit, value->form);
   return llvm::DWARFDie();
 }
 
-std::optional<std::string> DwarfDieDecoder::GetFile(llvm::dwarf::Attribute attribute) const {
+std::optional<std::string> DwarfDieDecoder::GetFile(DwarfAttr attribute) const {
   const AttributeValue* value = GetValue(attribute);
   if (!value)
     return std::nullopt;
@@ -212,7 +207,7 @@ llvm::DWARFDie DwarfDieDecoder::GetAbstractParent() const {
   return deepest_die_.getParent();
 }
 
-size_t DwarfDieDecoder::FindIndex(llvm::dwarf::Attribute attribute) const {
+size_t DwarfDieDecoder::FindIndex(DwarfAttr attribute) const {
   // The tables are small, so a linear search is faster than a map lookup.
   for (size_t i = 0; i < attributes_.size(); i++) {
     if (attributes_[i] == attribute)
@@ -256,12 +251,13 @@ bool DwarfDieDecoder::DecodeInternal(const llvm::DWARFDie& die,
   for (const llvm::DWARFAbbreviationDeclaration::AttributeSpec& spec : abbrev->attributes()) {
     // A value that is already filled came from a DIE nearer in the abstract origin chain, or from
     // an earlier duplicate of the attribute in this DIE. That value wins.
-    size_t index = FindIndex(spec.Attr);
+    DwarfAttr attr = static_cast<DwarfAttr>(spec.Attr);
+    size_t index = FindIndex(attr);
     bool wanted = index < attributes_.size() && !values_[index].unit;
 
     // Abstract origins are always decoded so they can be followed after the loop. This doesn't
     // check for duplicates so the decoder can follow more than one link in the chain.
-    bool is_abstract_origin = spec.Attr == llvm::dwarf::DW_AT_abstract_origin;
+    bool is_abstract_origin = attr == DwarfAttr::kAbstractOrigin;
 
     if (!wanted && !is_abstract_origin) {
       // Skip over the attribute to go to the next.

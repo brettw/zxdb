@@ -10,6 +10,7 @@ add_library(zxdb_symbols STATIC
   compile_unit.cc
   const_value.cc
   data_member.cc
+  dwarf_attr.cc
   dwarf_binary_impl.cc
   dwarf_debug_names.cc
   dwarf_die_decoder.cc
