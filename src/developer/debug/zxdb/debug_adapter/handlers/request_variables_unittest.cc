@@ -5,20 +5,19 @@
 #include "src/developer/debug/zxdb/debug_adapter/handlers/request_variables_unittest.h"
 
 #include <dap/protocol.h>
-#include <llvm/BinaryFormat/Dwarf.h>
 
 #include "src/developer/debug/zxdb/client/mock_frame.h"
 #include "src/developer/debug/zxdb/common/scoped_temp_file.h"
 #include "src/developer/debug/zxdb/debug_adapter/context_test.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/variable_test_support.h"
 namespace zxdb {
 
 TEST_F(RequestVariablesTest, LocalsNoChildren) {
   // Make a mock frame with test_var variable.
-  auto variable = MakeUint64VariableForTest(
-      "test_var", 0x10000, 0x10020,
-      DwarfExpr({llvm::dwarf::DW_OP_reg0, llvm::dwarf::DW_OP_stack_value}));
+  auto variable = MakeUint64VariableForTest("test_var", 0x10000, 0x10020,
+                                            DwarfExpr({DwarfOp::kReg0, DwarfOp::kStackValue}));
 
   fxl::RefPtr<Function> function(fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram));
   function->set_assigned_name("test_func1");

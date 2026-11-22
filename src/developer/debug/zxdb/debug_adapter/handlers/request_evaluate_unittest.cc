@@ -5,7 +5,6 @@
 #include "src/developer/debug/zxdb/debug_adapter/handlers/request_evaluate.h"
 
 #include <gtest/gtest.h>
-#include <llvm/BinaryFormat/Dwarf.h>
 
 #include "src/developer/debug/ipc/records.h"
 #include "src/developer/debug/zxdb/client/mock_frame.h"
@@ -13,6 +12,7 @@
 #include "src/developer/debug/zxdb/client/thread.h"
 #include "src/developer/debug/zxdb/console/console_context.h"
 #include "src/developer/debug/zxdb/debug_adapter/context_test.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/mock_symbol_data_provider.h"
 #include "src/developer/debug/zxdb/symbols/type_test_support.h"
@@ -72,9 +72,8 @@ TEST_F(RequestEvaluateTest, EvaluateVariableAndArithmetic) {
   auto location1 = Location(0x10010, FileLine("test_file.cc", 23), 10,
                             SymbolContext::ForRelativeAddresses(), function1);
 
-  auto test_var = MakeUint64VariableForTest(
-      "test_var", 0x10030, 0x10050,
-      DwarfExpr({llvm::dwarf::DW_OP_lit12, llvm::dwarf::DW_OP_stack_value}));
+  auto test_var = MakeUint64VariableForTest("test_var", 0x10030, 0x10050,
+                                            DwarfExpr({DwarfOp::kLit12, DwarfOp::kStackValue}));
 
   fxl::RefPtr<Function> function2(fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram));
   function2->set_assigned_name("test_func2");
@@ -118,7 +117,7 @@ TEST_F(RequestEvaluateTest, EvaluateStructFormatting) {
                                         {{"a", MakeInt32Type()}, {"b", MakeInt32Type()}});
   auto struct_var = MakeVariableForTest(
       "my_struct", struct_type, 0x10000, 0x10020,
-      DwarfExpr({llvm::dwarf::DW_OP_addr, 0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}));
+      DwarfExpr({DwarfOp::kAddr, 0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}));
 
   fxl::RefPtr<Function> function(fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram));
   function->set_assigned_name("test_func");

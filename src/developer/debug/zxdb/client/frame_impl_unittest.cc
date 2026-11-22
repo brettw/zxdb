@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "src/developer/debug/ipc/records.h"
 #include "src/developer/debug/shared/platform_message_loop.h"
 #include "src/developer/debug/zxdb/client/mock_remote_api.h"
@@ -16,6 +15,7 @@
 #include "src/developer/debug/zxdb/client/session.h"
 #include "src/developer/debug/zxdb/client/thread.h"
 #include "src/developer/debug/zxdb/symbols/code_block.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/location.h"
 #include "src/developer/debug/zxdb/symbols/symbol_test_parent_setter.h"
@@ -120,8 +120,7 @@ TEST_F(FrameImplTest, AsyncBasePointer) {
 
   // This describes the frame base location for the function. This encodes the memory pointed to by
   // register 0.
-  VariableLocation frame_base(
-      DwarfExpr({llvm::dwarf::DW_OP_reg0, llvm::dwarf::DW_OP_deref}, UncachedLazySymbol()));
+  VariableLocation frame_base(DwarfExpr({DwarfOp::kReg0, DwarfOp::kDeref}, UncachedLazySymbol()));
 
   auto function = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);
   function->set_frame_base(frame_base);

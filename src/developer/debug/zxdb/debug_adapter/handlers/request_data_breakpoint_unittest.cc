@@ -7,7 +7,6 @@
 #include <inttypes.h>
 
 #include <gtest/gtest.h>
-#include <llvm/BinaryFormat/Dwarf.h>
 
 #include "src/developer/debug/zxdb/client/breakpoint.h"
 #include "src/developer/debug/zxdb/client/breakpoint_settings.h"
@@ -21,6 +20,7 @@
 #include "src/developer/debug/zxdb/console/console_context.h"
 #include "src/developer/debug/zxdb/debug_adapter/context_test.h"
 #include "src/developer/debug/zxdb/expr/format_node.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/index_test_support.h"
 #include "src/developer/debug/zxdb/symbols/mock_module_symbols.h"
@@ -402,26 +402,26 @@ TEST_F(RequestDataBreakpointTest, VariablesReferenceScopesAndShadowing) {
   auto global_x = fxl::MakeRefCounted<Variable>(
       DwarfTag::kVariable, "x", MakeInt32Type(),
       VariableLocation(
-          DwarfExpr({llvm::dwarf::DW_OP_addr, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})));
+          DwarfExpr({DwarfOp::kAddr, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})));
   TestIndexedSymbol indexed_global_x(mod_sym.get(), &mod_sym->index().root(), "x", global_x);
 
   auto global_only = fxl::MakeRefCounted<Variable>(
       DwarfTag::kVariable, "g_only", MakeInt32Type(),
       VariableLocation(
-          DwarfExpr({llvm::dwarf::DW_OP_addr, 0x00, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})));
+          DwarfExpr({DwarfOp::kAddr, 0x00, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})));
   TestIndexedSymbol indexed_global_only(mod_sym.get(), &mod_sym->index().root(), "g_only",
                                         global_only);
 
   // Parameter `x` at 0x2000, unnamed parameter at 0x2004, shadowed by local variable `x` at 0x3000.
   auto param_x = MakeVariableForTest(
       "x", MakeInt32Type(), 0x10000, 0x10020,
-      DwarfExpr({llvm::dwarf::DW_OP_addr, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}));
+      DwarfExpr({DwarfOp::kAddr, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}));
   auto unnamed_param = MakeVariableForTest(
       "", MakeInt32Type(), 0x10000, 0x10020,
-      DwarfExpr({llvm::dwarf::DW_OP_addr, 0x04, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}));
+      DwarfExpr({DwarfOp::kAddr, 0x04, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}));
   auto local_x = MakeVariableForTest(
       "x", MakeInt32Type(), 0x10000, 0x10020,
-      DwarfExpr({llvm::dwarf::DW_OP_addr, 0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}));
+      DwarfExpr({DwarfOp::kAddr, 0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}));
 
   auto function = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);
   function->set_assigned_name("test_func");

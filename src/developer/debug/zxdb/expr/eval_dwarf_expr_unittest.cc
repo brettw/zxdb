@@ -6,10 +6,10 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "src/developer/debug/zxdb/common/test_with_loop.h"
 #include "src/developer/debug/zxdb/expr/abi_null.h"
 #include "src/developer/debug/zxdb/expr/eval_context_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/mock_symbol_data_provider.h"
 #include "src/developer/debug/zxdb/symbols/process_symbols_test_setup.h"
 #include "src/developer/debug/zxdb/symbols/type_test_support.h"
@@ -71,7 +71,7 @@ TEST_F(AsyncDwarfExprEvalTest, MemoryManagement) {
       std::make_shared<AbiNull>(), setup.process().GetWeakPtr(), data_provider, ExprLanguage::kC);
 
   // This expression evaluates the relative address.
-  DwarfExpr expr({llvm::dwarf::DW_OP_addr, kRelativeAddress, 0, 0, 0, 0, 0, 0, 0});
+  DwarfExpr expr({DwarfOp::kAddr, kRelativeAddress, 0, 0, 0, 0, 0, 0, 0});
 
   bool called = false;
   auto value_callback = [&called, kMemoryValue](ErrOrValue value) {

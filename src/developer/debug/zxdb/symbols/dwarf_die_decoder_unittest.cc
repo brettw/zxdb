@@ -10,6 +10,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/line_program_test_util.h"
 
 namespace zxdb {
@@ -174,8 +175,8 @@ class DwarfDieDecoderTest : public testing::Test {
     info_.push_back(1);     // DW_AT_artificial is true.
     info_.push_back(0x7b);  // DW_AT_const_value is -5 in SLEB128.
     AppendUleb(info_, 2);   // DW_AT_location length.
-    info_.push_back(DW_OP_reg0 + 3);
-    info_.push_back(DW_OP_stack_value);
+    info_.push_back(DwarfOp::kReg0 + 3);
+    info_.push_back(DwarfOp::kStackValue);
     AppendInteger(info_, 0, 4);                  // DW_AT_addr_base is offset 0, which is valid.
     AppendInteger(info_, namespace_offset_, 4);  // DW_AT_type.
 
@@ -184,7 +185,7 @@ class DwarfDieDecoderTest : public testing::Test {
     AppendUleb(info_, 9);             // DW_AT_const_value.
     AppendInteger(info_, 0x2000, 8);  // DW_AT_high_pc.
     info_.push_back(1);               // DW_AT_location length.
-    info_.push_back(DW_OP_reg0 + 5);
+    info_.push_back(DwarfOp::kReg0 + 5);
 
     cycle_offset_ = NextOffset();
     AppendUleb(info_, kCycleAbbrev);
@@ -276,7 +277,7 @@ TEST_F(DwarfDieDecoderTest, Forms) {
   EXPECT_EQ(ConstValue(-5).GetConstValue(8),
             decoder.GetConstValue(DwarfAttr::kConstValue).GetConstValue(8));
 
-  std::vector<uint8_t> expected_location = {DW_OP_reg0 + 3, DW_OP_stack_value};
+  std::vector<uint8_t> expected_location = {DwarfOp::kReg0 + 3, DwarfOp::kStackValue};
   EXPECT_EQ(expected_location, decoder.GetBlock(DwarfAttr::kLocation));
 
   // Offset 0 is a valid value.
@@ -303,7 +304,7 @@ TEST_F(DwarfDieDecoderTest, Forms) {
   ASSERT_TRUE(high_pc);
   EXPECT_FALSE(high_pc->is_constant);
   EXPECT_EQ(0x2000u, high_pc->value);
-  std::vector<uint8_t> expected_block = {DW_OP_reg0 + 5};
+  std::vector<uint8_t> expected_block = {DwarfOp::kReg0 + 5};
   EXPECT_EQ(expected_block, decoder.GetBlock(DwarfAttr::kLocation));
 }
 

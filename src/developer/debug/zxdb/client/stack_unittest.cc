@@ -10,7 +10,6 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "src/developer/debug/ipc/records.h"
 #include "src/developer/debug/shared/message_loop.h"
 #include "src/developer/debug/zxdb/client/frame_fingerprint.h"
@@ -21,6 +20,7 @@
 #include "src/developer/debug/zxdb/common/test_with_loop.h"
 #include "src/developer/debug/zxdb/expr/eval_context.h"
 #include "src/developer/debug/zxdb/expr/expr.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/file_line.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/type_test_support.h"
@@ -420,7 +420,7 @@ TEST_F(StackTest, InlineVars) {
   inline_func->set_code_ranges(AddressRanges(AddressRange(kInlineAddr, kInlineAddr + 8)));
 
   // The inline function has a local variable ("var") that always evaluates to 3.
-  VariableLocation var_loc(DwarfExpr({llvm::dwarf::DW_OP_lit3, llvm::dwarf::DW_OP_stack_value}));
+  VariableLocation var_loc(DwarfExpr({DwarfOp::kLit3, DwarfOp::kStackValue}));
 
   auto int32_type = MakeInt32Type();
   auto inline_var =

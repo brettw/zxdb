@@ -6,11 +6,11 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "src/developer/debug/zxdb/client/mock_process.h"
 #include "src/developer/debug/zxdb/client/mock_target.h"
 #include "src/developer/debug/zxdb/client/session.h"
 #include "src/developer/debug/zxdb/common/test_with_loop.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/mock_module_symbols.h"
 #include "src/developer/debug/zxdb/symbols/process_symbols_test_setup.h"
 #include "src/developer/debug/zxdb/symbols/symbol_context.h"
@@ -40,19 +40,19 @@ TEST_F(ProcessSymbolDataProviderTest, GetTLSSegment) {
   process.set_symbols(&symbols_.process());
 
   std::vector<uint8_t> program{
-      llvm::dwarf::DW_OP_const8u, 0, 1, 2, 3, 4, 5, 6, 7, llvm::dwarf::DW_OP_form_tls_address,
+      DwarfOp::kConst8u, 0, 1, 2, 3, 4, 5, 6, 7, DwarfOp::kFormTlsAddress,
   };
 
   std::vector<uint8_t> thrd_t_helper{
-      llvm::dwarf::DW_OP_lo_user + 1,  // Invalid opcode because this one shouldn't be used.
+      DwarfOp::kLoUser + 1,  // Invalid opcode because this one shouldn't be used.
   };
 
   std::vector<uint8_t> link_map_tls_modid_helper{
-      llvm::dwarf::DW_OP_const8u, 7, 6, 5, 4, 3, 2, 1, 0, llvm::dwarf::DW_OP_plus,
+      DwarfOp::kConst8u, 7, 6, 5, 4, 3, 2, 1, 0, DwarfOp::kPlus,
   };
 
   std::vector<uint8_t> tlsbase_helper{
-      llvm::dwarf::DW_OP_const8u, 1, 0, 1, 0, 1, 0, 1, 0, llvm::dwarf::DW_OP_plus,
+      DwarfOp::kConst8u, 1, 0, 1, 0, 1, 0, 1, 0, DwarfOp::kPlus,
   };
 
   Process::TLSHelpers helpers = {

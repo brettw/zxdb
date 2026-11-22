@@ -16,6 +16,7 @@
 #include "src/developer/debug/zxdb/expr/format_options.h"
 #include "src/developer/debug/zxdb/expr/resolve_collection.h"
 #include "src/developer/debug/zxdb/expr/resolve_ptr_ref.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/modified_type.h"
 #include "src/developer/debug/zxdb/symbols/template_parameter.h"
@@ -326,7 +327,7 @@ void PrettyEvalContext::FillFakeMemberFn() {
   // number of bytes of the object data.
   const std::vector<uint8_t>& source_data = value_.data().bytes();
   std::vector<uint8_t> location_expr_data;
-  location_expr_data.push_back(llvm::dwarf::DW_OP_piece);
+  location_expr_data.push_back(DwarfOp::kPiece);
   AppendULeb(source_data.size(), &location_expr_data);
   location_expr_data.insert(location_expr_data.end(), source_data.begin(), source_data.end());
   DwarfExpr location_expr(std::move(location_expr_data));

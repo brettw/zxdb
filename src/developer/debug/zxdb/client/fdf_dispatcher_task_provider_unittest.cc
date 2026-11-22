@@ -11,7 +11,6 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "src/developer/debug/shared/message_loop.h"
 #include "src/developer/debug/zxdb/client/mock_frame.h"
 #include "src/developer/debug/zxdb/client/process_impl.h"
@@ -25,6 +24,7 @@
 #include "src/developer/debug/zxdb/symbols/collection.h"
 #include "src/developer/debug/zxdb/symbols/data_member.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_expr.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/index_node.h"
 #include "src/developer/debug/zxdb/symbols/index_test_support.h"
@@ -189,7 +189,7 @@ fxl::RefPtr<Collection> RegisterMockRuntimeTypes(MockModuleSymbols* mod) {
 
 DwarfExpr MakeConstantAddressExpr(uint64_t addr) {
   return DwarfExpr({
-      llvm::dwarf::DW_OP_addr,
+      DwarfOp::kAddr,
       static_cast<uint8_t>(addr & 0xffu),
       static_cast<uint8_t>((addr >> 8u) & 0xffu),
       static_cast<uint8_t>((addr >> 16u) & 0xffu),
@@ -198,7 +198,7 @@ DwarfExpr MakeConstantAddressExpr(uint64_t addr) {
       static_cast<uint8_t>((addr >> 40u) & 0xffu),
       static_cast<uint8_t>((addr >> 48u) & 0xffu),
       static_cast<uint8_t>((addr >> 56u) & 0xffu),
-      llvm::dwarf::DW_OP_stack_value,
+      DwarfOp::kStackValue,
   });
 }
 

@@ -6,13 +6,13 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "src/developer/debug/zxdb/client/mock_process.h"
 #include "src/developer/debug/zxdb/client/remote_api_test.h"
 #include "src/developer/debug/zxdb/client/session.h"
 #include "src/developer/debug/zxdb/symbols/call_site.h"
 #include "src/developer/debug/zxdb/symbols/call_site_parameter.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_expr_eval.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/mock_symbol_data_provider.h"
 
 namespace zxdb {
@@ -95,7 +95,7 @@ TEST_F(CallSiteSymbolDataProviderTest, GetRegisterAsync) {
   constexpr uint8_t kEntryRegOffset = 0x10;  // Add this to kStaticRegValue to get the result.
   constexpr uint64_t kEntryRegValue = kStaticRegValue + kEntryRegOffset;
   std::vector<uint8_t> entry_expression{
-      llvm::dwarf::DW_OP_breg12,
+      DwarfOp::kBreg12,
       kEntryRegOffset,
   };
 

@@ -27,6 +27,7 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_location.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit_impl.h"
 #include "src/developer/debug/zxdb/symbols/enumeration.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
@@ -494,8 +495,8 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeCallSiteParameter(const llvm::DWAR
   std::optional<uint32_t> register_num;
   if (location && location->size() == 1) {
     uint8_t location_op = location->at(0);
-    if (location_op >= llvm::dwarf::DW_OP_reg0 && location_op <= llvm::dwarf::DW_OP_reg31)
-      register_num = location_op - llvm::dwarf::DW_OP_reg0;
+    if (location_op >= DwarfOp::kReg0 && location_op <= DwarfOp::kReg31)
+      register_num = location_op - DwarfOp::kReg0;
   }
 
   // Convert a nonexistent value to one with an empty block. These are equivalent for our needs.

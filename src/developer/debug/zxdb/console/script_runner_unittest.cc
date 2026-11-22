@@ -8,12 +8,12 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "src/developer/debug/zxdb/client/mock_frame.h"
 #include "src/developer/debug/zxdb/common/scoped_temp_file.h"
 #include "src/developer/debug/zxdb/console/console_test.h"
 #include "src/developer/debug/zxdb/symbols/code_block.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_expr.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/symbol_test_parent_setter.h"
 #include "src/developer/debug/zxdb/symbols/type_test_support.h"
@@ -204,8 +204,7 @@ TEST_F(ScriptRunnerTest, Backtrace) {
   func->set_code_ranges(AddressRanges(AddressRange(kAddress1, kAddress1 + 0x100)));
 
   auto param = MakeVariableForTest(
-      "my_param", int32_type,
-      VariableLocation(DwarfExpr({llvm::dwarf::DW_OP_lit20, llvm::dwarf::DW_OP_stack_value})));
+      "my_param", int32_type, VariableLocation(DwarfExpr({DwarfOp::kLit20, DwarfOp::kStackValue})));
   func->set_parameters({LazySymbol(param)});
 
   // Local variable in an inner block
@@ -215,8 +214,7 @@ TEST_F(ScriptRunnerTest, Backtrace) {
   func->set_inner_blocks({LazySymbol(block)});
 
   auto local_var = MakeVariableForTest(
-      "my_local", int32_type,
-      VariableLocation(DwarfExpr({llvm::dwarf::DW_OP_lit30, llvm::dwarf::DW_OP_stack_value})));
+      "my_local", int32_type, VariableLocation(DwarfExpr({DwarfOp::kLit30, DwarfOp::kStackValue})));
   block->set_variables({LazySymbol(local_var)});
 
   Location loc(kAddress1, FileLine("my_file.cc", 42), 0, SymbolContext::ForRelativeAddresses(),

@@ -6,13 +6,13 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "src/developer/debug/zxdb/common/test_with_loop.h"
 #include "src/developer/debug/zxdb/expr/abi_null.h"
 #include "src/developer/debug/zxdb/expr/mock_eval_context.h"
 #include "src/developer/debug/zxdb/expr/test_eval_context_impl.h"
 #include "src/developer/debug/zxdb/expr/virtual_base_test_setup.h"
 #include "src/developer/debug/zxdb/symbols/collection.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/elf_symbol.h"
 #include "src/developer/debug/zxdb/symbols/inherited_from.h"
 #include "src/developer/debug/zxdb/symbols/location.h"
@@ -141,7 +141,7 @@ TEST_F(ResolveBase, PromotePtrRefToDerived) {
   // expression won't work in practice (see VirtualInheritanceTestSetup for a real one) but the
   // presence of some expression will trigger a casting failure.
   auto virtual_inheritance =
-      fxl::MakeRefCounted<InheritedFrom>(setup.base_class, DwarfExpr({llvm::dwarf::DW_OP_dup}));
+      fxl::MakeRefCounted<InheritedFrom>(setup.base_class, DwarfExpr({DwarfOp::kDup}));
   setup.derived_class->set_inherited_from({LazySymbol(virtual_inheritance)});
 
   result = Err("Not called");

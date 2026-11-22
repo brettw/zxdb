@@ -12,11 +12,11 @@
 #include <limits>
 #include <utility>
 
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "src/developer/debug/shared/message_loop.h"
 #include "src/developer/debug/zxdb/common/string_util.h"
 #include "src/developer/debug/zxdb/symbols/arch.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/module_symbols.h"
 #include "src/developer/debug/zxdb/symbols/symbol_data_provider.h"
 #include "src/lib/fxl/strings/string_printf.h"
@@ -24,22 +24,6 @@
 namespace zxdb {
 
 namespace {
-
-// GNU DWARF operation extensions.
-constexpr uint8_t DW_OP_GNU_push_tls_address = 0xe0;
-constexpr uint8_t DW_OP_GNU_uninit = 0xf0;
-constexpr uint8_t DW_OP_GNU_encoded_addr = 0xf1;
-constexpr uint8_t DW_OP_GNU_implicit_pointer = 0xf2;
-constexpr uint8_t DW_OP_GNU_entry_value = 0xf3;
-constexpr uint8_t DW_OP_GNU_const_type = 0xf4;
-constexpr uint8_t DW_OP_GNU_regval_type = 0xf5;
-constexpr uint8_t DW_OP_GNU_deref_type = 0xf6;
-constexpr uint8_t DW_OP_GNU_convert = 0xf7;
-constexpr uint8_t DW_OP_GNU_reinterpret = 0xf9;
-constexpr uint8_t DW_OP_GNU_parameter_ref = 0xfa;
-constexpr uint8_t DW_OP_GNU_addr_index = 0xfb;
-constexpr uint8_t DW_OP_GNU_const_index = 0xfc;
-constexpr uint8_t DW_OP_GNU_variable_value = 0xfd;
 
 // For debug printing expression integer values, this uses hex for all but the smallest numbers
 // which is what we usually expect for printing address arithmetic.
@@ -378,12 +362,12 @@ DwarfExprEval::Completion DwarfExprEval::EvalOneOp() {
 
   // Clear any current register information whenever the stack is being mutated.
   // See current_register_id_ declaration for more.
-  if (op != llvm::dwarf::DW_OP_stack_value)
+  if (op != DwarfOp::kStackValue)
     current_register_id_ = debug::RegisterID::kUnknown;
 
   // Literals 0-31.
-  if (op >= llvm::dwarf::DW_OP_lit0 && op <= llvm::dwarf::DW_OP_lit31) {
-    int literal_value = op - llvm::dwarf::DW_OP_lit0;
+  if (op >= DwarfOp::kLit0 && op <= DwarfOp::kLit31) {
+    int literal_value = op - DwarfOp::kLit0;
     if (is_string_output()) {
       return AppendString("DW_OP_lit" + std::to_string(literal_value),
                           "push(" + std::to_string(literal_value) + ")");
@@ -394,8 +378,8 @@ DwarfExprEval::Completion DwarfExprEval::EvalOneOp() {
   }
 
   // Registers 0-31.
-  if (op >= llvm::dwarf::DW_OP_reg0 && op <= llvm::dwarf::DW_OP_reg31) {
-    int reg_index = op - llvm::dwarf::DW_OP_reg0;
+  if (op >= DwarfOp::kReg0 && op <= DwarfOp::kReg31) {
+    int reg_index = op - DwarfOp::kReg0;
     if (is_string_output())
       return AppendString("DW_OP_reg" + std::to_string(reg_index), GetRegisterName(reg_index));
 
@@ -404,186 +388,186 @@ DwarfExprEval::Completion DwarfExprEval::EvalOneOp() {
   }
 
   // Base register with SLEB128 offset.
-  if (op >= llvm::dwarf::DW_OP_breg0 && op <= llvm::dwarf::DW_OP_breg31)
+  if (op >= DwarfOp::kBreg0 && op <= DwarfOp::kBreg31)
     return OpBreg(op);
 
   switch (op) {
-    case llvm::dwarf::DW_OP_addr:
+    case DwarfOp::kAddr:
       return OpAddr();
-    case llvm::dwarf::DW_OP_deref:
+    case DwarfOp::kDeref:
       return OpDeref(sizeof(TargetPointer), nullptr, "DW_OP_deref", false);
-    case llvm::dwarf::DW_OP_const1u:
+    case DwarfOp::kConst1u:
       return OpPushUnsigned(1, "DW_OP_const1u");
-    case llvm::dwarf::DW_OP_const1s:
+    case DwarfOp::kConst1s:
       return OpPushSigned(1, "DW_OP_const1s");
-    case llvm::dwarf::DW_OP_const2u:
+    case DwarfOp::kConst2u:
       return OpPushUnsigned(2, "DW_OP_const2u");
-    case llvm::dwarf::DW_OP_const2s:
+    case DwarfOp::kConst2s:
       return OpPushSigned(2, "DW_OP_const2s");
-    case llvm::dwarf::DW_OP_const4u:
+    case DwarfOp::kConst4u:
       return OpPushUnsigned(4, "DW_OP_const4u");
-    case llvm::dwarf::DW_OP_const4s:
+    case DwarfOp::kConst4s:
       return OpPushSigned(4, "DW_OP_const4s");
-    case llvm::dwarf::DW_OP_const8u:
+    case DwarfOp::kConst8u:
       return OpPushUnsigned(8, "DW_OP_const8u");
-    case llvm::dwarf::DW_OP_const8s:
+    case DwarfOp::kConst8s:
       return OpPushSigned(8, "DW_OP_const8s");
-    case llvm::dwarf::DW_OP_constu:
+    case DwarfOp::kConstu:
       return OpPushLEBUnsigned();
-    case llvm::dwarf::DW_OP_consts:
+    case DwarfOp::kConsts:
       return OpPushLEBSigned();
-    case llvm::dwarf::DW_OP_dup:
+    case DwarfOp::kDup:
       return OpDup();
-    case llvm::dwarf::DW_OP_drop:
+    case DwarfOp::kDrop:
       return OpDrop();
-    case llvm::dwarf::DW_OP_over:
+    case DwarfOp::kOver:
       return OpOver();
-    case llvm::dwarf::DW_OP_pick:
+    case DwarfOp::kPick:
       return OpPick();
-    case llvm::dwarf::DW_OP_swap:
+    case DwarfOp::kSwap:
       return OpSwap();
-    case llvm::dwarf::DW_OP_rot:
+    case DwarfOp::kRot:
       return OpRot();
-    case llvm::dwarf::DW_OP_xderef:
+    case DwarfOp::kXderef:
       // We don't have multiple address spaces.
       return ReportError("DW_OP_xderef opcode is not applicable to this platform.");
-    case llvm::dwarf::DW_OP_abs:
+    case DwarfOp::kAbs:
       return OpUnary(&DwarfOperatorAbs, "DW_OP_abs");
-    case llvm::dwarf::DW_OP_and:
+    case DwarfOp::kAnd:
       return OpBinary(&DwarfOperatorBitAnd, "DW_OP_and");
-    case llvm::dwarf::DW_OP_div:
+    case DwarfOp::kDiv:
       return OpBinary(&DwarfOperatorDivide, "DW_OP_div");
-    case llvm::dwarf::DW_OP_minus:
+    case DwarfOp::kMinus:
       return OpBinary(&DwarfOperatorMinus, "DW_OP_minus");
-    case llvm::dwarf::DW_OP_mod:
+    case DwarfOp::kMod:
       return OpBinary(&DwarfOperatorMod, "DW_OP_mod");
-    case llvm::dwarf::DW_OP_mul:
+    case DwarfOp::kMul:
       return OpBinary(&DwarfOperatorTimes, "DW_OP_mul");
-    case llvm::dwarf::DW_OP_neg:
+    case DwarfOp::kNeg:
       return OpUnary(&DwarfOperatorNeg, "DW_OP_neg");
-    case llvm::dwarf::DW_OP_not:
+    case DwarfOp::kNot:
       return OpUnary(&DwarfOperatorBitNot, "DW_OP_not");
-    case llvm::dwarf::DW_OP_or:
+    case DwarfOp::kOr:
       return OpBinary(&DwarfOperatorBitOr, "DW_OP_or");
-    case llvm::dwarf::DW_OP_plus:
+    case DwarfOp::kPlus:
       return OpBinary(&DwarfOperatorPlus, "DW_OP_plus");
-    case llvm::dwarf::DW_OP_plus_uconst:
+    case DwarfOp::kPlusUconst:
       return OpPlusUconst();
-    case llvm::dwarf::DW_OP_shl:
+    case DwarfOp::kShl:
       return OpBinary(&DwarfOperatorShiftLeft, "DW_OP_shl");
-    case llvm::dwarf::DW_OP_shr:
+    case DwarfOp::kShr:
       return OpBinary(&DwarfOperatorShiftRight, "DW_OP_shr");
-    case llvm::dwarf::DW_OP_shra:
+    case DwarfOp::kShra:
       return OpBinary(&DwarfOperatorShiftRightArithmetically, "DW_OP_shra");
-    case llvm::dwarf::DW_OP_xor:
+    case DwarfOp::kXor:
       return OpBinary(&DwarfOperatorBitXor, "DW_OP_xor");
-    case llvm::dwarf::DW_OP_bra:
+    case DwarfOp::kBra:
       return OpBra();
-    case llvm::dwarf::DW_OP_eq:
+    case DwarfOp::kEq:
       return OpBinary(&DwarfOperatorEquals, "DW_OP_eq");
-    case llvm::dwarf::DW_OP_ge:
+    case DwarfOp::kGe:
       return OpBinary(&DwarfOperatorGreaterEquals, "DW_OP_ge");
-    case llvm::dwarf::DW_OP_gt:
+    case DwarfOp::kGt:
       return OpBinary(&DwarfOperatorGreater, "DW_OP_gt");
-    case llvm::dwarf::DW_OP_le:
+    case DwarfOp::kLe:
       return OpBinary(&DwarfOperatorLessEquals, "DW_OP_le");
-    case llvm::dwarf::DW_OP_lt:
+    case DwarfOp::kLt:
       return OpBinary(&DwarfOperatorLess, "DW_OP_lt");
-    case llvm::dwarf::DW_OP_ne:
+    case DwarfOp::kNe:
       return OpBinary(&DwarfOperatorNotEquals, "DW_OP_ne");
-    case llvm::dwarf::DW_OP_skip:
+    case DwarfOp::kSkip:
       return OpSkip();
       // DW_OP_lit*, DW_OP_reg*, and DW_OP_breg* are handled at the top of the function.
-    case llvm::dwarf::DW_OP_regx:
+    case DwarfOp::kRegx:
       return OpRegx();
-    case llvm::dwarf::DW_OP_fbreg:
+    case DwarfOp::kFbreg:
       return OpFbreg();
-    case llvm::dwarf::DW_OP_bregx:
+    case DwarfOp::kBregx:
       return OpBregx();
-    case llvm::dwarf::DW_OP_piece:
+    case DwarfOp::kPiece:
       return OpPiece();
-    case llvm::dwarf::DW_OP_deref_size:
+    case DwarfOp::kDerefSize:
       return OpDerefSize();
-    case llvm::dwarf::DW_OP_xderef_size:
+    case DwarfOp::kXderefSize:
       // We don't have multiple address spaces.
       return ReportError("DW_OP_xderef_size opcode is not applicable to this platform.");
-    case llvm::dwarf::DW_OP_nop:
+    case DwarfOp::kNop:
       if (is_string_output())
         AppendString("DW_OP_nop");
       return Completion::kSync;
 
     // DWARF 3 additions.
-    case llvm::dwarf::DW_OP_push_object_address:
+    case DwarfOp::kPushObjectAddress:
       return ReportError("Unimplemented DW_OP_push_object_address opcode.");
-    case llvm::dwarf::DW_OP_call2:     // 2-byte offset of DIE.
-    case llvm::dwarf::DW_OP_call4:     // 4-byte offset of DIE.
-    case llvm::dwarf::DW_OP_call_ref:  // 4- or 8-byte offset of DIE.
+    case DwarfOp::kCall2:    // 2-byte offset of DIE.
+    case DwarfOp::kCall4:    // 4-byte offset of DIE.
+    case DwarfOp::kCallRef:  // 4- or 8-byte offset of DIE.
       return ReportError("Unimplemented DWARF expression procedure call operation.");
-    case llvm::dwarf::DW_OP_form_tls_address:
+    case DwarfOp::kFormTlsAddress:
       return OpTlsAddr("DW_OP_form_tls_address");
-    case llvm::dwarf::DW_OP_call_frame_cfa:
+    case DwarfOp::kCallFrameCfa:
       return OpCFA();
-    case llvm::dwarf::DW_OP_bit_piece:
+    case DwarfOp::kBitPiece:
       return OpBitPiece();
 
     // DWARF 4 additions.
-    case llvm::dwarf::DW_OP_implicit_value:
+    case DwarfOp::kImplicitValue:
       return OpImplicitValue();
-    case llvm::dwarf::DW_OP_stack_value:
+    case DwarfOp::kStackValue:
       return OpStackValue();
 
     // DWARF 5 additions.
-    case llvm::dwarf::DW_OP_implicit_pointer:
+    case DwarfOp::kImplicitPointer:
       return OpImplicitPointer("DW_OP_implicit_pointer");
-    case llvm::dwarf::DW_OP_addrx:
+    case DwarfOp::kAddrx:
       return OpAddrBase(ResultType::kPointer, "DW_OP_addrx");
-    case llvm::dwarf::DW_OP_constx:
+    case DwarfOp::kConstx:
       return OpAddrBase(ResultType::kValue, "DW_OP_constx");
-    case llvm::dwarf::DW_OP_entry_value:
+    case DwarfOp::kEntryValue:
       return OpEntryValue("DW_OP_entry_value");
-    case llvm::dwarf::DW_OP_const_type:
+    case DwarfOp::kConstType:
       return OpConstType("DW_OP_const_type");
-    case llvm::dwarf::DW_OP_regval_type:
+    case DwarfOp::kRegvalType:
       return OpRegvalType("DW_OP_regval_type");
-    case llvm::dwarf::DW_OP_deref_type:
+    case DwarfOp::kDerefType:
       return OpDerefType("DW_OP_deref_type");
-    case llvm::dwarf::DW_OP_xderef_type:
+    case DwarfOp::kXderefType:
       // We don't have multiple address spaces.
       return ReportError("DW_OP_xderef_type opcode is not applicable to this platform.");
-    case llvm::dwarf::DW_OP_convert:
+    case DwarfOp::kConvert:
       return OpConvert("DW_OP_convert");
-    case llvm::dwarf::DW_OP_reinterpret:
+    case DwarfOp::kReinterpret:
       return OpReinterpret("DW_OP_reinterpret");
 
     // GNU extensions.
-    case DW_OP_GNU_push_tls_address:
+    case DwarfOp::kGnuPushTlsAddress:
       return OpTlsAddr("DW_OP_GNU_push_tls_address");
-    case DW_OP_GNU_uninit:
+    case DwarfOp::kGnuUninit:
       // Reports that the variable is uninitialized (as opposed to optimized out).
       return ReportError("Unimplemented DW_OP_GNU_uninit opcode.");
-    case DW_OP_GNU_encoded_addr:
+    case DwarfOp::kGnuEncodedAddr:
       return ReportError("Unimplemented DW_OP_GNU_encoded_addr opcode.");
-    case DW_OP_GNU_implicit_pointer:
+    case DwarfOp::kGnuImplicitPointer:
       return OpImplicitPointer("DW_OP_GNU_implicit_pointer");
-    case DW_OP_GNU_entry_value:
+    case DwarfOp::kGnuEntryValue:
       return OpEntryValue("DW_OP_GNU_entry_value");
-    case DW_OP_GNU_const_type:
+    case DwarfOp::kGnuConstType:
       return OpConstType("DW_OP_GNU_const_type");
-    case DW_OP_GNU_regval_type:
+    case DwarfOp::kGnuRegvalType:
       return OpRegvalType("DW_OP_GNU_regval_type");
-    case DW_OP_GNU_deref_type:
+    case DwarfOp::kGnuDerefType:
       return OpDerefType("DW_OP_GNU_deref_type");
-    case DW_OP_GNU_convert:
+    case DwarfOp::kGnuConvert:
       return OpConvert("DW_OP_GNU_convert");
-    case DW_OP_GNU_reinterpret:
+    case DwarfOp::kGnuReinterpret:
       return OpReinterpret("DW_OP_GNU_reinterpret");
-    case DW_OP_GNU_parameter_ref:
+    case DwarfOp::kGnuParameterRef:
       return ReportError("Unimplemented DW_OP_GNU_parameter_ref opcode.");
-    case DW_OP_GNU_addr_index:
+    case DwarfOp::kGnuAddrIndex:
       return ReportError("Unimplemented DW_OP_GNU_addr_index opcode.");
-    case DW_OP_GNU_const_index:
+    case DwarfOp::kGnuConstIndex:
       return ReportError("Unimplemented DW_OP_GNU_const_index opcode.");
-    case DW_OP_GNU_variable_value:
+    case DwarfOp::kGnuVariableValue:
       return ReportError("Unimplemented DW_OP_GNU_variable_value opcode.");
 
     default:
@@ -981,7 +965,7 @@ DwarfExprEval::Completion DwarfExprEval::OpBra() {
 
 // 1 parameter: SLEB128 offset added to base register.
 DwarfExprEval::Completion DwarfExprEval::OpBreg(uint8_t op) {
-  int reg_index = op - llvm::dwarf::DW_OP_breg0;
+  int reg_index = op - DwarfOp::kBreg0;
 
   SignedType offset = 0;
   if (!ReadLEBSigned(&offset))

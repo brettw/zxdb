@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "src/developer/debug/shared/platform_message_loop.h"
 #include "src/developer/debug/zxdb/common/err.h"
 #include "src/developer/debug/zxdb/common/test_with_loop.h"
@@ -19,6 +18,7 @@
 #include "src/developer/debug/zxdb/symbols/base_type.h"
 #include "src/developer/debug/zxdb/symbols/collection.h"
 #include "src/developer/debug/zxdb/symbols/data_member.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/identifier.h"
 #include "src/developer/debug/zxdb/symbols/index_test_support.h"
 #include "src/developer/debug/zxdb/symbols/inheritance_path.h"
@@ -485,9 +485,8 @@ TEST_F(ResolveCollectionTest, VirtualInheritance) {
   //   3. - 0x18         = Compute address of offset of base inside of derived.
   //   4. Dereference    = Offset of base inside of derived = 0x10
   //   5. derived + 0x10 = Location of base.
-  std::vector<uint8_t> base_loc_expr{
-      llvm::dwarf::DW_OP_dup,   llvm::dwarf::DW_OP_deref, llvm::dwarf::DW_OP_constu, 0x18,
-      llvm::dwarf::DW_OP_minus, llvm::dwarf::DW_OP_deref, llvm::dwarf::DW_OP_plus};
+  std::vector<uint8_t> base_loc_expr{DwarfOp::kDup,   DwarfOp::kDeref, DwarfOp::kConstu, 0x18,
+                                     DwarfOp::kMinus, DwarfOp::kDeref, DwarfOp::kPlus};
   auto inherited = fxl::MakeRefCounted<InheritedFrom>(base_type, DwarfExpr(base_loc_expr));
   derived_type->set_inherited_from({LazySymbol(inherited)});
 

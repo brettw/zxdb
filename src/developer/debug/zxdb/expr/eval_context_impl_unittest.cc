@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "src/developer/debug/shared/platform_message_loop.h"
 #include "src/developer/debug/zxdb/common/err.h"
 #include "src/developer/debug/zxdb/common/test_with_loop.h"
@@ -22,6 +21,7 @@
 #include "src/developer/debug/zxdb/symbols/compile_unit.h"
 #include "src/developer/debug/zxdb/symbols/data_member.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_expr_eval.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/index_test_support.h"
 #include "src/developer/debug/zxdb/symbols/inherited_from.h"
@@ -55,9 +55,8 @@ class EvalContextImplTest : public TestWithLoop {
     auto block = fxl::MakeRefCounted<CodeBlock>(DwarfTag::kLexicalBlock);
 
     // Declare a variable in this code block stored in register 0.
-    auto variable = MakeUint64VariableForTest(
-        kPresentVarName, kBeginValidRange, kEndValidRange,
-        DwarfExpr({llvm::dwarf::DW_OP_reg0, llvm::dwarf::DW_OP_stack_value}));
+    auto variable = MakeUint64VariableForTest(kPresentVarName, kBeginValidRange, kEndValidRange,
+                                              DwarfExpr({DwarfOp::kReg0, DwarfOp::kStackValue}));
     block->set_variables({LazySymbol(std::move(variable))});
 
     // TODO(brettw) this needs a type. Currently this test is very simple and only outputs internal
@@ -188,9 +187,8 @@ TEST_F(EvalContextImplTest, FoundThis) {
   // Our parameter "Derived* this = kObjectAddr" is passed in register 0.
   provider()->set_ip(kBeginValidRange);
   provider()->AddRegisterValue(kDWARFReg0ID, false, kObjectAddr);
-  auto this_var =
-      MakeVariableForTest("this", derived_ptr, kBeginValidRange, kEndValidRange,
-                          DwarfExpr({llvm::dwarf::DW_OP_reg0, llvm::dwarf::DW_OP_stack_value}));
+  auto this_var = MakeVariableForTest("this", derived_ptr, kBeginValidRange, kEndValidRange,
+                                      DwarfExpr({DwarfOp::kReg0, DwarfOp::kStackValue}));
 
   // Make a function with a parameter / object pointer to Derived (this will be like a member
   // function on Derived).
@@ -266,8 +264,8 @@ TEST_F(EvalContextImplTest, IntOnStack) {
 
   constexpr uint8_t kOffset = 8;
   auto type = MakeInt32Type();
-  auto var = MakeUint64VariableForTest(
-      "i", VariableLocation(DwarfExpr({llvm::dwarf::DW_OP_fbreg, kOffset})));
+  auto var =
+      MakeUint64VariableForTest("i", VariableLocation(DwarfExpr({DwarfOp::kFbreg, kOffset})));
   var->set_type(type);
 
   constexpr uint64_t kBp = 0x1000;
@@ -287,7 +285,7 @@ TEST_F(EvalContextImplTest, IntOnStack) {
   // Before running the loop and receiving the memory, start a new request, this one will fail
   // synchronously due to a range miss.
   auto rangemiss =
-      MakeUint64VariableForTest("rangemiss", 0x6000, 0x7000, DwarfExpr({llvm::dwarf::DW_OP_reg0}));
+      MakeUint64VariableForTest("rangemiss", 0x6000, 0x7000, DwarfExpr({DwarfOp::kReg0}));
   ValueResult result2;
   GetVariableValue(context, rangemiss, &result2);
   EXPECT_TRUE(result2.called);
@@ -310,7 +308,7 @@ TEST_F(EvalContextImplTest, IntOnStack) {
 TEST_F(EvalContextImplTest, ConstantVariable) {
   auto type = MakeInt32Type();
   auto var = MakeUint64VariableForTest(
-      "i", VariableLocation(DwarfExpr({llvm::dwarf::DW_OP_lit3, llvm::dwarf::DW_OP_stack_value})));
+      "i", VariableLocation(DwarfExpr({DwarfOp::kLit3, DwarfOp::kStackValue})));
   var->set_type(type);
 
   ValueResult result;
@@ -337,8 +335,8 @@ TEST_F(EvalContextImplTest, ExternVariable) {
   // The non-extern declaration for the variable (0, 0 means always valid). The little-endian
   // module-relative address follows DW_OP_addr in the expression.
   auto real_variable = MakeUint64VariableForTest(
-      kValName, VariableLocation(DwarfExpr(
-                    {llvm::dwarf::DW_OP_addr, kRelativeValAddress, 0, 0, 0, 0, 0, 0, 0})));
+      kValName,
+      VariableLocation(DwarfExpr({DwarfOp::kAddr, kRelativeValAddress, 0, 0, 0, 0, 0, 0, 0})));
 
   // The variable needs to have a unit that references the module to provide the symbol context
   // in which to evaluate the location expression. This will convert the kRelativeValAddress to
@@ -470,9 +468,8 @@ TEST_F(EvalContextImplTest, RegisterShadowed) {
   constexpr uint64_t kRegValue = 0xdeadb33f;
   constexpr uint64_t kVarValue = 0xf00db4be;
 
-  auto shadow_var = MakeUint64VariableForTest(
-      "x0", kBeginValidRange, kEndValidRange,
-      DwarfExpr({llvm::dwarf::DW_OP_reg1, llvm::dwarf::DW_OP_stack_value}));
+  auto shadow_var = MakeUint64VariableForTest("x0", kBeginValidRange, kEndValidRange,
+                                              DwarfExpr({DwarfOp::kReg1, DwarfOp::kStackValue}));
 
   auto block = MakeCodeBlock();
   block->set_variables({LazySymbol(std::move(shadow_var))});
@@ -606,10 +603,10 @@ TEST_F(EvalContextImplTest, DataResult) {
   const char kVarName[] = "var";
   auto variable = MakeUint64VariableForTest(
       kVarName,
-      VariableLocation(DwarfExpr({llvm::dwarf::DW_OP_reg0,             // Low bytes in reg0.
-                                  llvm::dwarf::DW_OP_piece, 0x04,      // Pick low 4 bytes of reg0.
-                                  llvm::dwarf::DW_OP_reg1,             // High bytes in reg1.
-                                  llvm::dwarf::DW_OP_piece, 0x04})));  // Pick low 4 of reg1.
+      VariableLocation(DwarfExpr({DwarfOp::kReg0,             // Low bytes in reg0.
+                                  DwarfOp::kPiece, 0x04,      // Pick low 4 bytes of reg0.
+                                  DwarfOp::kReg1,             // High bytes in reg1.
+                                  DwarfOp::kPiece, 0x04})));  // Pick low 4 of reg1.
   provider()->AddRegisterValue(debug::RegisterID::kARMv8_x0, true, 1);
   provider()->AddRegisterValue(debug::RegisterID::kARMv8_x1, true, 2);
 

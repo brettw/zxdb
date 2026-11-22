@@ -8,12 +8,12 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/BinaryFormat/Dwarf.h"
 #include "src/developer/debug/zxdb/expr/eval_test_support.h"
 #include "src/developer/debug/zxdb/expr/expr_parser.h"
 #include "src/developer/debug/zxdb/expr/found_name.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
 #include "src/developer/debug/zxdb/symbols/collection.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/elf_symbol.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/identifier.h"
@@ -444,9 +444,8 @@ TEST(FindName, FindTypeName) {
   // never compute its value, but since it's syntactically in-scope, we should still be able to use
   // its type to resolve type names on the current class.
   auto global_type_ptr = fxl::MakeRefCounted<ModifiedType>(DwarfTag::kPointerType, global_type);
-  auto this_var =
-      MakeVariableForTest("this", global_type_ptr, 0x9000, 0x9001,
-                          DwarfExpr({llvm::dwarf::DW_OP_reg0, llvm::dwarf::DW_OP_stack_value}));
+  auto this_var = MakeVariableForTest("this", global_type_ptr, 0x9000, 0x9001,
+                                      DwarfExpr({DwarfOp::kReg0, DwarfOp::kStackValue}));
 
   // Function as a member of GlobalType.
   auto function = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);
