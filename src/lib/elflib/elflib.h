@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -58,7 +59,7 @@ class ElfLib {
 
   // Get the contents of a section by its name. Return nullptr if there is no
   // section by that name.
-  MemoryRegion GetSectionData(const std::string& name);
+  MemoryRegion GetSectionData(std::string_view name);
 
   // Get the contents of a section by its index. Return nullptr if the index is
   // invalid.
@@ -254,7 +255,7 @@ class ElfLib {
   DynamicSection dynstr_;
   std::vector<Elf64_Shdr> sections_;
   std::vector<Elf64_Phdr> segments_;
-  std::map<std::string, size_t> section_names_;
+  std::map<std::string, size_t, std::less<>> section_names_;
   std::unique_ptr<ElfLib> debug_;
 
   std::vector<std::string> warnings_;

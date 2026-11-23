@@ -49,7 +49,7 @@ std::string CatPathComponents(const std::string& first, const std::string& secon
   return result;
 }
 
-std::string NormalizePath(const std::string& path) {
+std::string NormalizePath(std::string_view path) {
   return std::filesystem::path(path).lexically_normal();
 }
 

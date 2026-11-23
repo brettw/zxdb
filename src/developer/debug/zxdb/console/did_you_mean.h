@@ -23,8 +23,8 @@ size_t EditDistance(const std::string& lhs, const std::string& rhs);
 // The suggestion will be at most max_edit_distance away from the candidate.
 template <typename T, typename U>
 inline std::optional<std::string> DidYouMean(const std::string& candidate,
-                                             const std::map<std::string, T> noun_choices,
-                                             const std::map<std::string, U> verb_choices,
+                                             const std::map<std::string, T>& noun_choices,
+                                             const std::map<std::string, U>& verb_choices,
                                              size_t max_edit_distance) {
   std::optional<std::string> best_choice;
   size_t best_distance = std::numeric_limits<size_t>::max();

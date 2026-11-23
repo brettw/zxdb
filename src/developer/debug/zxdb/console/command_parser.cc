@@ -9,6 +9,7 @@
 
 #include <map>
 #include <set>
+#include <string_view>
 #include <utility>
 
 #include "src/developer/debug/zxdb/common/err.h"
@@ -31,21 +32,15 @@ bool IsTokenSeparator(char c) { return c == ' '; }
 // sign is placed into *equals_index. Otherwise *equals_index will be set to
 // std::string::npos. This is to handle the fact that long switches can be
 // expressed as either "--foo=bar" and "--foo bar".
-const SwitchRecord* FindLongSwitch(const std::string& str,
-                                   const std::vector<SwitchRecord>& switches,
+const SwitchRecord* FindLongSwitch(std::string_view str, const std::vector<SwitchRecord>& switches,
                                    size_t* equals_index) {
   // Should have two leading dashes.
-  FX_DCHECK(str.size() >= 2 && str.substr(0, 2) == "--");
+  FX_DCHECK(str.starts_with("--"));
 
   // Extract the switch value (varying depend on presence of '='), not counting
   // the two leading dashes.
   *equals_index = str.find('=');
-  std::string switch_str;
-  if (*equals_index == std::string::npos) {
-    switch_str = str.substr(2);
-  } else {
-    switch_str = str.substr(2, *equals_index - 2);
-  }
+  std::string_view switch_str = str.substr(0, *equals_index).substr(2);
 
   for (const auto& sr : switches) {
     if (sr.name == switch_str)
@@ -60,16 +55,6 @@ const SwitchRecord* FindSwitch(char ch, const std::vector<SwitchRecord>& switche
       return &sr;
   }
   return nullptr;
-}
-
-bool StartsWith(const std::string& str, const std::string& starts_with) {
-  if (str.size() < starts_with.size())
-    return false;
-  for (size_t i = 0; i < starts_with.size(); i++) {
-    if (str[i] != starts_with[i])
-      return false;
-  }
-  return true;
 }
 
 // Returns true if the string is all numeric digits or `*` which means it's an index token.
@@ -110,7 +95,7 @@ class Parser {
     std::string to_complete;
 
     if (!tokens_.empty() && input_.back() != ' ') {
-      to_complete = tokens_.back().str;
+      to_complete = std::move(tokens_.back().str);
       tokens_.pop_back();
     }
 
@@ -511,7 +496,7 @@ bool Parser::DoArgState() {
     args.push_back(input_.substr(tokens_[pos_].offset));
   } else {
     for (size_t i = pos_; i < tokens_.size(); i++)
-      args.push_back(tokens_[i].str);
+      args.push_back(std::move(tokens_[i].str));
   }
 
   command_->set_args(std::move(args));
@@ -526,10 +511,8 @@ void Parser::DoCompleteNoun(const std::string& to_complete, std::vector<std::str
       continue;
     }
 
-    for (size_t i = 0; i < noun_pair.second.aliases.size(); i++) {
-      std::string noun_name = noun_pair.second.aliases[i];
-
-      if (StartsWith(noun_name, to_complete)) {
+    for (const std::string& noun_name : noun_pair.second.aliases) {
+      if (noun_name.starts_with(to_complete)) {
         result->push_back(noun_name);
         break;
       }
@@ -545,8 +528,8 @@ void Parser::DoCompleteSwitches(const std::string& to_complete, std::vector<std:
     std::string long_name = "--";
     long_name += sw.name;
 
-    if (StartsWith(long_name, to_complete)) {
-      result->push_back(long_name);
+    if (long_name.starts_with(to_complete)) {
+      result->push_back(std::move(long_name));
     }
   }
 }
@@ -557,10 +540,8 @@ void Parser::DoCompleteVerb(const std::string& to_complete, std::vector<std::str
   }
 
   for (const auto& verb_pair : GetVerbs()) {
-    for (size_t i = 0; i < verb_pair.second.aliases.size(); i++) {
-      std::string verb_name = verb_pair.second.aliases[i];
-
-      if (StartsWith(verb_name, to_complete)) {
+    for (const std::string& verb_name : verb_pair.second.aliases) {
+      if (verb_name.starts_with(to_complete)) {
         result->push_back(verb_name);
         break;
       }

@@ -52,8 +52,9 @@ The DAP server can use the integrated agent too:
 ./build/zxdb --local --enable-debug-adapter --debug-adapter-port=15678
 ```
 
-The upstream analytics implementation is retained. To disable analytics for a
-run without changing saved preferences, set `FUCHSIA_ANALYTICS_DISABLED=1`.
+Fuchsia analytics are disabled by default. Use `zxdb --analytics=enable` to
+opt in or `zxdb --analytics-show` to check the shared Fuchsia preference. To
+disable analytics for one run, set `FUCHSIA_ANALYTICS_DISABLED=1`.
 Tests use this environment setting.
 
 Build just the executable with `cmake --build build --target zxdb -j 4`.

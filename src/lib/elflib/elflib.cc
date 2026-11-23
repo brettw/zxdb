@@ -127,7 +127,7 @@ std::optional<std::map<std::string, Elf64_Sym>> SymtabToMap(const Elf64_Ehdr& eh
     for (auto symbol = symbols; symbol != end; symbol++) {
       Elf32_Sym s = safe_copy<Elf32_Sym>(symbol);
       auto sym_name = GetNullTerminatedStringAt(strtab.ptr, strtab.size, s.st_name);
-      out[sym_name] = UpcastSym(s);
+      out[std::move(sym_name)] = UpcastSym(s);
     }
 
     return out;
@@ -138,7 +138,7 @@ std::optional<std::map<std::string, Elf64_Sym>> SymtabToMap(const Elf64_Ehdr& eh
   for (auto symbol = symbols; symbol != end; symbol++) {
     Elf64_Sym s = safe_copy<Elf64_Sym>(symbol);
     auto sym_name = GetNullTerminatedStringAt(strtab.ptr, strtab.size, s.st_name);
-    out[sym_name] = s;
+    out[std::move(sym_name)] = s;
   }
 
   return out;
@@ -712,7 +712,7 @@ bool ElfLib::LoadSectionNames() {
   for (const auto& section : sections_) {
     auto name =
         GetNullTerminatedStringAt(section_name_data.ptr, section_name_data.size, section.sh_name);
-    section_names_[name] = idx;
+    section_names_[std::move(name)] = idx;
 
     idx++;
   }
@@ -720,7 +720,7 @@ bool ElfLib::LoadSectionNames() {
   return true;
 }
 
-ElfLib::MemoryRegion ElfLib::GetSectionData(const std::string& name) {
+ElfLib::MemoryRegion ElfLib::GetSectionData(std::string_view name) {
   if (!LoadSectionNames()) {
     return {};
   }
@@ -1121,7 +1121,7 @@ std::map<std::string, uint64_t> ElfLib::GetPLTOffsetsCommon(PltEntryBuffer& buff
       continue;
     }
 
-    ret[name] = idx * buffer.EntrySize() + plt_load_addr;
+    ret[std::move(name)] = idx * buffer.EntrySize() + plt_load_addr;
   }
 
   return ret;

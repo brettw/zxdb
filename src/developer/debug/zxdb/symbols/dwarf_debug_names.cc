@@ -9,7 +9,7 @@
 #include <optional>
 #include <set>
 #include <span>
-#include <string>
+#include <string_view>
 
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/Support/Error.h"
@@ -75,8 +75,9 @@ std::optional<DwarfDieRef> ResolveEntryDieRef(const llvm::DWARFDebugNames::Entry
   return std::nullopt;
 }
 
-void AppendEntriesForMatchedName(const llvm::DWARFDebugNames& debug_names, const char* str,
-                                 std::set<DwarfDieRef>* seen, std::set<std::string>* seen_names,
+void AppendEntriesForMatchedName(const llvm::DWARFDebugNames& debug_names, std::string_view str,
+                                 std::set<DwarfDieRef>* seen,
+                                 std::set<std::string_view>* seen_names,
                                  std::vector<DebugNamesEntry>* results) {
   if (!seen_names->insert(str).second) {
     return;
@@ -112,7 +113,7 @@ bool CandidateMatchesPrefix(std::span<const char> str_data, uint32_t str_off,
 bool TryScanNameIndexPrefixFast(const llvm::DWARFDebugNames& debug_names, const DwarfBinary& binary,
                                 const llvm::DWARFDebugNames::NameIndex& name_index,
                                 std::string_view prefix, std::set<DwarfDieRef>* seen,
-                                std::set<std::string>* seen_names,
+                                std::set<std::string_view>* seen_names,
                                 std::vector<DebugNamesEntry>* results) {
   llvm::DWARFContext* context = binary.GetLLVMContext();
   if (!context || prefix.empty() || prefix.contains('\0')) {
@@ -197,7 +198,8 @@ std::vector<DebugNamesEntry> FindDebugNamesPrefixEntries(const llvm::DWARFDebugN
 
   std::vector<DebugNamesEntry> results;
   std::set<DwarfDieRef> seen;
-  std::set<std::string> seen_names;
+  // The names reference the DWARF string section for the duration of this scan.
+  std::set<std::string_view> seen_names;
 
   for (const auto& name_index : debug_names) {
     if (TryScanNameIndexPrefixFast(debug_names, binary, name_index, prefix, &seen, &seen_names,

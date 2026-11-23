@@ -625,14 +625,15 @@ void RecursiveFindExact(const IndexNode* node, const Identifier& input, size_t i
   }
 
   // Recursively search each category in this node.
+  const std::string name = input.components()[input_index].GetName(false);
   for (auto* map : {&node->namespaces(), &node->types(), &node->functions(), &node->vars()}) {
-    auto found = map->find(input.components()[input_index].GetName(false));
+    auto found = map->find(name);
     if (found != map->end())  // Got a match for this category.
       RecursiveFindExact(&found->second, input, input_index + 1, result);
   }
 
   // Also implicitly search anonymous namespaces (without advancing the input index).
-  auto found = node->namespaces().find(std::string());
+  auto found = node->namespaces().find("");
   if (found != node->namespaces().end())
     RecursiveFindExact(&found->second, input, input_index, result);
 }

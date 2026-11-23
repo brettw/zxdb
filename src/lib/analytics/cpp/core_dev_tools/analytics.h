@@ -219,8 +219,8 @@ class Analytics {
 
   static void InitFirstRunOfFirstTool(internal::PersistentStatus& persistent_status) {
     internal::ToolInfo tool_info{T::kToolName, T::kEnableArgs, T::kDisableArgs, T::kStatusArgs};
-    ShowMessageFirstRunOfFirstTool(tool_info);
-    internal::PersistentStatus::Enable();
+    internal::ShowMessageFirstRunOfOtherTool(tool_info, AnalyticsStatus::kDisabled);
+    internal::PersistentStatus::Disable();
     persistent_status.MarkAsDirectlyLaunched();
     T::SetRuntimeAnalyticsStatus(AnalyticsStatus::kDisabled);
   }

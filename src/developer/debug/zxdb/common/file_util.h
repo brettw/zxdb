@@ -39,7 +39,7 @@ std::string CatPathComponents(const std::string& first, const std::string& secon
 
 // Resolves "." and ".." components to the extent possible. If there are leading "..", then they
 // will be preserved.
-std::string NormalizePath(const std::string& path);
+std::string NormalizePath(std::string_view path);
 
 // Returns the modification time of the given file, or 0 if it could not be determined.
 std::time_t GetFileModificationTime(const std::string& path);

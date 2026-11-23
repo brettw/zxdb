@@ -1,9 +1,5 @@
 # TODO
 
-- Disable Fuchsia instrumentation by default. Change as little code as possible for this.
-
-- Audit string usage for unnecessary allocations and copies, including opportunities for transparent container lookup.
-
 - Currently we extract names of things from the structure of the declarations. Some programming
   languages or symbol output modes do not emit these and we have only names. In this case, I want to
   understand what we currently support and what the gaps are. For example, we probably need to

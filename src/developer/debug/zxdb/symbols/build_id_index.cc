@@ -198,7 +198,7 @@ int BuildIDIndex::ParseIDs(const std::string& input, const std::filesystem::path
         added++;
         output->emplace(std::piecewise_construct,
                         std::forward_as_tuple(build_id.data(), build_id.size()),
-                        std::forward_as_tuple(entry));
+                        std::forward_as_tuple(std::move(entry)));
       }
     }
 

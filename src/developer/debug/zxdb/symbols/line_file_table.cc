@@ -20,14 +20,14 @@ std::optional<std::string> ResolveLineFileName(LineFileEntries files, uint64_t f
   // returns such names without a directory.
   if (llvm::sys::path::is_absolute(name, llvm::sys::path::Style::posix) ||
       llvm::sys::path::is_absolute(name, llvm::sys::path::Style::windows))
-    return NormalizePath(std::string(name));
+    return NormalizePath(name);
 
   // Relative names don't include the compilation directory, so the directory can be empty.
   // llvm::sys::path::append() skips empty components.
   std::string_view dir = files.GetFileDirectory(*entry).value_or(std::string_view());
   llvm::SmallString<128> path;
   llvm::sys::path::append(path, dir, name);
-  return NormalizePath(path.str().str());
+  return NormalizePath(path.str());
 }
 
 // static
