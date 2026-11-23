@@ -12,11 +12,16 @@ std::optional<uint64_t> DwarfExpr::GetAddrBase() const {
   if (!source_)
     return std::nullopt;
 
-  fxl::RefPtr<Symbol> symbol = source_.Get();
-  if (!symbol)
-    return std::nullopt;
-
-  auto compile_unit = symbol->GetCompileUnit();
+  // Use the unit that contains the DIE of the source. Walking the parents of the source symbol can
+  // reach another unit, because the parent of a concrete instance is the context of its abstract
+  // origin. Synthetic symbols don't have a DIE, so they fall back to the parents.
+  fxl::RefPtr<CompileUnit> compile_unit = source_.GetCompileUnit();
+  if (!compile_unit) {
+    fxl::RefPtr<Symbol> symbol = source_.Get();
+    if (!symbol)
+      return std::nullopt;
+    compile_unit = symbol->GetCompileUnit();
+  }
   if (!compile_unit)
     return std::nullopt;
 

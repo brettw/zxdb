@@ -183,6 +183,11 @@ class UnitIndexer {
     indexable_.resize(scanner_.die_count());
 
     path_.reserve(8);  // Don't want to reallocate.
+
+    // The indexer finds names through declarations separately, so it doesn't need the attributes
+    // of the DIEs that DW_AT_specification references. Not decoding them saves time.
+    name_decoder_.set_follow_specifications(false);
+    type_decoder_.set_follow_specifications(false);
   }
 
   // Forces indexing to go through the slow path (AddStandaloneEntryToIndex() instead of
@@ -261,6 +266,8 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
                                          DwarfAttr::kConstValue,    DwarfAttr::kMainSubprogram,
                                          DwarfAttr::kName,          DwarfAttr::kAbstractOrigin};
   DwarfDieDecoder decoder(*unit_.GetBinary(), kAttrs);
+  // See the constructor for why this doesn't follow specifications.
+  decoder.set_follow_specifications(false);
 
   for (; !scanner_.done(); scanner_.Advance()) {
     const llvm::DWARFDebugInfoEntry* die = scanner_.Prepare();

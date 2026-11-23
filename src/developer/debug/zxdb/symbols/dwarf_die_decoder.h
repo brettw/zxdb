@@ -43,20 +43,44 @@ class DwarfBinary;
 // The decoder doesn't allocate memory. It keeps the values in a fixed array, so a table can have
 // at most kMaxAttributes attributes.
 //
-// This transparently follows DW_AT_abstract_origin attributes. This is used to implement
-// "inheritance" of DIEs. An attribute on a DIE overrides the same attribute on its abstract origin.
+// INHERITED ATTRIBUTES
+//
+// A DIE can omit attributes that another DIE gives. The decoder follows the two kinds of links that
+// allow this, and the referenced DIEs "underlay" the attributes of the decoded DIE:
+//
+//   - DW_AT_abstract_origin (DWARF 5 section 3.3.8): a concrete instance of an inlined or
+//     out-of-line function, and its children, reference the abstract instance.
+//   - DW_AT_specification (DWARF 5 section 2.13.2): a definition references the declaration that
+//     it completes, for example an out-of-line member function definition and the declaration in
+//     the class.
+//
+// A common chain is: concrete instance -> (abstract origin) abstract instance -> (specification)
+// declaration in a class.
+//
+// An attribute on a DIE overrides the same attribute on the DIEs it references. So a concrete
+// instance wins over its abstract instance, and a definition wins over its declaration. The decoder
+// visits the abstract origin of a DIE, and the DIEs that it references, before the specification of
+// that DIE. It visits each DIE at most once, so cycles in corrupt symbols end.
+//
+// DW_AT_declaration and DW_AT_sibling apply only to the decoded DIE. The decoder doesn't take them
+// from the referenced DIEs (DWARF 5 section 2.13.2). This is the same as LLDB.
 class DwarfDieDecoder {
  public:
   static constexpr size_t kMaxAttributes = 16;
 
-  // One attribute that Decode() found. The unit is the unit of the DIE that has the attribute. An
-  // abstract origin can be in a different unit than the decoded DIE.
+  // One attribute that Decode() found.
   //
-  // llvm::DWARFFormValue::getUnit() exists but this won't always be set (the implicit constant
-  // path doesn't set it). As a result, if the unit is needed, always use the unit here rather than
-  // getUnit().
+  // The die is the DIE that has the attribute. It is the decoded DIE, or a DIE that the decoder
+  // reached through DW_AT_abstract_origin or DW_AT_specification. That DIE can be in a different
+  // unit than the decoded DIE. Use it, for example, as the source of a DWARF expression, so the
+  // expression uses the address table of the right unit.
+  //
+  // The unit is the unit of that DIE. llvm::DWARFFormValue::getUnit() exists but this won't always
+  // be set (the implicit constant path doesn't set it). As a result, if the unit is needed, always
+  // use the unit here rather than getUnit().
   struct AttributeValue {
     llvm::DWARFUnit* unit = nullptr;  // Null when the attribute isn't present.
+    llvm::DWARFDie die;
     llvm::DWARFFormValue form;
   };
 
@@ -81,10 +105,12 @@ class DwarfDieDecoder {
   // values are incomplete.
   bool Decode(const llvm::DWARFDie& die);
 
-  // Controls whether Decode() follows DW_AT_abstract_origin attributes. The default is true. When
-  // false, Decode() reads only the given DIE. GetAbstractParent() then gives the parent of that
-  // DIE.
+  // Control whether Decode() follows DW_AT_abstract_origin and DW_AT_specification attributes. The
+  // default for both is true. Turn one off when the caller doesn't need the attributes from those
+  // DIEs, to save the time of decoding them, or when the attribute means something else for the
+  // tag. For example, DW_AT_abstract_origin on DW_TAG_GNU_call_site references the called function.
   void set_follow_abstract_origins(bool follow) { follow_abstract_origins_ = follow; }
+  void set_follow_specifications(bool follow) { follow_specifications_ = follow; }
 
   // The functions below get the values of the last decoded DIE. The attribute must be in the table
   // given to the constructor.
@@ -127,35 +153,35 @@ class DwarfDieDecoder {
   // into the file name table for the corresponding unit. This function resolves the string.
   std::optional<std::string> GetFile(DwarfAttr attribute) const;
 
-  // Returns the parent of the deepest abstract origin of the last decoded DIE.
+  // Returns the parent of the last DIE that Decode() visited. This is the DIE that gives the
+  // context of the decoded entity, such as the namespace or class that encloses it.
   //
-  // Most DIEs can have an "abstract origin" which is another DIE that underlays values.
-  // Theoretically abstract origins can be linked into arbitrarily long chains. In the current Clang
-  // this mostly happens for inlined functions, where the inlined instance references the actual
-  // function definition as its abstract origin. But abstract origins can theoretically appear
-  // almost anywhere.
+  // The parent DIE is not an attribute so needs to be handled explicitly. For an inlined
+  // subroutine, the parent of the DIE is the block it's inlined into. The parent of the abstract
+  // instance is the namespace or class that lexically encloses the function. If the abstract
+  // instance has a DW_AT_specification, the declaration it references gives the context: for a
+  // member function, that is the class (DWARF 5 section 3.3.8.1).
   //
-  // Normally this class handles abstract origins transparently when querying attributes. But the
-  // parent DIE is not an attribute so needs to be handled explicitly. In the example of inlined
-  // functions, the parent of the inlined subroutine DIE will be the block it's inlined into, but
-  // the parent of the abstract origin will be the namespace or class that lexically encloses that
-  // function.
-  //
-  // If there is no abstract origin, this returns the regular parent of the DIE. The only case the
-  // result should be !isValid() is when decoding a toplevel DIE with no parent.
-  llvm::DWARFDie GetAbstractParent() const;
+  // If the DIE references no other DIE, this returns the regular parent of the DIE. The only case
+  // the result should be !isValid() is when decoding a toplevel DIE with no parent.
+  llvm::DWARFDie GetContextParent() const;
 
  private:
   // Returns the index of the attribute in attributes_, or attributes_.size() if it isn't there.
   size_t FindIndex(DwarfAttr attribute) const;
 
-  // Backend for Decode() above.
-  //
-  // Following abstract origins generates a recursive call. To prevent infinite recursion for
-  // corrupt symbols, this function takes a maximum number of abstract origin references to follow
-  // which is decremented each time a recursive call is made. When this gets to 0, no more abstract
-  // origin references will be followed.
-  bool DecodeInternal(const llvm::DWARFDie& die, int abstract_origin_refs_to_follow);
+  // The DIEs that one DIE references through the links that Decode() follows.
+  struct Links {
+    llvm::DWARFDie abstract_origin;
+    llvm::DWARFDie specification;
+  };
+
+  // Decodes the attributes of one DIE into the values that aren't filled yet. The first DIE is the
+  // DIE that the caller gave to Decode(). Returns false if the DIE is corrupt.
+  bool DecodeOneDie(const llvm::DWARFDie& die, bool is_first, Links* links);
+
+  // Visits the DIEs that the first DIE references, after Decode() decoded the first DIE.
+  bool DecodeLinkedDies(const llvm::DWARFDie& first, const Links& first_links);
 
   // Decodes a cross-DIE reference. Return value will be !isValid() on failure.
   llvm::DWARFDie DecodeReference(llvm::DWARFUnit* unit, const llvm::DWARFFormValue& form) const;
@@ -166,14 +192,14 @@ class DwarfDieDecoder {
   std::span<const DwarfAttr> attributes_;
 
   // The values of the last decoded DIE, with the same indices as attributes_. Decode() fills the
-  // value of an attribute only once, so the DIE nearest to the decoded DIE in the abstract origin
-  // chain gives the value.
+  // value of an attribute only once, so the first DIE it visits with the attribute gives the value.
   std::array<AttributeValue, kMaxAttributes> values_;
 
-  // The deepest DIE in the abstract origin chain of the last decoded DIE. See GetAbstractParent().
-  llvm::DWARFDie deepest_die_;
+  // The last DIE that Decode() visited. See GetContextParent().
+  llvm::DWARFDie context_die_;
 
   bool follow_abstract_origins_ = true;
+  bool follow_specifications_ = true;
 
   FXL_DISALLOW_COPY_AND_ASSIGN(DwarfDieDecoder);
 };

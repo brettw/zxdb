@@ -15,6 +15,7 @@
 
 namespace zxdb {
 
+class CompileUnit;
 class Symbol;
 class SymbolFactory;
 
@@ -58,6 +59,10 @@ class LazySymbolBase {
   // Otherwise, the main use of this can be for comparing symbol identity without decoding them in
   // cases where you know the symbols aren't synthetic.
   DwarfDieRef die_ref() const { return die_ref_; }
+
+  // Returns the compile unit that contains the DIE of the symbol, or null if it isn't known (for
+  // example for synthetic symbols). See SymbolFactory::GetCompileUnitForDie().
+  fxl::RefPtr<CompileUnit> GetCompileUnit() const;
 
  protected:
   // Validity tests both for the factory and the symbol since non-lazy ones don't need a factory.

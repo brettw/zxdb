@@ -6,6 +6,8 @@
 
 #include <lib/syslog/cpp/macros.h>
 
+#include <algorithm>
+
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
 #include "llvm/DebugInfo/DWARF/DWARFTypeUnit.h"
@@ -20,9 +22,10 @@ namespace zxdb {
 
 namespace {
 
-// The maximum nesting of abstract origin references we'll follow recursively
-// before givin up. Prevents blowing out the stack for corrupt symbols.
-constexpr int kMaxAbstractOriginRefsToFollow = 8;
+// The maximum number of DIEs that one decode visits: the decoded DIE and up to 8 DIEs that it
+// references directly or indirectly. Valid symbols rarely need more than 3. The limit also bounds
+// the work for corrupt symbols.
+constexpr size_t kMaxDiesToVisit = 9;
 
 llvm::DWARFDie GetDIEForSignature(llvm::DWARFContext* context, uint64_t signature) {
   if (!context)
@@ -63,8 +66,49 @@ DwarfDieDecoder::~DwarfDieDecoder() = default;
 bool DwarfDieDecoder::Decode(const llvm::DWARFDie& die) {
   for (size_t i = 0; i < attributes_.size(); i++)
     values_[i] = AttributeValue();
-  deepest_die_ = llvm::DWARFDie();
-  return DecodeInternal(die, kMaxAbstractOriginRefsToFollow);
+
+  Links links;
+  if (!DecodeOneDie(die, true, &links))
+    return false;
+  context_die_ = die;
+
+  // Most DIEs reference no other DIE. They don't need the bookkeeping below.
+  if (!links.abstract_origin.isValid() && !links.specification.isValid())
+    return true;
+  return DecodeLinkedDies(die, links);
+}
+
+bool DwarfDieDecoder::DecodeLinkedDies(const llvm::DWARFDie& first, const Links& first_links) {
+  // The DIEs to visit are a stack. Each DIE pushes its specification and then its abstract origin,
+  // so the abstract origin and the DIEs it references come before the specification.
+  std::array<llvm::DWARFDie, kMaxDiesToVisit> visited;
+  size_t visited_count = 0;
+  visited[visited_count++] = first;
+
+  std::array<llvm::DWARFDie, 2 * kMaxDiesToVisit> pending;
+  size_t pending_count = 0;
+  auto push_links = [&pending, &pending_count](const Links& links) {
+    for (const llvm::DWARFDie& next : {links.specification, links.abstract_origin}) {
+      if (next.isValid() && pending_count < pending.size())
+        pending[pending_count++] = next;
+    }
+  };
+  push_links(first_links);
+
+  while (pending_count > 0 && visited_count < kMaxDiesToVisit) {
+    llvm::DWARFDie cur = pending[--pending_count];
+    if (std::find(visited.begin(), visited.begin() + visited_count, cur) !=
+        visited.begin() + visited_count)
+      continue;  // Already visited, the symbols have a cycle.
+    visited[visited_count++] = cur;
+
+    Links links;
+    if (!DecodeOneDie(cur, false, &links))
+      return false;
+    context_die_ = cur;
+    push_links(links);
+  }
+  return true;
 }
 
 bool DwarfDieDecoder::Has(DwarfAttr attribute) const { return GetValue(attribute) != nullptr; }
@@ -203,10 +247,10 @@ std::optional<std::string> DwarfDieDecoder::GetFile(DwarfAttr attribute) const {
   return std::nullopt;
 }
 
-llvm::DWARFDie DwarfDieDecoder::GetAbstractParent() const {
-  if (!deepest_die_.isValid())
+llvm::DWARFDie DwarfDieDecoder::GetContextParent() const {
+  if (!context_die_.isValid())
     return llvm::DWARFDie();
-  return deepest_die_.getParent();
+  return context_die_.getParent();
 }
 
 size_t DwarfDieDecoder::FindIndex(DwarfAttr attribute) const {
@@ -218,8 +262,7 @@ size_t DwarfDieDecoder::FindIndex(DwarfAttr attribute) const {
   return attributes_.size();
 }
 
-bool DwarfDieDecoder::DecodeInternal(const llvm::DWARFDie& die,
-                                     int abstract_origin_refs_to_follow) {
+bool DwarfDieDecoder::DecodeOneDie(const llvm::DWARFDie& die, bool is_first, Links* links) {
   // This indicates the abbreviation. Each DIE starts with an abbreviation
   // code.  The is the number that the DWARFAbbreviationDeclaration was derived
   // from above. We have to read it again to skip the offset over the number.
@@ -247,22 +290,22 @@ bool DwarfDieDecoder::DecodeInternal(const llvm::DWARFDie& die,
     return false;
   }
 
-  // Set when we encounter an abstract origin attribute.
-  llvm::DWARFDie abstract_origin;
-
   for (const llvm::DWARFAbbreviationDeclaration::AttributeSpec& spec : abbrev->attributes()) {
-    // A value that is already filled came from a DIE nearer in the abstract origin chain, or from
-    // an earlier duplicate of the attribute in this DIE. That value wins.
+    // A value that is already filled came from a DIE that the decoder visited earlier, or from an
+    // earlier duplicate of the attribute in this DIE. That value wins.
     DwarfAttr attr = static_cast<DwarfAttr>(spec.Attr);
     size_t index = FindIndex(attr);
-    bool wanted = index < attributes_.size() && !values_[index].unit;
+    bool applies = is_first || (attr != DwarfAttr::kDeclaration && attr != DwarfAttr::kSibling);
+    bool wanted = applies && index < attributes_.size() && !values_[index].unit;
 
-    // When following abstract origins, they are always decoded so they can be followed after the
-    // loop. This doesn't check for duplicates so the decoder can follow more than one link in the
-    // chain.
-    bool is_abstract_origin = follow_abstract_origins_ && attr == DwarfAttr::kAbstractOrigin;
+    // The links are decoded so Decode() can follow them. The first link of each kind in the DIE is
+    // used.
+    bool is_abstract_origin = follow_abstract_origins_ && attr == DwarfAttr::kAbstractOrigin &&
+                              !links->abstract_origin.isValid();
+    bool is_specification = follow_specifications_ && attr == DwarfAttr::kSpecification &&
+                            !links->specification.isValid();
 
-    if (!wanted && !is_abstract_origin) {
+    if (!wanted && !is_abstract_origin && !is_specification) {
       // Skip over the attribute to go to the next.
       llvm::DWARFFormValue::skipValue(spec.Form, extractor, &offset, unit->getFormParams());
       continue;
@@ -279,19 +322,12 @@ bool DwarfDieDecoder::DecodeInternal(const llvm::DWARFDie& die,
     }
 
     if (is_abstract_origin)
-      abstract_origin = DecodeReference(unit, form_value);
+      links->abstract_origin = DecodeReference(unit, form_value);
+    if (is_specification)
+      links->specification = DecodeReference(unit, form_value);
     if (wanted)
-      values_[index] = AttributeValue{.unit = unit, .form = form_value};
+      values_[index] = AttributeValue{.unit = unit, .die = die, .form = form_value};
   }
-
-  // Recursively decode abstract origins. The attributes on the abstract origin
-  // DIE "underlay" any attributes present on the current one.
-  if (abstract_origin.isValid() && abstract_origin_refs_to_follow > 0)
-    return DecodeInternal(abstract_origin, abstract_origin_refs_to_follow - 1);
-
-  // The deepest DIE in the abstract origin chain was found (which will be the original DIE itself
-  // if there was no abstract origin).
-  deepest_die_ = die;
   return true;
 }
 
@@ -348,6 +384,7 @@ llvm::DWARFDie GetAbstractOrigin(const llvm::DWARFDie& die) {
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kAbstractOrigin};
   DwarfDieDecoder decoder(&die.getDwarfUnit()->getContext(), kAttrs);
   decoder.set_follow_abstract_origins(false);
+  decoder.set_follow_specifications(false);
   if (!decoder.Decode(die))
     return llvm::DWARFDie();
   return decoder.GetReference(DwarfAttr::kAbstractOrigin);

@@ -4,6 +4,7 @@
 
 #include "src/developer/debug/zxdb/symbols/lazy_symbol.h"
 
+#include "src/developer/debug/zxdb/symbols/compile_unit.h"
 #include "src/developer/debug/zxdb/symbols/symbol.h"
 #include "src/developer/debug/zxdb/symbols/symbol_factory.h"
 
@@ -48,6 +49,12 @@ fxl::RefPtr<Symbol> LazySymbolBase::GetNullSymbol() {
 }
 
 const fxl::RefPtr<const SymbolFactory>& LazySymbolBase::factory() const { return factory_; }
+
+fxl::RefPtr<CompileUnit> LazySymbolBase::GetCompileUnit() const {
+  if (!factory_)
+    return fxl::RefPtr<CompileUnit>();
+  return factory_->GetCompileUnitForDie(die_ref_);
+}
 
 LazySymbol::LazySymbol() = default;
 

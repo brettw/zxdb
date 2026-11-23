@@ -14,6 +14,7 @@
 
 namespace zxdb {
 
+class CompileUnit;
 class LazySymbol;
 class Symbol;
 class UncachedLazySymbol;
@@ -36,6 +37,12 @@ class SymbolFactory : public fxl::RefCountedThreadSafe<SymbolFactory> {
   // This function should never return null. To indicate failure, return a new default-constructed
   // Symbol object.
   virtual fxl::RefPtr<Symbol> CreateSymbol(DwarfDieRef die_ref) const = 0;
+
+  // Returns the compile unit that contains the DIE, or null if the factory can't tell. This can
+  // differ from the unit that Symbol::GetCompileUnit() finds by walking the parents of the symbol:
+  // the parent of a concrete instance is the context of its abstract origin, which can be in
+  // another unit. The default implementation returns null.
+  virtual fxl::RefPtr<CompileUnit> GetCompileUnitForDie(DwarfDieRef die_ref) const;
 
   // Returns a LazySymbol referencing the given DIE or DIE offset.
   LazySymbol MakeLazy(DwarfDieRef die_ref) const;

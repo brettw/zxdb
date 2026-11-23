@@ -746,6 +746,149 @@ TEST(DwarfSymbolFactory, AddrxOffsetLowPc) {
   EXPECT_EQ(2, addrx_offset_count);
 }
 
+namespace {
+
+// Loads the hand-written DWARF in test_data/specification. See specification_fixture.s for the
+// DIEs.
+class SpecificationFixture {
+ public:
+  SpecificationFixture()
+      : setup_(TestSymbolModule::GetTestDataDir() + "specification/specification.so", "") {}
+
+  bool Init() {
+    if (!setup_.Init().ok())
+      return false;
+    context_ = setup_.symbols()->binary()->GetLLVMContext();
+    return context_ && context_->getNumCompileUnits() == 2;
+  }
+
+  // Returns the symbol for the child with the given index of the given unit.
+  fxl::RefPtr<Symbol> UnitChild(unsigned unit, size_t index) {
+    llvm::DWARFDie die = context_->getUnitAtIndex(unit)->getUnitDIE(false).getFirstChild();
+    for (size_t i = 0; i < index && die; i++)
+      die = die.getSibling();
+    if (!die)
+      return nullptr;
+    return setup_.symbols()->GetSymbolFactory()->CreateSymbol(DwarfDieRef::Main(die.getOffset()));
+  }
+
+ private:
+  TestSymbolModule setup_;
+  llvm::DWARFContext* context_ = nullptr;
+};
+
+// Indices of the children of the units in the fixture.
+constexpr size_t kInnerDefinitionIndex = 2;
+constexpr size_t kConcreteMethodIndex = 4;
+constexpr size_t kStaticDefinitionIndex = 5;
+constexpr size_t kPairOnlyIndex = 6;
+
+}  // namespace
+
+TEST(DwarfSymbolFactory, SpecificationOfType) {
+  // A type definition outside its class gets the class as its parent from its declaration.
+  SpecificationFixture fixture;
+  ASSERT_TRUE(fixture.Init());
+  fxl::RefPtr<Symbol> symbol = fixture.UnitChild(0, kInnerDefinitionIndex);
+  ASSERT_TRUE(symbol);
+  const Collection* inner = symbol->As<Collection>();
+  ASSERT_TRUE(inner);
+  EXPECT_EQ("Outer::Inner", inner->GetFullName());
+  EXPECT_EQ(4u, inner->byte_size());
+  EXPECT_EQ(1u, inner->data_members().size());
+}
+
+TEST(DwarfSymbolFactory, SpecificationThroughAbstractOrigin) {
+  // concrete instance -> (abstract origin) abstract instance -> (specification) declaration.
+  SpecificationFixture fixture;
+  ASSERT_TRUE(fixture.Init());
+  fxl::RefPtr<Symbol> symbol = fixture.UnitChild(0, kConcreteMethodIndex);
+  ASSERT_TRUE(symbol);
+  const Function* function = symbol->As<Function>();
+  ASSERT_TRUE(function);
+  EXPECT_EQ("Outer::Method", function->GetFullName());
+  ASSERT_EQ(1u, function->code_ranges().size());
+  EXPECT_EQ(4u, function->code_ranges()[0].size());
+
+  // The abstract instance has a static local, so the concrete instance has it too.
+  ASSERT_EQ(1u, function->variables().size());
+  const Variable* var = function->variables()[0].Get()->As<Variable>();
+  ASSERT_TRUE(var);
+  EXPECT_EQ("local_static", var->GetAssignedName());
+}
+
+TEST(DwarfSymbolFactory, AbstractOriginInOtherUnit) {
+  // The concrete instance in unit B has an abstract origin in unit A.
+  SpecificationFixture fixture;
+  ASSERT_TRUE(fixture.Init());
+  fxl::RefPtr<Symbol> symbol = fixture.UnitChild(1, 0);
+  ASSERT_TRUE(symbol);
+  const Function* function = symbol->As<Function>();
+  ASSERT_TRUE(function);
+  EXPECT_EQ("Outer::Method", function->GetFullName());
+  ASSERT_EQ(1u, function->code_ranges().size());
+  EXPECT_EQ(8u, function->code_ranges()[0].size());
+
+  // The first variable in unit B has no attributes except its abstract origin in unit A. The second
+  // variable has its own location.
+  ASSERT_EQ(2u, function->variables().size());
+  const Variable* var = function->variables()[0].Get()->As<Variable>();
+  ASSERT_TRUE(var);
+  EXPECT_EQ("local_static", var->GetAssignedName());
+  EXPECT_EQ("int", var->type().Get()->GetFullName());
+
+  // The variable is in the scope of the concrete instance.
+  fxl::RefPtr<Symbol> parent = var->parent().Get();
+  EXPECT_EQ(DwarfTag::kSubprogram, parent->tag());
+  const Function* parent_function = parent->As<Function>();
+  ASSERT_TRUE(parent_function);
+  ASSERT_EQ(1u, parent_function->code_ranges().size());
+  EXPECT_EQ(8u, parent_function->code_ranges()[0].size());
+
+  // The location comes from unit A, so its DW_OP_addrx uses the address table of unit A.
+  const DwarfExpr* expr = var->location().default_expr();
+  ASSERT_TRUE(expr);
+  EXPECT_EQ(0x8u, expr->GetAddrBase());
+
+  // The location of the second variable is in unit B, so it uses the address table of unit B. The
+  // parents of the variable reach unit A: the parent of the concrete instance is the class of its
+  // declaration.
+  const Variable* var_b = function->variables()[1].Get()->As<Variable>();
+  ASSERT_TRUE(var_b);
+  EXPECT_EQ("local_b", var_b->GetAssignedName());
+  const DwarfExpr* expr_b = var_b->location().default_expr();
+  ASSERT_TRUE(expr_b);
+  EXPECT_EQ(0x18u, expr_b->GetAddrBase());
+}
+
+TEST(DwarfSymbolFactory, StaticMemberDefinition) {
+  // The definition of a static data member takes its name and type from the declaration in the
+  // class, and the class is its parent.
+  SpecificationFixture fixture;
+  ASSERT_TRUE(fixture.Init());
+  fxl::RefPtr<Symbol> symbol = fixture.UnitChild(0, kStaticDefinitionIndex);
+  ASSERT_TRUE(symbol);
+  const Variable* var = symbol->As<Variable>();
+  ASSERT_TRUE(var);
+  EXPECT_EQ("Outer::kStatic", var->GetFullName());
+  EXPECT_TRUE(var->is_external());
+  EXPECT_EQ("int", var->type().Get()->GetFullName());
+  EXPECT_FALSE(var->location().is_null());
+}
+
+TEST(DwarfSymbolFactory, LowHighPcFromDifferentDies) {
+  // DW_AT_low_pc is on the DIE and DW_AT_high_pc is on its abstract origin. They don't make a
+  // range together.
+  SpecificationFixture fixture;
+  ASSERT_TRUE(fixture.Init());
+  fxl::RefPtr<Symbol> symbol = fixture.UnitChild(0, kPairOnlyIndex);
+  ASSERT_TRUE(symbol);
+  const Function* function = symbol->As<Function>();
+  ASSERT_TRUE(function);
+  EXPECT_EQ("PairOnly", function->GetFullName());
+  EXPECT_TRUE(function->code_ranges().empty());
+}
+
 // TODO(brettw) test using statements. See GetUsing() in type_test.cc
 
 }  // namespace zxdb

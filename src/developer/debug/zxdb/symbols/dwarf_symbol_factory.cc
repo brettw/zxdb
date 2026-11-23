@@ -14,6 +14,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/shared/logging/logging.h"
 #include "src/developer/debug/zxdb/common/checked_math.h"
+#include "src/developer/debug/zxdb/common/ref_ptr_to.h"
 #include "src/developer/debug/zxdb/symbols/array_type.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
 #include "src/developer/debug/zxdb/symbols/call_site.h"
@@ -114,16 +115,9 @@ DwarfSymbolFactory::DwarfSymbolFactory(fxl::WeakPtr<DwarfBinaryImpl> binary,
 DwarfSymbolFactory::~DwarfSymbolFactory() = default;
 
 fxl::RefPtr<Symbol> DwarfSymbolFactory::CreateSymbol(DwarfDieRef die_ref) const {
-  if (!binary_ || !delegate_ || !die_ref.is_valid())
+  if (!delegate_)
     return fxl::MakeRefCounted<Symbol>();
-
-  // LLVMContext::getDIEForOffset() only works for normal (non-DWO) units so we have to look up
-  // manually. This is basically the implementation of getDIEForOffset() with the variable unit
-  // type.
-  const llvm::DWARFUnitVector& unit_vector = file_type_ == kDWO
-                                                 ? GetLLVMContext()->getDWOUnitsVector()
-                                                 : GetLLVMContext()->getNormalUnitsVector();
-  llvm::DWARFUnit* unit = GetUnitForOffset(unit_vector, die_ref);
+  llvm::DWARFUnit* unit = GetUnitForDieRef(die_ref);
   if (!unit)
     return fxl::MakeRefCounted<Symbol>();
 
@@ -140,6 +134,32 @@ llvm::DWARFContext* DwarfSymbolFactory::GetLLVMContext() const {
     return binary_->GetLLVMContext();
   }
   return nullptr;
+}
+
+llvm::DWARFUnit* DwarfSymbolFactory::GetUnitForDieRef(DwarfDieRef die_ref) const {
+  if (!binary_ || !die_ref.is_valid())
+    return nullptr;
+
+  // LLVMContext::getDIEForOffset() only works for normal (non-DWO) units so we have to look up
+  // manually. This is basically the implementation of getDIEForOffset() with the variable unit
+  // type.
+  const llvm::DWARFUnitVector& unit_vector = file_type_ == kDWO
+                                                 ? GetLLVMContext()->getDWOUnitsVector()
+                                                 : GetLLVMContext()->getNormalUnitsVector();
+  return GetUnitForOffset(unit_vector, die_ref);
+}
+
+fxl::RefPtr<CompileUnit> DwarfSymbolFactory::GetCompileUnitForDie(DwarfDieRef die_ref) const {
+  if (!delegate_)
+    return fxl::RefPtr<CompileUnit>();
+  llvm::DWARFUnit* unit = GetUnitForDieRef(die_ref);
+  if (!unit)
+    return fxl::RefPtr<CompileUnit>();
+
+  fxl::RefPtr<Symbol> symbol = DecodeSymbol(unit->getUnitDIE());
+  if (const CompileUnit* compile_unit = symbol->As<CompileUnit>())
+    return RefPtrTo(compile_unit);
+  return fxl::RefPtr<CompileUnit>();
 }
 
 DwarfDieDecoder DwarfSymbolFactory::MakeDecoder(std::span<const DwarfAttr> attributes) const {
@@ -249,21 +269,23 @@ UncachedLazySymbol DwarfSymbolFactory::MakeUncachedLazy(const llvm::DWARFDie& di
   return MakeUncachedLazy(GetDieRef(die));
 }
 
-fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeFunction(const llvm::DWARFDie& die, DwarfTag tag,
-                                                       bool is_specification) const {
+fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeFunction(const llvm::DWARFDie& die,
+                                                       DwarfTag tag) const {
+  // The decoder takes the attributes that this DIE doesn't have from its abstract origin and from
+  // the declaration that DW_AT_specification references, so one decode gives all of them.
   static constexpr DwarfAttr kAttrs[] = {
-      DwarfAttr::kSpecification, DwarfAttr::kName,     DwarfAttr::kLinkageName,
-      DwarfAttr::kType,          DwarfAttr::kDeclFile, DwarfAttr::kDeclLine,
-      DwarfAttr::kCallFile,      DwarfAttr::kCallLine, DwarfAttr::kFrameBase,
-      DwarfAttr::kObjectPointer, DwarfAttr::kLowPc,    DwarfAttr::kHighPc,
-      DwarfAttr::kRanges};
+      DwarfAttr::kName,     DwarfAttr::kLinkageName, DwarfAttr::kType,
+      DwarfAttr::kDeclFile, DwarfAttr::kDeclLine,    DwarfAttr::kCallFile,
+      DwarfAttr::kCallLine, DwarfAttr::kFrameBase,   DwarfAttr::kObjectPointer,
+      DwarfAttr::kLowPc,    DwarfAttr::kHighPc,      DwarfAttr::kRanges};
 
   DwarfDieDecoder decoder = MakeDecoder(kAttrs);
   if (!decoder.Decode(die))
     return fxl::MakeRefCounted<Symbol>();
 
-  llvm::DWARFDie parent = decoder.GetAbstractParent();
-  llvm::DWARFDie specification = decoder.GetReference(DwarfAttr::kSpecification);
+  // The parent is the namespace or class of the declaration. For an inlined subroutine, the
+  // containing block is set separately below.
+  llvm::DWARFDie parent = decoder.GetContextParent();
   std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
   std::optional<const char*> linkage_name = decoder.GetCString(DwarfAttr::kLinkageName);
   llvm::DWARFDie return_type = decoder.GetReference(DwarfAttr::kType);
@@ -280,27 +302,15 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeFunction(const llvm::DWARFDie& die
     call_line = decoder.GetUnsignedConstant(DwarfAttr::kCallLine);
   }
 
+  // The expression source is the DIE that has the attribute, so the expression uses the address
+  // table of that DIE's unit.
   VariableLocation frame_base;
   if (const DwarfDieDecoder::AttributeValue* value = decoder.GetValue(DwarfAttr::kFrameBase))
-    frame_base = DecodeVariableLocation(value->unit, value->form, MakeUncachedLazy(die));
+    frame_base = DecodeVariableLocation(value->unit, value->form, MakeUncachedLazy(value->die));
 
   llvm::DWARFDie object_ptr = decoder.GetReference(DwarfAttr::kObjectPointer);
 
-  fxl::RefPtr<Function> function;
-
-  // If this DIE has a link to a function specification (and we haven't already followed such a
-  // link), first read that in to get things like the mangled name, parent context, and declaration
-  // locations. Then we'll overlay our values on that object.
-  if (!is_specification && specification) {
-    auto spec = DecodeFunction(specification, tag, true);
-    Function* spec_function = spec->As<Function>();
-    // If the specification is invalid, just ignore it and read out the values that we can find in
-    // this DIE. An empty one will be created below.
-    if (spec_function)
-      function = fxl::RefPtr<Function>(spec_function);
-  }
-  if (!function)
-    function = fxl::MakeRefCounted<Function>(tag);
+  auto function = fxl::MakeRefCounted<Function>(tag);
 
   if (name)
     function->set_assigned_name(*name);
@@ -308,8 +318,9 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeFunction(const llvm::DWARFDie& die
     function->set_linkage_name(*linkage_name);
   function->set_code_ranges(GetCodeRanges(decoder));
   if (decl_file) {
-    function->set_decl_line(MakeFileLine(die.getDwarfUnit(), decl_file, decl_line,
-                                         delegate_->GetBuildDirForSymbolFactory()));
+    // The file name comes from the unit of the DIE that has DW_AT_decl_file.
+    function->set_decl_line(MakeFileLine(decoder.GetValue(DwarfAttr::kDeclFile)->unit, decl_file,
+                                         decl_line, delegate_->GetBuildDirForSymbolFactory()));
   }
   function->set_call_line(MakeFileLine(die.getDwarfUnit(), call_file, call_line,
                                        delegate_->GetBuildDirForSymbolFactory()));
@@ -356,15 +367,8 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeFunction(const llvm::DWARFDie& die
   function->set_template_params(std::move(template_params));
   function->set_call_sites(std::move(call_sites));
 
-  if (parent && !function->parent()) {
-    // Set the parent symbol when it hasn't already been set. We always want the specification's
-    // parent instead of the implementation block's parent (if they're different) because the
-    // namespace and enclosing class information comes from the declaration.
-    //
-    // If this is already set, it means we recursively followed the specification which already set
-    // it.
+  if (parent)
     function->set_parent(MakeUncachedLazy(parent));
-  }
 
   if (tag == DwarfTag::kInlinedSubroutine) {
     // In contrast to the logic for parent() above, the direct containing block of the inlined
@@ -438,9 +442,9 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeBaseType(const llvm::DWARFDie& die
   if (!decoder.Decode(die))
     return fxl::MakeRefCounted<Symbol>();
 
-  // Types must always use the parent of the abstract origin (if it exists) so they can be nested in
-  // the correct namespace.
-  llvm::DWARFDie parent = decoder.GetAbstractParent();
+  // Types must always use the context parent so they can be nested in the correct namespace or
+  // class. It comes from the abstract origin or the specification, if the DIE has one.
+  llvm::DWARFDie parent = decoder.GetContextParent();
 
   std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
   std::optional<uint64_t> encoding = decoder.GetUnsignedConstant(DwarfAttr::kEncoding);
@@ -516,9 +520,9 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeCollection(const llvm::DWARFDie& d
   if (!decoder.Decode(die))
     return fxl::MakeRefCounted<Symbol>();
 
-  // Types must always use the parent of the abstract origin (if it exists) so they can be nested in
-  // the correct namespace.
-  llvm::DWARFDie parent = decoder.GetAbstractParent();
+  // Types must always use the context parent so they can be nested in the correct namespace or
+  // class. It comes from the abstract origin or the specification, if the DIE has one.
+  llvm::DWARFDie parent = decoder.GetContextParent();
 
   std::optional<uint64_t> signature;
   if (const DwarfDieDecoder::AttributeValue* value = decoder.GetValue(DwarfAttr::kSignature))
@@ -704,9 +708,9 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeEnum(const llvm::DWARFDie& die) co
     return fxl::MakeRefCounted<Symbol>();
   }
 
-  // Types must always use the parent of the abstract origin (if it exists) so they can be nested in
-  // the correct namespace.
-  llvm::DWARFDie parent = main_decoder.GetAbstractParent();
+  // Types must always use the context parent so they can be nested in the correct namespace or
+  // class. It comes from the abstract origin or the specification, if the DIE has one.
+  llvm::DWARFDie parent = main_decoder.GetContextParent();
 
   // Name is optional (enums can be anonymous).
   std::optional<const char*> type_name = main_decoder.GetCString(DwarfAttr::kName);
@@ -776,9 +780,9 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeFunctionType(const llvm::DWARFDie&
   if (!decoder.Decode(die))
     return fxl::MakeRefCounted<Symbol>();
 
-  // Types must always use the parent of the abstract origin (if it exists) so they can be nested in
-  // the correct namespace.
-  llvm::DWARFDie parent = decoder.GetAbstractParent();
+  // Types must always use the context parent so they can be nested in the correct namespace or
+  // class. It comes from the abstract origin or the specification, if the DIE has one.
+  llvm::DWARFDie parent = decoder.GetContextParent();
   llvm::DWARFDie return_type = decoder.GetReference(DwarfAttr::kType);
 
   // Handle sub-DIEs (this only has parameters).
@@ -915,9 +919,9 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeModifiedType(const llvm::DWARFDie&
   if (!decoder.Decode(die))
     return fxl::MakeRefCounted<Symbol>();
 
-  // Types must always use the parent of the abstract origin (if it exists) so they can be nested in
-  // the correct namespace.
-  llvm::DWARFDie parent = decoder.GetAbstractParent();
+  // Types must always use the context parent so they can be nested in the correct namespace or
+  // class. It comes from the abstract origin or the specification, if the DIE has one.
+  llvm::DWARFDie parent = decoder.GetContextParent();
   std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
   llvm::DWARFDie modified = decoder.GetReference(DwarfAttr::kType);
 
@@ -944,9 +948,9 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeNamespace(const llvm::DWARFDie& di
   if (!decoder.Decode(die))
     return fxl::MakeRefCounted<Symbol>();
 
-  // Types must always use the parent of the abstract origin (if it exists) so they can be nested in
-  // the correct namespace.
-  llvm::DWARFDie parent = decoder.GetAbstractParent();
+  // Types must always use the context parent so they can be nested in the correct namespace or
+  // class. It comes from the abstract origin or the specification, if the DIE has one.
+  llvm::DWARFDie parent = decoder.GetContextParent();
   std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
 
   auto result = fxl::MakeRefCounted<Namespace>();
@@ -993,9 +997,9 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeUnspecifiedType(const llvm::DWARFD
   if (!decoder.Decode(die))
     return fxl::MakeRefCounted<Symbol>();
 
-  // Types must always use the parent of the abstract origin (if it exists) so they can be nested in
-  // the correct namespace.
-  llvm::DWARFDie parent = decoder.GetAbstractParent();
+  // Types must always use the context parent so they can be nested in the correct namespace or
+  // class. It comes from the abstract origin or the specification, if the DIE has one.
+  llvm::DWARFDie parent = decoder.GetContextParent();
   std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
 
   auto result = fxl::MakeRefCounted<Type>(DwarfTag::kUnspecifiedType);
@@ -1008,8 +1012,9 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeUnspecifiedType(const llvm::DWARFD
   return result;
 }
 
-fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeVariable(const llvm::DWARFDie& die,
-                                                       bool is_specification) const {
+fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeVariable(const llvm::DWARFDie& die) const {
+  // The decoder takes the attributes that this DIE doesn't have from its abstract origin and from
+  // the declaration that DW_AT_specification references, so one decode gives all of them.
   static constexpr DwarfAttr kAttrs[] = {
       DwarfAttr::kSpecification, DwarfAttr::kName,       DwarfAttr::kLocation,  DwarfAttr::kType,
       DwarfAttr::kExternal,      DwarfAttr::kArtificial, DwarfAttr::kConstValue};
@@ -1020,31 +1025,18 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeVariable(const llvm::DWARFDie& die
   llvm::DWARFDie specification = decoder.GetReference(DwarfAttr::kSpecification);
   std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
 
+  // The expression source is the DIE that has the attribute. A location can come from an abstract
+  // origin in another unit, for example for a static local of an inline function.
   VariableLocation location;
   if (const DwarfDieDecoder::AttributeValue* value = decoder.GetValue(DwarfAttr::kLocation))
-    location = DecodeVariableLocation(value->unit, value->form, MakeUncachedLazy(die));
+    location = DecodeVariableLocation(value->unit, value->form, MakeUncachedLazy(value->die));
 
   llvm::DWARFDie type = decoder.GetReference(DwarfAttr::kType);
   std::optional<bool> external = decoder.GetBool(DwarfAttr::kExternal);
   std::optional<bool> artificial = decoder.GetBool(DwarfAttr::kArtificial);
   ConstValue const_value = decoder.GetConstValue(DwarfAttr::kConstValue);
 
-  fxl::RefPtr<Variable> variable;
-
-  // If this DIE has a link to a specification (and we haven't already followed such a link), first
-  // read that in to get things like the mangled name, parent context, and declaration locations.
-  // Then we'll overlay our values on that object.
-  if (!is_specification && specification) {
-    auto spec = DecodeVariable(specification, true);
-    Variable* spec_variable = spec->As<Variable>();
-    // If the specification is invalid, just ignore it and read out the values
-    // that we can find in this DIE. An empty one will be created below.
-    if (spec_variable)
-      variable = fxl::RefPtr<Variable>(spec_variable);
-  }
-  if (!variable) {
-    variable = fxl::MakeRefCounted<Variable>(static_cast<DwarfTag>(die.getTag()));
-  }
+  auto variable = fxl::MakeRefCounted<Variable>(static_cast<DwarfTag>(die.getTag()));
 
   if (name)
     variable->set_assigned_name(*name);
@@ -1057,13 +1049,15 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeVariable(const llvm::DWARFDie& die
   variable->set_location(std::move(location));
   variable->set_const_value(std::move(const_value));
 
-  if (!variable->parent()) {
-    // Set the parent symbol when it hasn't already been set. As with functions, we always want the
-    // specification's parent. See DecodeFunction().
-    llvm::DWARFDie parent = die.getParent();
-    if (parent)
-      variable->set_parent(MakeUncachedLazy(parent));
-  }
+  // The definition of a static data member references its declaration in the class with
+  // DW_AT_specification, so the class is the parent. Other variables use the parent of their own
+  // DIE, which is the scope that contains them. This is also true for a variable in an inlined
+  // subroutine: its abstract origin is in the scope of the abstract instance.
+  llvm::DWARFDie parent = die.getParent();
+  if (specification)
+    parent = specification.getParent();
+  if (parent)
+    variable->set_parent(MakeUncachedLazy(parent));
   return variable;
 }
 
@@ -1179,6 +1173,11 @@ std::optional<AddressRange> DwarfSymbolFactory::GetLowHighEncodedCodeRange(
   if (!low || !high || !DwarfFormIsAddress(static_cast<DwarfForm>(low->form.getForm()))) {
     return std::nullopt;
   }
+
+  // The two attributes describe one range, so they must come from the same DIE. A DIE with only
+  // DW_AT_low_pc doesn't get DW_AT_high_pc from its abstract origin. LLDB has the same rule.
+  if (low->die != high->die)
+    return std::nullopt;
 
   // Low range.
   uint64_t low_addr = 0;

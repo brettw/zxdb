@@ -59,6 +59,7 @@ class DwarfSymbolFactory : public SymbolFactory {
 
   // SymbolFactory implementation.
   fxl::RefPtr<Symbol> CreateSymbol(DwarfDieRef die_ref) const override;
+  fxl::RefPtr<CompileUnit> GetCompileUnitForDie(DwarfDieRef die_ref) const override;
 
   using SymbolFactory::MakeLazy;
   using SymbolFactory::MakeUncachedLazy;
@@ -76,6 +77,9 @@ class DwarfSymbolFactory : public SymbolFactory {
 
   llvm::DWARFContext* GetLLVMContext() const;
 
+  // Returns the unit that contains the DIE, or null.
+  llvm::DWARFUnit* GetUnitForDieRef(DwarfDieRef die_ref) const;
+
   // Makes a decoder for the given attribute table. The decoder uses the binary, so it finds type
   // unit signatures and file tables in the binary's caches.
   DwarfDieDecoder MakeDecoder(std::span<const DwarfAttr> attributes) const;
@@ -86,14 +90,8 @@ class DwarfSymbolFactory : public SymbolFactory {
   // As with SymbolFactory::CreateSymbol, these should never return null but rather an empty Symbol
   // implementation on error.
   //
-  // is_specification will be set when this function recursively calls itself to parse the
-  // specification of a function implementation.
-  //
-  // The tag (DW_TAG_subprogram or DW_TAG_inlined_subroutine) is passed in because when recursively
-  // looking up the definitions, we want the original DIE tag rather than the specification's tag
-  // (the original could be an inlined function while the specification will never be).
-  fxl::RefPtr<Symbol> DecodeFunction(const llvm::DWARFDie& die, DwarfTag tag,
-                                     bool is_specification = false) const;
+  // The tag is DW_TAG_subprogram or DW_TAG_inlined_subroutine.
+  fxl::RefPtr<Symbol> DecodeFunction(const llvm::DWARFDie& die, DwarfTag tag) const;
   fxl::RefPtr<Symbol> DecodeArrayType(const llvm::DWARFDie& die) const;
   fxl::RefPtr<Symbol> DecodeBaseType(const llvm::DWARFDie& die) const;
   fxl::RefPtr<Symbol> DecodeCallSite(const llvm::DWARFDie& die) const;
@@ -111,8 +109,7 @@ class DwarfSymbolFactory : public SymbolFactory {
   fxl::RefPtr<Symbol> DecodeNamespace(const llvm::DWARFDie& die) const;
   fxl::RefPtr<Symbol> DecodeTemplateParameter(const llvm::DWARFDie& die, DwarfTag tag) const;
   fxl::RefPtr<Symbol> DecodeUnspecifiedType(const llvm::DWARFDie& die) const;
-  fxl::RefPtr<Symbol> DecodeVariable(const llvm::DWARFDie& die,
-                                     bool is_specification = false) const;
+  fxl::RefPtr<Symbol> DecodeVariable(const llvm::DWARFDie& die) const;
   fxl::RefPtr<Symbol> DecodeVariant(const llvm::DWARFDie& die) const;
   fxl::RefPtr<Symbol> DecodeVariantPart(const llvm::DWARFDie& die) const;
 

@@ -4,10 +4,15 @@
 
 #include "src/developer/debug/zxdb/symbols/symbol_factory.h"
 
+#include "src/developer/debug/zxdb/symbols/compile_unit.h"
 #include "src/developer/debug/zxdb/symbols/lazy_symbol.h"
 #include "src/developer/debug/zxdb/symbols/symbol.h"
 
 namespace zxdb {
+
+fxl::RefPtr<CompileUnit> SymbolFactory::GetCompileUnitForDie(DwarfDieRef die_ref) const {
+  return fxl::RefPtr<CompileUnit>();
+}
 
 LazySymbol SymbolFactory::MakeLazy(DwarfDieRef die_ref) const {
   return LazySymbol(fxl::RefPtr<const SymbolFactory>(this), die_ref);

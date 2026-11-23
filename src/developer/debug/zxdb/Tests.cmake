@@ -359,6 +359,21 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 add_custom_target(zxdb_addrx_offset_fixtures DEPENDS ${addrx_offset_fixture_outputs})
 add_dependencies(zxdb_tests zxdb_addrx_offset_fixtures)
+# A binary from hand-written DWARF with DW_AT_specification chains and abstract origins in another
+# unit. dwarf_symbol_factory_unittest.cc decodes it.
+set(specification_fixture_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/specification")
+set(specification_fixture_source
+  "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/specification/specification_fixture.s")
+set(specification_fixture_output "${specification_fixture_dir}/specification.so")
+add_custom_command(
+  OUTPUT "${specification_fixture_output}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${specification_fixture_dir}"
+  COMMAND "${CMAKE_CXX_COMPILER}" -shared -nostdlib -Wl,--build-id -o
+    "${specification_fixture_output}" "${specification_fixture_source}"
+  DEPENDS "${specification_fixture_source}"
+  VERBATIM)
+add_custom_target(zxdb_specification_fixtures DEPENDS "${specification_fixture_output}")
+add_dependencies(zxdb_tests zxdb_specification_fixtures)
 # A .dwo file with a type unit that references the .debug_line.dwo table. Only the .dwo goes into the
 # fixture directory: the object file has relocations that the comparison test doesn't apply.
 set(line_table_split_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/line_table_split")
