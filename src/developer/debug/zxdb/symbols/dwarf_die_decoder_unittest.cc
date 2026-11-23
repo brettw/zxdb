@@ -37,7 +37,15 @@ enum Abbrev : uint8_t {
   kBothLinksAbbrev,
   kSpecCycleAbbrev,
   kOriginCycleAbbrev,
+  kConstantsAbbrev,
+  kSkeletonUnitAbbrev,
+  kAddressesAbbrev,
+  kCorruptAbbrev,
 };
+
+// The address table in .debug_addr. Its entries start after the 8-byte header.
+constexpr uint64_t kAddrBase = 8;
+constexpr uint64_t kTableAddresses[] = {0x5000, 0x6000, 0xffffffffffffffff};
 
 constexpr int64_t kImplicitByteSize = 4;
 constexpr int64_t kImplicitCount = 7;
@@ -60,6 +68,15 @@ constexpr int64_t kImplicitCount = 7;
 //     DW_TAG_variable with both links, to "origin_name" and "spec_name"
 //     DW_TAG_variable "cycle_a" whose specification has cycle_a as its abstract origin
 //     DW_TAG_variable (that abstract origin)
+//     DW_TAG_variable with constants in unusual forms
+//
+// And three more units:
+//
+//   DW_TAG_compile_unit "skeleton" with DW_AT_addr_base, like the skeleton unit of a .dwo file
+//   DW_TAG_compile_unit "dwo" without DW_AT_addr_base, like a .dwo unit
+//     DW_TAG_subprogram with addresses in the DW_FORM_addrx forms
+//   DW_TAG_compile_unit "corrupt"
+//     DW_TAG_variable whose DW_AT_location block ends past the end of the unit
 class DwarfDieDecoderTest : public testing::Test {
  public:
   DwarfDieDecoderTest() {
@@ -68,10 +85,24 @@ class DwarfDieDecoderTest : public testing::Test {
 
     buffers_["debug_info"] = MakeBuffer(info_, "debug_info");
     buffers_["debug_abbrev"] = MakeBuffer(abbrev_, "debug_abbrev");
+    buffers_["debug_addr"] = MakeBuffer(addr_, "debug_addr");
     context_ = llvm::DWARFContext::create(buffers_, 8, true);
   }
 
   llvm::DWARFContext* context() { return context_.get(); }
+
+  // Returns the DIE at the offset in the unit with the given index.
+  llvm::DWARFDie GetDieInUnit(unsigned unit_index, uint64_t offset) {
+    return context_->getUnitAtIndex(unit_index)->getDIEForOffset(offset);
+  }
+
+  // Returns the unit with the given index, with its unit DIE extracted so its DW_AT_addr_base is
+  // known.
+  llvm::DWARFUnit* GetUnit(unsigned unit_index) {
+    llvm::DWARFUnit* unit = context_->getUnitAtIndex(unit_index);
+    unit->getUnitDIE();
+    return unit;
+  }
 
   llvm::DWARFDie GetDie(uint64_t offset) {
     return context_->getUnitAtIndex(0)->getDIEForOffset(offset);
@@ -96,6 +127,14 @@ class DwarfDieDecoderTest : public testing::Test {
   uint64_t both_links_offset() const { return both_links_offset_; }
   uint64_t cycle_a_offset() const { return cycle_a_offset_; }
   uint64_t cycle_b_offset() const { return cycle_b_offset_; }
+  uint64_t constants_offset() const { return constants_offset_; }
+  uint64_t addresses_offset() const { return addresses_offset_; }
+  uint64_t corrupt_offset() const { return corrupt_offset_; }
+
+  // Unit indices.
+  static constexpr unsigned kSkeletonUnit = 1;
+  static constexpr unsigned kDwoUnit = 2;
+  static constexpr unsigned kCorruptUnit = 3;
 
  private:
   static std::unique_ptr<llvm::MemoryBuffer> MakeBuffer(const std::vector<uint8_t>& data,
@@ -187,6 +226,21 @@ class DwarfDieDecoderTest : public testing::Test {
     AddAbbrev(kOriginCycleAbbrev, DwarfTag::kVariable, false,
               {{DwarfAttr::kAbstractOrigin, DwarfForm::kRef4},
                {DwarfAttr::kDeclLine, DwarfForm::kData1}});
+    AddAbbrev(kConstantsAbbrev, DwarfTag::kVariable, false,
+              {{DwarfAttr::kConstValue, DwarfForm::kSdata},
+               {DwarfAttr::kByteSize, DwarfForm::kData1},
+               {DwarfAttr::kBitSize, DwarfForm::kData16},
+               {DwarfAttr::kExternal, DwarfForm::kFlag}});
+    AddAbbrev(
+        kSkeletonUnitAbbrev, DwarfTag::kCompileUnit, false,
+        {{DwarfAttr::kName, DwarfForm::kString}, {DwarfAttr::kAddrBase, DwarfForm::kSecOffset}});
+    AddAbbrev(kAddressesAbbrev, DwarfTag::kSubprogram, false,
+              {{DwarfAttr::kLowPc, DwarfForm::kAddrx1},
+               {DwarfAttr::kHighPc, DwarfForm::kLlvmAddrxOffset},
+               {DwarfAttr::kEntryPc, DwarfForm::kAddrx},
+               {DwarfAttr::kCallReturnPc, DwarfForm::kAddr}});
+    AddAbbrev(kCorruptAbbrev, DwarfTag::kVariable, false,
+              {{DwarfAttr::kName, DwarfForm::kString}, {DwarfAttr::kLocation, DwarfForm::kBlock1}});
     abbrev_.push_back(0);  // End of the abbreviations.
   }
 
@@ -302,15 +356,86 @@ class DwarfDieDecoderTest : public testing::Test {
     for (size_t i = 0; i < 4; i++)
       info_[cycle_b_ref + i] = static_cast<uint8_t>(cycle_b_offset_ >> (i * 8));
 
+    constants_offset_ = NextOffset();
+    AppendUleb(info_, kConstantsAbbrev);
+    info_.push_back(7);                   // DW_AT_const_value is 7 in SLEB128.
+    info_.push_back(0xff);                // DW_AT_byte_size.
+    info_.insert(info_.end(), 16, 0x11);  // DW_AT_bit_size, 16 bytes.
+    info_.push_back(1);                   // DW_AT_external.
+
     info_.push_back(0);  // End of the unit children.
 
     uint64_t unit_length = info_.size() - 4;
     for (size_t i = 0; i < 4; i++)
       info_[i] = static_cast<uint8_t>(unit_length >> (i * 8));
+
+    WriteAddressUnits();
+    WriteCorruptUnit();
+  }
+
+  // Writes a DWARF 5 unit header and returns the offset of the unit.
+  size_t BeginUnit() {
+    size_t start = info_.size();
+    AppendInteger(info_, 0, 4);  // Unit length, set by EndUnit().
+    AppendInteger(info_, 5, 2);
+    info_.push_back(kUnitTypeCompile);
+    info_.push_back(8);
+    AppendInteger(info_, 0, 4);
+    return start;
+  }
+
+  void EndUnit(size_t start) {
+    uint64_t unit_length = info_.size() - start - 4;
+    for (size_t i = 0; i < 4; i++)
+      info_[start + i] = static_cast<uint8_t>(unit_length >> (i * 8));
+  }
+
+  void WriteAddressUnits() {
+    // The address table.
+    AppendInteger(addr_, 4 + 8 * std::size(kTableAddresses), 4);  // Unit length.
+    AppendInteger(addr_, 5, 2);                                   // Version.
+    addr_.push_back(8);                                           // Address size.
+    addr_.push_back(0);                                           // Segment selector size.
+    for (uint64_t address : kTableAddresses)
+      AppendInteger(addr_, address, 8);
+
+    size_t skeleton = BeginUnit();
+    AppendUleb(info_, kSkeletonUnitAbbrev);
+    AppendString(info_, "skeleton");
+    AppendInteger(info_, kAddrBase, 4);
+    EndUnit(skeleton);
+
+    size_t dwo = BeginUnit();
+    AppendUleb(info_, kCompileUnitAbbrev);
+    AppendString(info_, "dwo");
+    addresses_offset_ = NextOffset();
+    AppendUleb(info_, kAddressesAbbrev);
+    info_.push_back(1);                           // DW_AT_low_pc is entry 1.
+    AppendUleb(info_, 0);                         // DW_AT_high_pc is entry 0...
+    AppendInteger(info_, 0x10, 4);                // ...plus 0x10.
+    AppendUleb(info_, 2);                         // DW_AT_entry_pc is the tombstone.
+    AppendInteger(info_, 0xffffffffffffffff, 8);  // DW_AT_call_return_pc too.
+    info_.push_back(0);                           // End of the unit children.
+    EndUnit(dwo);
+  }
+
+  void WriteCorruptUnit() {
+    // This unit is last, so the block length is also past the end of the section. LLVM reads the
+    // DIE because it doesn't check block lengths.
+    size_t corrupt = BeginUnit();
+    AppendUleb(info_, kCompileUnitAbbrev);
+    AppendString(info_, "corrupt");
+    corrupt_offset_ = NextOffset();
+    AppendUleb(info_, kCorruptAbbrev);
+    AppendString(info_, "var");
+    info_.push_back(0xff);  // DW_AT_location length, past the end.
+    info_.push_back(DwarfOp::kReg0);
+    EndUnit(corrupt);
   }
 
   std::vector<uint8_t> abbrev_;
   std::vector<uint8_t> info_;
+  std::vector<uint8_t> addr_;
 
   uint64_t unit_offset_ = 0;
   uint64_t namespace_offset_ = 0;
@@ -329,6 +454,9 @@ class DwarfDieDecoderTest : public testing::Test {
   uint64_t both_links_offset_ = 0;
   uint64_t cycle_a_offset_ = 0;
   uint64_t cycle_b_offset_ = 0;
+  uint64_t constants_offset_ = 0;
+  uint64_t addresses_offset_ = 0;
+  uint64_t corrupt_offset_ = 0;
 
   // The context references these buffers, so they must outlive it.
   llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers_;
@@ -576,6 +704,86 @@ TEST_F(DwarfDieDecoderTest, GetIntegerData) {
   ASSERT_TRUE(line_decoder.Decode(GetDie(concrete_offset())));
   EXPECT_EQ(std::vector<uint8_t>({20}),
             line_decoder.GetConstValue(DwarfAttr::kDeclLine).GetConstValue(1));
+}
+
+TEST_F(DwarfDieDecoderTest, ConstantAccessors) {
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kConstValue, DwarfAttr::kByteSize,
+                                         DwarfAttr::kBitSize, DwarfAttr::kExternal};
+  DwarfDieDecoder decoder(context(), kAttrs);
+  ASSERT_TRUE(decoder.Decode(GetDie(constants_offset())));
+
+  // A non-negative DW_FORM_sdata value is unsigned too.
+  EXPECT_EQ(7u, decoder.GetUnsignedConstant(DwarfAttr::kConstValue));
+  EXPECT_EQ(7, decoder.GetSignedConstant(DwarfAttr::kConstValue));
+
+  // The data forms are zero-extended for unsigned values and sign-extended for signed values.
+  EXPECT_EQ(255u, decoder.GetUnsignedConstant(DwarfAttr::kByteSize));
+  EXPECT_EQ(-1, decoder.GetSignedConstant(DwarfAttr::kByteSize));
+
+  // DW_FORM_data16 doesn't fit in 64 bits.
+  EXPECT_EQ(std::nullopt, decoder.GetUnsignedConstant(DwarfAttr::kBitSize));
+  EXPECT_EQ(std::nullopt, decoder.GetSignedConstant(DwarfAttr::kBitSize));
+  EXPECT_EQ(std::nullopt, decoder.GetInteger(DwarfAttr::kBitSize, false));
+  EXPECT_EQ(std::vector<uint8_t>(16, 0x11),
+            decoder.GetConstValue(DwarfAttr::kBitSize).GetConstValue(16));
+
+  // A flag isn't a constant.
+  EXPECT_EQ(std::nullopt, decoder.GetUnsignedConstant(DwarfAttr::kExternal));
+  EXPECT_EQ(true, decoder.GetBool(DwarfAttr::kExternal));
+
+  // A negative DW_FORM_sdata value isn't unsigned.
+  static constexpr DwarfAttr kFormsAttrs[] = {DwarfAttr::kConstValue};
+  DwarfDieDecoder forms_decoder(context(), kFormsAttrs);
+  ASSERT_TRUE(forms_decoder.Decode(GetDie(forms_offset())));
+  EXPECT_EQ(std::nullopt, forms_decoder.GetUnsignedConstant(DwarfAttr::kConstValue));
+  EXPECT_EQ(-5, forms_decoder.GetSignedConstant(DwarfAttr::kConstValue));
+}
+
+TEST_F(DwarfDieDecoderTest, AddressTableUnit) {
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kLowPc, DwarfAttr::kHighPc, DwarfAttr::kEntryPc,
+                                         DwarfAttr::kCallReturnPc};
+  llvm::DWARFDie die = GetDieInUnit(kDwoUnit, addresses_offset());
+  ASSERT_TRUE(die);
+
+  // The unit of the DIE has no address table, like a .dwo unit.
+  DwarfDieDecoder own_table(context(), kAttrs);
+  ASSERT_TRUE(own_table.Decode(die));
+  EXPECT_EQ(std::nullopt, own_table.GetAddress(DwarfAttr::kLowPc));
+
+  // With the address table of the skeleton unit, the indices resolve.
+  DwarfDieDecoder decoder(context(), kAttrs, GetUnit(kSkeletonUnit));
+  ASSERT_TRUE(decoder.Decode(die));
+  EXPECT_EQ(0x6000u, decoder.GetAddress(DwarfAttr::kLowPc));
+
+  // DW_FORM_LLVM_addrx_offset is an entry plus an offset.
+  EXPECT_EQ(0x5010u, decoder.GetAddress(DwarfAttr::kHighPc));
+  std::optional<DwarfDieDecoder::HighPC> high_pc = decoder.GetHighPC();
+  ASSERT_TRUE(high_pc);
+  EXPECT_FALSE(high_pc->is_constant);
+  EXPECT_EQ(0x5010u, high_pc->value);
+
+  // The tombstone value means removed code, in the table and in DW_FORM_addr.
+  EXPECT_EQ(std::nullopt, decoder.GetAddress(DwarfAttr::kEntryPc));
+  EXPECT_TRUE(decoder.Has(DwarfAttr::kCallReturnPc));
+  EXPECT_EQ(std::nullopt, decoder.GetAddress(DwarfAttr::kCallReturnPc));
+}
+
+TEST_F(DwarfDieDecoderTest, CorruptBlockLength) {
+  llvm::DWARFDie die = GetDieInUnit(kCorruptUnit, corrupt_offset());
+  ASSERT_TRUE(die);
+
+  // The block ends past the end of the unit, when the decoder reads it and when it skips it.
+  static constexpr DwarfAttr kReadAttrs[] = {DwarfAttr::kName, DwarfAttr::kLocation};
+  DwarfDieDecoder read_decoder(context(), kReadAttrs);
+  EXPECT_FALSE(read_decoder.Decode(die));
+
+  static constexpr DwarfAttr kSkipAttrs[] = {DwarfAttr::kName};
+  DwarfDieDecoder skip_decoder(context(), kSkipAttrs);
+  EXPECT_FALSE(skip_decoder.Decode(die));
+
+  // The unit DIE before it is fine.
+  EXPECT_TRUE(skip_decoder.Decode(GetUnit(kCorruptUnit)->getUnitDIE()));
+  EXPECT_STREQ("corrupt", skip_decoder.GetCString(DwarfAttr::kName).value_or(""));
 }
 
 TEST_F(DwarfDieDecoderTest, WrongForm) {

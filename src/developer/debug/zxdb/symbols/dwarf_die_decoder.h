@@ -98,12 +98,19 @@ class DwarfDieDecoder {
 
   // The context or binary, and the attribute table, must outlive this class. A static constexpr
   // array is a good attribute table. Prefer the DwarfBinary version when possible.
-  DwarfDieDecoder(llvm::DWARFContext* context, std::span<const DwarfAttr> attributes);
-  DwarfDieDecoder(DwarfBinary& binary, std::span<const DwarfAttr> attributes);
+  //
+  // The address table unit, if given, gives the address table for the DW_FORM_addrx forms instead
+  // of the unit of each value. For a .dwo file, this is the skeleton unit in the main binary,
+  // because a .dwo unit has no address table of its own. It must also outlive this class.
+  DwarfDieDecoder(llvm::DWARFContext* context, std::span<const DwarfAttr> attributes,
+                  llvm::DWARFUnit* address_table_unit = nullptr);
+  DwarfDieDecoder(DwarfBinary& binary, std::span<const DwarfAttr> attributes,
+                  llvm::DWARFUnit* address_table_unit = nullptr);
   ~DwarfDieDecoder();
 
-  // Decodes one DIE. Returns true on success, false means the DIE was corrupt. After a failure, the
-  // values are incomplete.
+  // Decodes one DIE. Returns true on success, false means the DIE was corrupt: an attribute has a
+  // form that can't be read, or a value ends past the end of its unit. After a failure, the values
+  // are incomplete.
   bool Decode(const llvm::DWARFDie& die);
 
   // Control whether Decode() follows DW_AT_abstract_origin and DW_AT_specification attributes. The
@@ -126,11 +133,23 @@ class DwarfDieDecoder {
   // can have more than one encoding.
   const AttributeValue* GetValue(DwarfAttr attribute) const;
 
-  // These call the similarly-named function in llvm::DWARFFormValue.
+  // Returns the value of a flag. Constants are also accepted: zero is false.
   std::optional<bool> GetBool(DwarfAttr attribute) const;
+
+  // Return the value of an integer constant that fits in 64 bits. These are GetInteger() with the
+  // data forms read as unsigned or as signed, so they are only for values whose signedness the
+  // caller knows. They return nullopt for a value that doesn't fit, for example a negative
+  // DW_FORM_sdata value for GetUnsignedConstant(), and for forms that aren't integer constants
+  // (flags, blocks, and DW_FORM_data16).
   std::optional<uint64_t> GetUnsignedConstant(DwarfAttr attribute) const;
   std::optional<int64_t> GetSignedConstant(DwarfAttr attribute) const;
+
+  // Returns an address for any form of the address class. The DW_FORM_addrx forms are looked up in
+  // the address table (see the constructor). Returns nullopt for the tombstone value of all ones,
+  // which linkers write for removed code.
   std::optional<uint64_t> GetAddress(DwarfAttr attribute) const;
+
+  // Calls llvm::DWARFFormValue::getAsCString().
   std::optional<const char*> GetCString(DwarfAttr attribute) const;
 
   // Returns the value of an integer constant. The value is exact: a signed value is negative when
@@ -203,8 +222,12 @@ class DwarfDieDecoder {
   // Decodes a cross-DIE reference. Return value will be !isValid() on failure.
   llvm::DWARFDie DecodeReference(llvm::DWARFUnit* unit, const llvm::DWARFFormValue& form) const;
 
+  // Decodes a value of the address class. See GetAddress().
+  std::optional<uint64_t> DecodeAddress(const AttributeValue& value) const;
+
   llvm::DWARFContext* context_;
   const DwarfBinary* binary_ = nullptr;
+  llvm::DWARFUnit* address_table_unit_ = nullptr;
 
   std::span<const DwarfAttr> attributes_;
 

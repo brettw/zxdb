@@ -139,12 +139,6 @@ class DwarfSymbolFactory : public SymbolFactory {
   llvm::Expected<llvm::DWARFAddressRangesVector> GetCodeRangesFromRangelistXIndex(
       llvm::DWARFUnit* unit, uint64_t index) const;
 
-  // Looks up an address from the address table, taking account the unit of the attribute. This
-  // handles lookup it up in the main binary in the case of DWOs.
-  std::optional<uint64_t> GetAddrFromFormValue(llvm::DWARFUnit* unit,
-                                               const llvm::DWARFFormValue& form) const;
-  std::optional<uint64_t> GetAddrFromIndex(llvm::DWARFUnit* unit, uint64_t index) const;
-
   // These can be null if the module is unloaded but there are still some dangling type references
   // to them.
   fxl::WeakPtr<DwarfBinaryImpl> binary_;

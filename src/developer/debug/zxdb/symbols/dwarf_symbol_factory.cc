@@ -13,7 +13,6 @@
 #include "llvm/DebugInfo/DWARF/DWARFSection.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/shared/logging/logging.h"
-#include "src/developer/debug/zxdb/common/checked_math.h"
 #include "src/developer/debug/zxdb/common/int128_t.h"
 #include "src/developer/debug/zxdb/common/ref_ptr_to.h"
 #include "src/developer/debug/zxdb/symbols/array_type.h"
@@ -72,14 +71,6 @@ FileLine MakeFileLine(llvm::DWARFUnit* unit, const std::optional<std::string>& f
 // The attributes of an array subrange. Clang writes DW_AT_count, and GCC writes DW_AT_upper_bound.
 constexpr DwarfAttr kArraySubrangeAttrs[] = {DwarfAttr::kCount, DwarfAttr::kUpperBound,
                                              DwarfAttr::kLowerBound, DwarfAttr::kType};
-
-// Returns true if the form uses any of the addr "x" encodings (relocatable references to the
-// address table).
-bool IsAddrXForm(DwarfForm form) {
-  return form == DwarfForm::kAddrx || form == DwarfForm::kAddrx1 || form == DwarfForm::kAddrx2 ||
-         form == DwarfForm::kAddrx3 || form == DwarfForm::kAddrx4 ||
-         form == DwarfForm::kGnuAddrIndex;
-}
 
 DwarfDieRef GetDieRef(const llvm::DWARFDie& die) {
   if (!die.isValid())
@@ -235,9 +226,17 @@ fxl::RefPtr<CompileUnit> DwarfSymbolFactory::GetCompileUnitForDie(DwarfDieRef di
 }
 
 DwarfDieDecoder DwarfSymbolFactory::MakeDecoder(std::span<const DwarfAttr> attributes) const {
+  // A .dwo unit has no address table. Its addresses are in the table of the skeleton unit in the
+  // main binary.
+  llvm::DWARFUnit* address_table_unit = nullptr;
+  if (delegate_) {
+    if (CompileUnit* skeleton_unit = delegate_->GetSkeletonCompileUnit())
+      address_table_unit = skeleton_unit->dwarf_unit()->GetLLVMUnit();
+  }
+
   if (binary_)
-    return DwarfDieDecoder(*binary_.get(), attributes);
-  return DwarfDieDecoder(GetLLVMContext(), attributes);
+    return DwarfDieDecoder(*binary_.get(), attributes, address_table_unit);
+  return DwarfDieDecoder(GetLLVMContext(), attributes, address_table_unit);
 }
 
 fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeSymbol(const llvm::DWARFDie& die) const {
@@ -1253,28 +1252,19 @@ std::optional<AddressRange> DwarfSymbolFactory::GetLowHighEncodedCodeRange(
   if (low->die != high->die)
     return std::nullopt;
 
-  // Low range.
-  uint64_t low_addr = 0;
-  if (std::optional<uint64_t> opt_low_addr = GetAddrFromFormValue(low->unit, low->form)) {
-    low_addr = *opt_low_addr;
-  } else {
-    // The low address must be a valid address type.
+  // The low address must be a valid address. The decoder resolves address indices in the address
+  // table of the skeleton unit for .dwo files.
+  std::optional<uint64_t> low_addr = decoder.GetAddress(DwarfAttr::kLowPc);
+  if (!low_addr)
     return std::nullopt;
-  }
 
-  // High range, this can be encoded as an address or an offset according to the form class.
-  uint64_t high_addr = 0;
-  if (std::optional<uint64_t> opt_high_addr = GetAddrFromFormValue(high->unit, high->form)) {
-    // Encoded as an address.
-    high_addr = *opt_high_addr;
-  } else if (std::optional<uint64_t> opt_offset = high->form.getAsUnsignedConstant()) {
-    // Encoded as an offset from the base of the range.
-    high_addr = low_addr + *opt_offset;
-  } else {
+  // The high PC is an address, or an offset from the low address.
+  std::optional<DwarfDieDecoder::HighPC> high_pc = decoder.GetHighPC();
+  if (!high_pc)
     return std::nullopt;
-  }
+  uint64_t high_addr = high_pc->is_constant ? *low_addr + high_pc->value : high_pc->value;
 
-  return AddressRange(low_addr, high_addr);
+  return AddressRange(*low_addr, high_addr);
 }
 
 // The DW_FORM_rnglistx in DWARF 5 is:
@@ -1303,65 +1293,6 @@ llvm::Expected<llvm::DWARFAddressRangesVector> DwarfSymbolFactory::GetCodeRanges
 
   // This is not a DWO object and we use the unit of the attribute for all information.
   return unit->findRnglistFromIndex(index);
-}
-
-std::optional<uint64_t> DwarfSymbolFactory::GetAddrFromFormValue(
-    llvm::DWARFUnit* unit, const llvm::DWARFFormValue& form_value) const {
-  DwarfForm form = static_cast<DwarfForm>(form_value.getForm());
-  if (!DwarfFormIsAddress(form)) {
-    // Not an address type.
-    return std::nullopt;
-  }
-
-  uint64_t addr = 0;
-  if (form == DwarfForm::kLlvmAddrxOffset) {
-    // The value has an index into the address table in the high 32 bits and an offset from that
-    // address in the low 32 bits. An optimized-out base address stays optimized out.
-    uint64_t value = form_value.getRawUValue();
-    std::optional<uint64_t> base = GetAddrFromIndex(unit, value >> 32);
-    if (!base || *base == std::numeric_limits<uint64_t>::max())
-      return std::nullopt;
-    std::optional<uint64_t> sum = CheckedAdd(*base, value & 0xffffffff);
-    if (!sum)
-      return std::nullopt;
-    addr = *sum;
-  } else if (IsAddrXForm(form)) {
-    // Lookup in the address table.
-    uint64_t index = form_value.getRawUValue();
-    if (std::optional<uint64_t> opt_addr = GetAddrFromIndex(unit, index)) {
-      addr = *opt_addr;
-    } else {
-      return std::nullopt;
-    }
-  } else {
-    // Simple lookup of an address value.
-    addr = form_value.getRawUValue();
-  }
-
-  if (addr == std::numeric_limits<uint64_t>::max()) {
-    // Indicates that this range was optimized out.
-    return std::nullopt;
-  }
-
-  return addr;
-}
-
-std::optional<uint64_t> DwarfSymbolFactory::GetAddrFromIndex(llvm::DWARFUnit* unit,
-                                                             uint64_t index) const {
-  std::optional<llvm::object::SectionedAddress> addr;
-  if (CompileUnit* skeleton_unit = delegate_->GetSkeletonCompileUnit()) {
-    // This is a DWO object so we use the main binary's DWARF unit corresponding to this file to
-    // look up the data.
-    addr = skeleton_unit->dwarf_unit()->GetLLVMUnit()->getAddrOffsetSectionItem(index);
-  } else {
-    // Look up in the given unit.
-    addr = unit->getAddrOffsetSectionItem(index);
-  }
-
-  if (!addr) {
-    return std::nullopt;
-  }
-  return addr->Address;
 }
 
 }  // namespace zxdb

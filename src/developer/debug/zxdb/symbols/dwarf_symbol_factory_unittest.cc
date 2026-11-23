@@ -14,6 +14,7 @@
 #include "src/developer/debug/zxdb/symbols/array_type.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
 #include "src/developer/debug/zxdb/symbols/collection.h"
+#include "src/developer/debug/zxdb/symbols/compile_unit.h"
 #include "src/developer/debug/zxdb/symbols/data_member.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
@@ -836,6 +837,15 @@ TEST(DwarfSymbolFactory, AbstractOriginInOtherUnit) {
   ASSERT_TRUE(var);
   EXPECT_EQ("local_static", var->GetAssignedName());
   EXPECT_EQ("int", var->type().Get()->GetFullName());
+
+  // The function and its variable are in unit B. The parent of the function is the class of its
+  // declaration, which is in unit A.
+  fxl::RefPtr<CompileUnit> function_unit = function->GetCompileUnit();
+  ASSERT_TRUE(function_unit);
+  EXPECT_EQ("specification_b.cc", function_unit->name());
+  fxl::RefPtr<CompileUnit> var_unit = var->GetCompileUnit();
+  ASSERT_TRUE(var_unit);
+  EXPECT_EQ("specification_b.cc", var_unit->name());
 
   // The variable is in the scope of the concrete instance.
   fxl::RefPtr<Symbol> parent = var->parent().Get();

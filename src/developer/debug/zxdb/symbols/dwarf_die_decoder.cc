@@ -7,10 +7,12 @@
 #include <lib/syslog/cpp/macros.h>
 
 #include <algorithm>
+#include <limits>
 
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
 #include "llvm/DebugInfo/DWARF/DWARFTypeUnit.h"
+#include "src/developer/debug/zxdb/common/checked_math.h"
 #include "src/developer/debug/zxdb/common/file_util.h"
 #include "src/developer/debug/zxdb/symbols/const_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
@@ -51,13 +53,18 @@ llvm::DWARFDie GetDIEForSignature(llvm::DWARFContext* context, uint64_t signatur
 
 }  // namespace
 
-DwarfDieDecoder::DwarfDieDecoder(llvm::DWARFContext* context, std::span<const DwarfAttr> attributes)
-    : context_(context), attributes_(attributes) {
+DwarfDieDecoder::DwarfDieDecoder(llvm::DWARFContext* context, std::span<const DwarfAttr> attributes,
+                                 llvm::DWARFUnit* address_table_unit)
+    : context_(context), address_table_unit_(address_table_unit), attributes_(attributes) {
   FX_CHECK(attributes_.size() <= kMaxAttributes);
 }
 
-DwarfDieDecoder::DwarfDieDecoder(DwarfBinary& binary, std::span<const DwarfAttr> attributes)
-    : context_(binary.GetLLVMContext()), binary_(&binary), attributes_(attributes) {
+DwarfDieDecoder::DwarfDieDecoder(DwarfBinary& binary, std::span<const DwarfAttr> attributes,
+                                 llvm::DWARFUnit* address_table_unit)
+    : context_(binary.GetLLVMContext()),
+      binary_(&binary),
+      address_table_unit_(address_table_unit),
+      attributes_(attributes) {
   FX_CHECK(attributes_.size() <= kMaxAttributes);
 }
 
@@ -131,21 +138,55 @@ std::optional<bool> DwarfDieDecoder::GetBool(DwarfAttr attribute) const {
 }
 
 std::optional<uint64_t> DwarfDieDecoder::GetUnsignedConstant(DwarfAttr attribute) const {
-  if (const AttributeValue* value = GetValue(attribute))
-    return value->form.getAsUnsignedConstant();
-  return std::nullopt;
+  std::optional<int128_t> value = GetInteger(attribute, false);
+  if (!value || *value < 0 || *value > std::numeric_limits<uint64_t>::max())
+    return std::nullopt;
+  return static_cast<uint64_t>(*value);
 }
 
 std::optional<int64_t> DwarfDieDecoder::GetSignedConstant(DwarfAttr attribute) const {
-  if (const AttributeValue* value = GetValue(attribute))
-    return value->form.getAsSignedConstant();
-  return std::nullopt;
+  std::optional<int128_t> value = GetInteger(attribute, true);
+  if (!value || *value < std::numeric_limits<int64_t>::min() ||
+      *value > std::numeric_limits<int64_t>::max())
+    return std::nullopt;
+  return static_cast<int64_t>(*value);
 }
 
 std::optional<uint64_t> DwarfDieDecoder::GetAddress(DwarfAttr attribute) const {
   if (const AttributeValue* value = GetValue(attribute))
-    return value->form.getAsAddress();
+    return DecodeAddress(*value);
   return std::nullopt;
+}
+
+std::optional<uint64_t> DwarfDieDecoder::DecodeAddress(const AttributeValue& value) const {
+  constexpr uint64_t kTombstone = std::numeric_limits<uint64_t>::max();
+
+  DwarfForm form = static_cast<DwarfForm>(value.form.getForm());
+  if (!DwarfFormIsAddress(form))
+    return std::nullopt;
+
+  uint64_t raw = value.form.getRawUValue();
+  if (form == DwarfForm::kAddr)
+    return raw == kTombstone ? std::nullopt : std::optional<uint64_t>(raw);
+
+  // The other forms are indices into the address table. DW_FORM_LLVM_addrx_offset has the index in
+  // the high 32 bits and an offset from that address in the low 32 bits.
+  uint64_t index = raw;
+  uint64_t offset = 0;
+  if (form == DwarfForm::kLlvmAddrxOffset) {
+    index = raw >> 32;
+    offset = raw & 0xffffffff;
+  }
+
+  llvm::DWARFUnit* table_unit = address_table_unit_ ? address_table_unit_ : value.unit;
+  std::optional<llvm::object::SectionedAddress> entry =
+      table_unit->getAddrOffsetSectionItem(static_cast<uint32_t>(index));
+  if (!entry || entry->Address == kTombstone)
+    return std::nullopt;
+  std::optional<uint64_t> address = CheckedAdd(entry->Address, offset);
+  if (!address || *address == kTombstone)
+    return std::nullopt;
+  return address;
 }
 
 std::optional<const char*> DwarfDieDecoder::GetCString(DwarfAttr attribute) const {
@@ -261,10 +302,10 @@ std::optional<DwarfDieDecoder::HighPC> DwarfDieDecoder::GetHighPC() const {
   const llvm::DWARFFormValue& form = value->form;
   DwarfForm form_code = static_cast<DwarfForm>(form.getForm());
   if (DwarfFormIsConstant(form_code)) {
-    if (std::optional<uint64_t> as_constant = form.getAsUnsignedConstant())
+    if (std::optional<uint64_t> as_constant = GetUnsignedConstant(DwarfAttr::kHighPc))
       return HighPC(true, *as_constant);
   } else if (DwarfFormIsAddress(form_code)) {
-    if (std::optional<uint64_t> as_addr = form.getAsAddress())
+    if (std::optional<uint64_t> as_addr = DecodeAddress(*value))
       return HighPC(false, *as_addr);
   }
   return std::nullopt;
@@ -334,6 +375,10 @@ bool DwarfDieDecoder::DecodeOneDie(const llvm::DWARFDie& die, bool is_first, Lin
   llvm::DWARFDataExtractor extractor = unit->getDebugInfoExtractor();
   uint64_t offset = die.getOffset();
 
+  // Each value must end inside the unit. LLVM's skipValue() and extractValue() don't check the
+  // lengths of blocks against the data, so the decoder checks the offset after each attribute.
+  const uint64_t unit_end = unit->getNextUnitOffset();
+
   // Skip over the abbreviationcode. We don't actually need this (the abbrev
   // pointer above is derived from this) but we need to move offset past it.
   uint64_t abbr_code = extractor.getULEB128(&offset);
@@ -359,7 +404,9 @@ bool DwarfDieDecoder::DecodeOneDie(const llvm::DWARFDie& die, bool is_first, Lin
 
     if (!wanted && !is_abstract_origin && !is_specification) {
       // Skip over the attribute to go to the next.
-      llvm::DWARFFormValue::skipValue(spec.Form, extractor, &offset, unit->getFormParams());
+      if (!llvm::DWARFFormValue::skipValue(spec.Form, extractor, &offset, unit->getFormParams()) ||
+          offset > unit_end)
+        return false;
       continue;
     }
 
@@ -369,8 +416,9 @@ bool DwarfDieDecoder::DecodeOneDie(const llvm::DWARFDie& die, bool is_first, Lin
       // not passed in to the DWARFFormValue constructor or its extractValue() member. So this form
       // has to be specially decoded.
       form_value = llvm::DWARFFormValue::createFromSValue(spec.Form, spec.getImplicitConstValue());
-    } else {
-      form_value.extractValue(extractor, &offset, unit->getFormParams(), unit);
+    } else if (!form_value.extractValue(extractor, &offset, unit->getFormParams(), unit) ||
+               offset > unit_end) {
+      return false;
     }
 
     if (is_abstract_origin)

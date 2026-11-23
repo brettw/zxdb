@@ -175,6 +175,9 @@ class Symbol : public fxl::RefCountedThreadSafe<Symbol> {
 
   // Returns the DwarfUnit or CompileUnit that this symbol is associated with. Returns null on
   // failure. See the comment at the top of this class and above the DwarfUnit declaration for more.
+  //
+  // This is the unit that contains the DIE of the symbol. For synthetic symbols, which have no DIE,
+  // it's the first compile unit among the parents.
   fxl::RefPtr<CompileUnit> GetCompileUnit() const;
   fxl::RefPtr<DwarfUnit> GetDwarfUnit() const;
 
