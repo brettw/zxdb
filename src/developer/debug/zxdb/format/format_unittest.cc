@@ -7,19 +7,25 @@
 #include <gtest/gtest.h>
 
 #include "src/developer/debug/zxdb/common/test_with_loop.h"
+#include "src/developer/debug/zxdb/expr/abi_null.h"
+#include "src/developer/debug/zxdb/expr/eval_context_impl.h"
 #include "src/developer/debug/zxdb/expr/format_node.h"
 #include "src/developer/debug/zxdb/expr/mock_eval_context.h"
 #include "src/developer/debug/zxdb/format/async_output_buffer_test_util.h"
 #include "src/developer/debug/zxdb/format/string_util.h"
+#include "src/developer/debug/zxdb/symbols/array_type.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
+#include "src/developer/debug/zxdb/symbols/code_block.h"
 #include "src/developer/debug/zxdb/symbols/collection.h"
 #include "src/developer/debug/zxdb/symbols/compile_unit.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/mock_symbol_data_provider.h"
 #include "src/developer/debug/zxdb/symbols/modified_type.h"
 #include "src/developer/debug/zxdb/symbols/namespace.h"
 #include "src/developer/debug/zxdb/symbols/symbol_test_parent_setter.h"
 #include "src/developer/debug/zxdb/symbols/symbol_utils.h"
 #include "src/developer/debug/zxdb/symbols/type_test_support.h"
+#include "src/developer/debug/zxdb/symbols/variable_test_support.h"
 
 namespace zxdb {
 
@@ -845,5 +851,67 @@ TEST(FormatRegisterValues, Basic) {
 }
 
 }  // namespace
+
+// Variable-length arrays get their size from the frame where they are printed.
+TEST_F(FormatValueConsoleTest, VariableLengthArray) {
+  constexpr uint64_t kBp = 0x1000;
+  auto provider = fxl::MakeRefCounted<MockSymbolDataProvider>();
+  provider->set_bp(kBp);
+  provider->set_ip(0x1000);
+  provider->AddMemory(kBp + 8, {3, 0, 0, 0, 0, 0, 0, 0});   // The count of "vla".
+  provider->AddMemory(kBp + 16, {1, 0, 0, 0, 0, 0, 0, 0});  // The last row of "grid".
+  provider->AddMemory(kBp + 24, {2, 0, 0, 0, 0, 0, 0, 0});  // The last column of "grid".
+  provider->AddMemory(kBp + 32, {10, 0, 0, 0, 20, 0, 0, 0, 30, 0, 0, 0});
+  std::vector<uint8_t> grid_data;
+  for (uint8_t i = 1; i <= 6; i++)
+    grid_data.insert(grid_data.end(), {i, 0, 0, 0});
+  provider->AddMemory(kBp + 48, grid_data);
+
+  auto int_type = fxl::MakeRefCounted<BaseType>(BaseType::kBaseTypeSigned, 4, "int");
+
+  // "int vla[n]" as Clang writes it: a count in an artificial variable.
+  auto count_var =
+      MakeUint64VariableForTest("__vla_expr0", VariableLocation(DwarfExpr({DwarfOp::kFbreg, 8})));
+  DynamicArrayBound count_bound;
+  count_bound.variable = LazySymbol(count_var);
+  auto vla =
+      MakeVariableForTest("vla", fxl::MakeRefCounted<ArrayType>(int_type, std::move(count_bound)),
+                          VariableLocation(DwarfExpr({DwarfOp::kFbreg, 32})));
+
+  // "int grid[n][m]" as GCC writes it: expressions that compute the last index.
+  DynamicArrayBound column_bound;
+  column_bound.kind = DynamicArrayBound::Kind::kUpperBound;
+  column_bound.expression = DwarfExpr({DwarfOp::kFbreg, 24, DwarfOp::kDeref});
+  DynamicArrayBound row_bound;
+  row_bound.kind = DynamicArrayBound::Kind::kUpperBound;
+  row_bound.expression = DwarfExpr({DwarfOp::kFbreg, 16, DwarfOp::kDeref});
+  auto grid = MakeVariableForTest(
+      "grid",
+      fxl::MakeRefCounted<ArrayType>(
+          fxl::MakeRefCounted<ArrayType>(int_type, std::move(column_bound)), std::move(row_bound)),
+      VariableLocation(DwarfExpr({DwarfOp::kFbreg, 48})));
+
+  auto eval_context = fxl::MakeRefCounted<EvalContextImpl>(
+      std::make_shared<AbiNull>(), fxl::WeakPtr<const ProcessSymbols>(), provider, ExprLanguage::kC,
+      fxl::MakeRefCounted<CodeBlock>(DwarfTag::kLexicalBlock));
+
+  auto format = [&eval_context](const Variable* var, const FormatBufferOptions& options) {
+    return LoopUntilAsyncOutputBufferComplete(FormatVariable(var, options, eval_context))
+        .AsString();
+  };
+
+  FormatBufferOptions options;
+  FormatBufferOptions type_options;
+  type_options.verbosity = FormatBufferOptions::Verbosity::kAllTypes;
+  EXPECT_EQ("vla = {10, 20, 30}", format(vla.get(), options));
+  EXPECT_EQ("(int[3]) vla = {10, 20, 30}", format(vla.get(), type_options));
+  EXPECT_EQ("grid = {{1, 2, 3}, {4, 5, 6}}", format(grid.get(), options));
+  EXPECT_EQ("(int[2][3]) grid = {{1, 2, 3}, {4, 5, 6}}", format(grid.get(), type_options));
+
+  // An uninitialized count can be too large to read.
+  provider->AddMemory(kBp + 8, {0, 0, 0, 0, 1, 0, 0, 0});
+  EXPECT_EQ("vla = <The array has 4294967296 elements, which is too large to read.>",
+            format(vla.get(), options));
+}
 
 }  // namespace zxdb

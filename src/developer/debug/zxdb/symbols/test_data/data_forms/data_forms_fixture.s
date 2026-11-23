@@ -28,6 +28,8 @@
 #     18 DW_TAG_base_type "i32"
 #     19 DW_TAG_structure_type "Small": a Rust-style enumeration with an i8 discriminant
 #     20 DW_TAG_structure_type "Wide": a Rust-style enumeration with an i32 discriminant
+#     21 int[]: DW_AT_count references the variable "const_char", as Clang writes it for a
+#        variable-length array
 #   Unit B (DW_LANG_Fortran90, default lower bound 1):
 #     0  DW_TAG_base_type "integer"
 #     1  integer[10]: DW_AT_upper_bound 10
@@ -178,6 +180,12 @@
         .uleb128 25, 0x19
         .byte 0
         .byte 0, 0
+        # 26: DW_TAG_subrange_type with a type and DW_AT_count that references a DIE.
+        .uleb128 26, 0x21
+        .byte 0
+        .uleb128 0x49, 0x13             # DW_AT_type
+        .uleb128 0x37, 0x13             # DW_AT_count, DW_FORM_ref4
+        .byte 0, 0
         .byte 0
 
         .section .debug_info,"",@progbits
@@ -301,6 +309,7 @@
         .sleb128 -1
         .byte 0
         # 13 to 16: constants.
+.Lconst_char:
         .uleb128 14
         .asciz "const_char"
         .long .Luchar - .Lunit_a
@@ -363,6 +372,13 @@
         .uleb128 24
         .quad 0xfffffffb
         .byte 0
+        .byte 0
+        # 21: int[] with a count in a variable.
+        .uleb128 3
+        .long .Lint - .Lunit_a
+        .uleb128 26
+        .long .Lulong - .Lunit_a
+        .long .Lconst_char - .Lunit_a
         .byte 0
         .byte 0                         # End of unit A.
 .Lunit_a_end:

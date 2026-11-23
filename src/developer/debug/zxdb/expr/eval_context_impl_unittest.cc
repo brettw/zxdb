@@ -15,6 +15,7 @@
 #include "src/developer/debug/zxdb/expr/expr_value.h"
 #include "src/developer/debug/zxdb/expr/vm_exec.h"
 #include "src/developer/debug/zxdb/expr/vm_stream.h"
+#include "src/developer/debug/zxdb/symbols/array_type.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
 #include "src/developer/debug/zxdb/symbols/code_block.h"
 #include "src/developer/debug/zxdb/symbols/collection.h"
@@ -302,6 +303,128 @@ TEST_F(EvalContextImplTest, IntOnStack) {
   const ExprValueSource& source = result1.value.value().source();
   EXPECT_EQ(ExprValueSource::Type::kMemory, source.type());
   EXPECT_EQ(kBp + kOffset, source.address());
+}
+
+// A C variable-length array as Clang writes it: DW_AT_count references an artificial variable
+// that holds the number of elements.
+TEST_F(EvalContextImplTest, DynamicArrayCountVariable) {
+  constexpr uint64_t kBp = 0x1000;
+  constexpr uint8_t kCountOffset = 8;
+  constexpr uint8_t kArrayOffset = 16;
+  provider()->set_bp(kBp);
+  provider()->set_ip(0x1000);
+  provider()->AddMemory(kBp + kCountOffset, {3, 0, 0, 0, 0, 0, 0, 0});
+  provider()->AddMemory(kBp + kArrayOffset, {10, 0, 0, 0, 20, 0, 0, 0, 30, 0, 0, 0});
+
+  auto count_var = MakeUint64VariableForTest(
+      "__vla_expr0", VariableLocation(DwarfExpr({DwarfOp::kFbreg, kCountOffset})));
+  DynamicArrayBound bound;
+  bound.kind = DynamicArrayBound::Kind::kCount;
+  bound.variable = LazySymbol(count_var);
+  auto vla_type = fxl::MakeRefCounted<ArrayType>(MakeInt32Type(), std::move(bound));
+  EXPECT_EQ("int32_t[]", vla_type->GetFullName());
+
+  auto vla = MakeVariableForTest("vla", vla_type,
+                                 VariableLocation(DwarfExpr({DwarfOp::kFbreg, kArrayOffset})));
+
+  ValueResult result;
+  GetVariableValue(MakeEvalContext(), vla, &result);
+  loop().RunUntilNoTasks();
+  ASSERT_TRUE(result.called);
+  ASSERT_FALSE(result.value.has_error()) << result.value.err().msg();
+
+  // The value has an array type with the size of this frame.
+  EXPECT_EQ("int32_t[3]", result.value.value().type()->GetFullName());
+  EXPECT_EQ(std::vector<uint8_t>({10, 0, 0, 0, 20, 0, 0, 0, 30, 0, 0, 0}),
+            result.value.value().data().bytes());
+  EXPECT_EQ(kBp + kArrayOffset, result.value.value().source().address());
+}
+
+// A two-dimensional C variable-length array as GCC writes it at -O0: DW_AT_upper_bound is an
+// expression that reads the index of the last element from the stack.
+TEST_F(EvalContextImplTest, DynamicArrayUpperBoundExpression) {
+  constexpr uint64_t kBp = 0x1000;
+  constexpr uint8_t kOuterOffset = 8;
+  constexpr uint8_t kInnerOffset = 16;
+  constexpr uint8_t kArrayOffset = 24;
+  provider()->set_bp(kBp);
+  provider()->set_ip(0x1000);
+  provider()->AddMemory(kBp + kOuterOffset, {1, 0, 0, 0, 0, 0, 0, 0});  // 2 rows.
+  provider()->AddMemory(kBp + kInnerOffset, {2, 0, 0, 0, 0, 0, 0, 0});  // 3 columns.
+  std::vector<uint8_t> grid_data;
+  for (uint8_t i = 1; i <= 6; i++)
+    grid_data.insert(grid_data.end(), {i, 0, 0, 0});
+  provider()->AddMemory(kBp + kArrayOffset, grid_data);
+
+  DynamicArrayBound inner_bound;
+  inner_bound.kind = DynamicArrayBound::Kind::kUpperBound;
+  inner_bound.expression = DwarfExpr({DwarfOp::kFbreg, kInnerOffset, DwarfOp::kDeref});
+  auto inner_type = fxl::MakeRefCounted<ArrayType>(MakeInt32Type(), std::move(inner_bound));
+
+  DynamicArrayBound outer_bound;
+  outer_bound.kind = DynamicArrayBound::Kind::kUpperBound;
+  outer_bound.expression = DwarfExpr({DwarfOp::kFbreg, kOuterOffset, DwarfOp::kDeref});
+  auto grid_type = fxl::MakeRefCounted<ArrayType>(inner_type, std::move(outer_bound));
+
+  auto grid = MakeVariableForTest("grid", grid_type,
+                                  VariableLocation(DwarfExpr({DwarfOp::kFbreg, kArrayOffset})));
+
+  ValueResult result;
+  GetVariableValue(MakeEvalContext(), grid, &result);
+  loop().RunUntilNoTasks();
+  ASSERT_TRUE(result.called);
+  ASSERT_FALSE(result.value.has_error()) << result.value.err().msg();
+  EXPECT_EQ("int32_t[2][3]", result.value.value().type()->GetFullName());
+  EXPECT_EQ(grid_data, result.value.value().data().bytes());
+}
+
+TEST_F(EvalContextImplTest, DynamicArrayBadCount) {
+  constexpr uint64_t kBp = 0x1000;
+  constexpr uint8_t kCountOffset = 8;
+  provider()->set_bp(kBp);
+  provider()->set_ip(0x1000);
+
+  auto count_var = MakeVariableForTest(
+      "n", MakeInt64Type(), VariableLocation(DwarfExpr({DwarfOp::kFbreg, kCountOffset})));
+  DynamicArrayBound bound;
+  bound.kind = DynamicArrayBound::Kind::kCount;
+  bound.variable = LazySymbol(count_var);
+  auto vla_type = fxl::MakeRefCounted<ArrayType>(MakeInt32Type(), std::move(bound));
+  auto vla =
+      MakeVariableForTest("vla", vla_type, VariableLocation(DwarfExpr({DwarfOp::kFbreg, 16})));
+
+  // A negative count.
+  provider()->AddMemory(kBp + kCountOffset, {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff});
+  ValueResult negative;
+  GetVariableValue(MakeEvalContext(), vla, &negative);
+  loop().RunUntilNoTasks();
+  ASSERT_TRUE(negative.called);
+  ASSERT_TRUE(negative.value.has_error());
+  EXPECT_EQ("The array has a negative size (-1).", negative.value.err().msg());
+
+  // A count that is too large to read, as an uninitialized count can be.
+  provider()->AddMemory(kBp + kCountOffset, {0, 0, 0, 0, 0x01, 0, 0, 0});
+  ValueResult too_large;
+  GetVariableValue(MakeEvalContext(), vla, &too_large);
+  loop().RunUntilNoTasks();
+  ASSERT_TRUE(too_large.called);
+  ASSERT_TRUE(too_large.value.has_error());
+  EXPECT_EQ("The array has 4294967296 elements, which is too large to read.",
+            too_large.value.err().msg());
+
+  // The count can't be read.
+  auto missing_var = MakeUint64VariableForTest("n", VariableLocation());
+  DynamicArrayBound missing_bound;
+  missing_bound.variable = LazySymbol(missing_var);
+  auto missing = MakeVariableForTest(
+      "vla", fxl::MakeRefCounted<ArrayType>(MakeInt32Type(), std::move(missing_bound)),
+      VariableLocation(DwarfExpr({DwarfOp::kFbreg, 16})));
+  ValueResult unreadable;
+  GetVariableValue(MakeEvalContext(), missing, &unreadable);
+  loop().RunUntilNoTasks();
+  ASSERT_TRUE(unreadable.called);
+  ASSERT_TRUE(unreadable.value.has_error());
+  EXPECT_EQ(ErrType::kOptimizedOut, unreadable.value.err().type());
 }
 
 // Checks that constant DWARF expressions result in constant variables.

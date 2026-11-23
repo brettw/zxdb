@@ -110,11 +110,11 @@ llvm::DWARFContext* DwarfSymbolFactory::GetLLVMContext() const {
   return nullptr;
 }
 
-std::optional<size_t> DwarfSymbolFactory::ReadArraySubrange(DwarfDieDecoder& range_decoder,
-                                                            const llvm::DWARFDie& subrange_die,
-                                                            int64_t default_lower_bound) const {
+DwarfSymbolFactory::ArraySubrange DwarfSymbolFactory::ReadArraySubrange(
+    DwarfDieDecoder& range_decoder, const llvm::DWARFDie& subrange_die,
+    int64_t default_lower_bound) const {
   if (!range_decoder.Decode(subrange_die))
-    return std::nullopt;
+    return ArraySubrange();
 
   // The basis type of the subrange decides the signedness of the bounds. Without a type, the basis
   // type is a signed integer (DWARF 5 section 5.13).
@@ -122,26 +122,57 @@ std::optional<size_t> DwarfSymbolFactory::ReadArraySubrange(DwarfDieDecoder& ran
   if (llvm::DWARFDie type = range_decoder.GetReference(DwarfAttr::kType))
     is_signed = IsSignedIntegerType(type).value_or(false);
 
+  std::optional<int128_t> lower = range_decoder.GetInteger(DwarfAttr::kLowerBound, is_signed);
+  if (!lower && range_decoder.Has(DwarfAttr::kLowerBound))
+    return ArraySubrange();  // A dynamic lower bound isn't supported.
+  int64_t lower_bound = lower ? static_cast<int64_t>(*lower) : default_lower_bound;
+
   int128_t count = 0;
   if (std::optional<int128_t> count_value =
           range_decoder.GetInteger(DwarfAttr::kCount, is_signed)) {
     count = *count_value;
+  } else if (range_decoder.Has(DwarfAttr::kCount)) {
+    return ReadDynamicBound(range_decoder, DwarfAttr::kCount, DynamicArrayBound::Kind::kCount, 0);
   } else if (std::optional<int128_t> upper =
                  range_decoder.GetInteger(DwarfAttr::kUpperBound, is_signed)) {
     // The upper bound is the index of the last element, so an upper bound one below the lower bound
     // is an empty array.
-    std::optional<int128_t> lower = range_decoder.GetInteger(DwarfAttr::kLowerBound, is_signed);
-    if (!lower && range_decoder.Has(DwarfAttr::kLowerBound))
-      return std::nullopt;  // A dynamic lower bound.
-    count = *upper - lower.value_or(default_lower_bound) + 1;
+    count = *upper - lower_bound + 1;
+  } else if (range_decoder.Has(DwarfAttr::kUpperBound)) {
+    return ReadDynamicBound(range_decoder, DwarfAttr::kUpperBound,
+                            DynamicArrayBound::Kind::kUpperBound, lower_bound);
   } else {
-    // No bound, or a dynamic bound (a reference or an expression). The size is unknown.
-    return std::nullopt;
+    return ArraySubrange();  // No bound, so the size is unknown.
   }
 
   if (count < 0 || count > static_cast<int128_t>(std::numeric_limits<size_t>::max()))
-    return std::nullopt;
-  return static_cast<size_t>(count);
+    return ArraySubrange();
+  return ArraySubrange{.size = static_cast<size_t>(count)};
+}
+
+DwarfSymbolFactory::ArraySubrange DwarfSymbolFactory::ReadDynamicBound(
+    const DwarfDieDecoder& range_decoder, DwarfAttr attribute, DynamicArrayBound::Kind kind,
+    int64_t lower_bound) const {
+  const DwarfDieDecoder::AttributeValue* value = range_decoder.GetValue(attribute);
+  if (!value)
+    return ArraySubrange();
+
+  DynamicArrayBound bound;
+  bound.kind = kind;
+  bound.lower_bound = lower_bound;
+  if (static_cast<DwarfForm>(value->form.getForm()) == DwarfForm::kExprloc) {
+    // The expression computes the value (DWARF 5 section 2.19). Its source is the subrange DIE.
+    std::optional<std::vector<uint8_t>> block = range_decoder.GetBlock(attribute);
+    if (!block)
+      return ArraySubrange();
+    bound.expression = DwarfExpr(std::move(*block), MakeUncachedLazy(value->die));
+  } else if (llvm::DWARFDie referenced = range_decoder.GetReference(attribute)) {
+    // A reference to a variable that holds the value.
+    bound.variable = MakeLazy(referenced);
+  } else {
+    return ArraySubrange();
+  }
+  return ArraySubrange{.dynamic_bound = std::move(bound)};
 }
 
 std::optional<uint64_t> DwarfSymbolFactory::GetDiscriminantByteSize(
@@ -515,23 +546,26 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeArrayType(const llvm::DWARFDie& di
   // array.
   int64_t default_lower_bound = DwarfLangDefaultLowerBound(GetLanguage(die));
   DwarfDieDecoder range_decoder = MakeDecoder(kArraySubrangeAttrs);
-  std::vector<std::optional<size_t>> subrange_sizes;
+  std::vector<ArraySubrange> subranges;
   for (const llvm::DWARFDie& child : die) {
     if (static_cast<DwarfTag>(child.getTag()) == DwarfTag::kSubrangeType)
-      subrange_sizes.push_back(ReadArraySubrange(range_decoder, child, default_lower_bound));
+      subranges.push_back(ReadArraySubrange(range_decoder, child, default_lower_bound));
   }
 
   // Require a subrange with a count in it. If we find cases where this isn't the case, we could add
   // support for array types with unknown lengths, but currently ArrayType requires a size.
-  if (subrange_sizes.empty())
+  if (subranges.empty())
     return fxl::MakeRefCounted<Symbol>();
 
   // Work backwards in the array dimensions generating nested array definitions. The innermost
   // definition refers to the contained type.
   fxl::RefPtr<Type> cur(contained_type);
-  for (int i = static_cast<int>(subrange_sizes.size()) - 1; i >= 0; i--) {
-    auto new_array = fxl::MakeRefCounted<ArrayType>(std::move(cur), subrange_sizes[i]);
-    cur = std::move(new_array);
+  for (int i = static_cast<int>(subranges.size()) - 1; i >= 0; i--) {
+    if (subranges[i].dynamic_bound) {
+      cur = fxl::MakeRefCounted<ArrayType>(std::move(cur), std::move(*subranges[i].dynamic_bound));
+    } else {
+      cur = fxl::MakeRefCounted<ArrayType>(std::move(cur), subranges[i].size);
+    }
   }
   return cur;
 }

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "lib/fit/function.h"
+#include "src/developer/debug/zxdb/common/err_or.h"
 #include "src/developer/debug/zxdb/expr/eval_callback.h"
 #include "src/developer/debug/zxdb/expr/expr_value.h"
 #include "src/lib/fxl/memory/ref_ptr.h"
@@ -15,6 +16,7 @@
 namespace zxdb {
 
 class Err;
+class SymbolContext;
 class Type;
 class EvalContext;
 
@@ -43,6 +45,24 @@ void ResolveArrayItem(const fxl::RefPtr<EvalContext>& eval_context, const ExprVa
 // source of the static array (if there is no memory as the source of the array it will fail).
 void CoerceArraySize(const fxl::RefPtr<EvalContext>& eval_context, const ExprValue& array,
                      size_t new_size, EvalCallback cb);
+
+// The largest variable-length array, in bytes, that ResolveDynamicArrayType() gives. A larger size
+// usually comes from an uninitialized count.
+inline constexpr uint64_t kMaxDynamicArrayBytes = 16 * 1024 * 1024;
+
+// Returns true if the type is an array with a dimension whose size is only known when the program
+// runs, such as a C variable-length array. See DynamicArrayBound.
+bool HasDynamicArrayBound(const fxl::RefPtr<EvalContext>& eval_context, const Type* type);
+
+// Computes the sizes of the dynamic dimensions of an array type in the current frame of the eval
+// context, and gives a new array type with those sizes. A bound is the value of a variable or the
+// result of a DWARF expression. The symbol context is for the module of the type. A type without
+// dynamic dimensions is given back unchanged.
+//
+// Fails if a bound can't be evaluated, or if the array is larger than kMaxDynamicArrayBytes.
+void ResolveDynamicArrayType(const fxl::RefPtr<EvalContext>& eval_context,
+                             const SymbolContext& symbol_context, fxl::RefPtr<Type> type,
+                             fit::callback<void(ErrOr<fxl::RefPtr<Type>>)> cb);
 
 }  // namespace zxdb
 

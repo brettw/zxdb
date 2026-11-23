@@ -15,6 +15,11 @@ ArrayType::ArrayType(fxl::RefPtr<Type> value_type, std::optional<size_t> num_elt
     set_byte_size(*num_elts_ * value_type_->byte_size());
 }
 
+ArrayType::ArrayType(fxl::RefPtr<Type> value_type, DynamicArrayBound dynamic_bound)
+    : Type(DwarfTag::kArrayType),
+      value_type_(std::move(value_type)),
+      dynamic_bound_(std::move(dynamic_bound)) {}
+
 ArrayType::~ArrayType() = default;
 
 const ArrayType* ArrayType::AsArrayType() const { return this; }

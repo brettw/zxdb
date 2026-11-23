@@ -17,6 +17,7 @@
 #include "src/developer/debug/zxdb/expr/expr_value.h"
 #include "src/developer/debug/zxdb/expr/find_name.h"
 #include "src/developer/debug/zxdb/expr/register_utils.h"
+#include "src/developer/debug/zxdb/expr/resolve_array.h"
 #include "src/developer/debug/zxdb/expr/resolve_collection.h"
 #include "src/developer/debug/zxdb/expr/resolve_const_value.h"
 #include "src/developer/debug/zxdb/expr/resolve_ptr_ref.h"
@@ -190,6 +191,21 @@ void EvalContextImpl::GetVariableValue(fxl::RefPtr<Value> input_val, EvalCallbac
       err_str = "Unavailable";
     }
     return cb(Err(ErrType::kOptimizedOut, err_str));
+  }
+
+  // The dimensions of a variable-length array get their sizes in this frame before the memory of
+  // the variable is read.
+  if (HasDynamicArrayBound(RefPtrTo(this), type.get())) {
+    ResolveDynamicArrayType(
+        RefPtrTo(this), symbol_context, std::move(type),
+        [this_ref = RefPtrTo(this), factory = UnitSymbolFactory(input_val.get()), symbol_context,
+         expr = *loc_expr, cb = std::move(cb)](ErrOr<fxl::RefPtr<Type>> resolved) mutable {
+          if (resolved.has_error())
+            return cb(resolved.err());
+          DwarfExprToValue(factory, this_ref, symbol_context, std::move(expr),
+                           resolved.take_value(), std::move(cb));
+        });
+    return;
   }
 
   // Schedule the expression to be evaluated.

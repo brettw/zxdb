@@ -19,6 +19,7 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_test_util.h"
 #include "src/developer/debug/zxdb/symbols/enumeration.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
@@ -940,8 +941,29 @@ TEST(DwarfSymbolFactory, ArrayBounds) {
   // Two dimensions.
   EXPECT_EQ(std::vector<int64_t>({3, 5}), GetArrayDimensions(fixture.UnitChild(0, 8)));
 
-  // A dynamic bound gives an unknown size.
-  EXPECT_EQ(std::vector<int64_t>({-1}), GetArrayDimensions(fixture.UnitChild(0, 9)));
+  // A dynamic bound gives an unknown size, and the dimension keeps the bound so the expression
+  // evaluator can compute the size. The upper bound is an expression here.
+  fxl::RefPtr<Symbol> expression_symbol = fixture.UnitChild(0, 9);
+  EXPECT_EQ(std::vector<int64_t>({-1}), GetArrayDimensions(expression_symbol));
+  const ArrayType* expression_array = expression_symbol->As<ArrayType>();
+  ASSERT_TRUE(expression_array);
+  ASSERT_TRUE(expression_array->dynamic_bound());
+  EXPECT_EQ(DynamicArrayBound::Kind::kUpperBound, expression_array->dynamic_bound()->kind);
+  EXPECT_EQ(0, expression_array->dynamic_bound()->lower_bound);
+  ASSERT_TRUE(expression_array->dynamic_bound()->expression);
+  EXPECT_EQ(std::vector<uint8_t>({DwarfOp::kLit0}),
+            expression_array->dynamic_bound()->expression->data());
+
+  // The count references a variable.
+  fxl::RefPtr<Symbol> variable_symbol = fixture.UnitChild(0, 21);
+  EXPECT_EQ(std::vector<int64_t>({-1}), GetArrayDimensions(variable_symbol));
+  const ArrayType* variable_array = variable_symbol->As<ArrayType>();
+  ASSERT_TRUE(variable_array);
+  ASSERT_TRUE(variable_array->dynamic_bound());
+  EXPECT_EQ(DynamicArrayBound::Kind::kCount, variable_array->dynamic_bound()->kind);
+  EXPECT_FALSE(variable_array->dynamic_bound()->expression);
+  EXPECT_EQ("const_char", variable_array->dynamic_bound()->variable.Get()->GetAssignedName());
+  EXPECT_EQ("int[]", variable_array->GetFullName());
 
   // The default lower bound of Fortran is 1.
   EXPECT_EQ(std::vector<int64_t>({10}), GetArrayDimensions(fixture.UnitChild(1, 1)));

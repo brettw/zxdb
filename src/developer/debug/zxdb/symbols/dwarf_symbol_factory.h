@@ -11,6 +11,7 @@
 #include <llvm/Support/Error.h>  // For llvm::Expected.
 
 #include "src/developer/debug/zxdb/common/address_range.h"
+#include "src/developer/debug/zxdb/symbols/array_type.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_lang.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
@@ -81,11 +82,22 @@ class DwarfSymbolFactory : public SymbolFactory {
   // Returns the unit that contains the DIE, or null.
   llvm::DWARFUnit* GetUnitForDieRef(DwarfDieRef die_ref) const;
 
-  // Returns the number of elements of an array subrange, or nullopt if it's unknown. The decoder
-  // must use kArraySubrangeAttrs. The default lower bound depends on the language of the unit.
-  std::optional<size_t> ReadArraySubrange(DwarfDieDecoder& range_decoder,
-                                          const llvm::DWARFDie& subrange_die,
-                                          int64_t default_lower_bound) const;
+  // The size of one array dimension. At most one is set. Neither is set when the size is unknown.
+  struct ArraySubrange {
+    std::optional<size_t> size;
+    std::optional<DynamicArrayBound> dynamic_bound;
+  };
+
+  // Reads an array subrange. The decoder must use kArraySubrangeAttrs. The default lower bound
+  // depends on the language of the unit.
+  ArraySubrange ReadArraySubrange(DwarfDieDecoder& range_decoder,
+                                  const llvm::DWARFDie& subrange_die,
+                                  int64_t default_lower_bound) const;
+
+  // Reads a bound that is a reference or an expression (DWARF 5 section 2.19). The decoder must
+  // have decoded the subrange.
+  ArraySubrange ReadDynamicBound(const DwarfDieDecoder& range_decoder, DwarfAttr attribute,
+                                 DynamicArrayBound::Kind kind, int64_t lower_bound) const;
 
   // Returns whether the integer type is signed, after typedefs, qualifiers, and the underlying type
   // of an enumeration. Returns nullopt if the type isn't an integer type or can't be decoded.

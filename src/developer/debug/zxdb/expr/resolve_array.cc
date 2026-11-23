@@ -4,24 +4,84 @@
 
 #include "src/developer/debug/zxdb/expr/resolve_array.h"
 
+#include <inttypes.h>
+
 #include "src/developer/debug/shared/logging/logging.h"
 #include "src/developer/debug/zxdb/common/err.h"
+#include "src/developer/debug/zxdb/common/ref_ptr_to.h"
 #include "src/developer/debug/zxdb/expr/eval_context.h"
+#include "src/developer/debug/zxdb/expr/eval_dwarf_expr.h"
 #include "src/developer/debug/zxdb/expr/expr_value.h"
 #include "src/developer/debug/zxdb/expr/pretty_type.h"
 #include "src/developer/debug/zxdb/expr/pretty_type_manager.h"
 #include "src/developer/debug/zxdb/expr/resolve_ptr_ref.h"
 #include "src/developer/debug/zxdb/symbols/arch.h"
 #include "src/developer/debug/zxdb/symbols/array_type.h"
+#include "src/developer/debug/zxdb/symbols/base_type.h"
 #include "src/developer/debug/zxdb/symbols/collection.h"
 #include "src/developer/debug/zxdb/symbols/data_member.h"
 #include "src/developer/debug/zxdb/symbols/modified_type.h"
 #include "src/developer/debug/zxdb/symbols/symbol_data_provider.h"
 #include "src/developer/debug/zxdb/symbols/type.h"
+#include "src/developer/debug/zxdb/symbols/unit_symbol_factory.h"
+#include "src/developer/debug/zxdb/symbols/variable.h"
 
 namespace zxdb {
 
 namespace {
+
+using IntCallback = fit::callback<void(ErrOr<int128_t>)>;
+
+// Computes the value of a dynamic array bound in the current frame.
+void EvalDynamicArrayBound(const fxl::RefPtr<EvalContext>& eval_context,
+                           const SymbolContext& symbol_context, const DynamicArrayBound& bound,
+                           IntCallback cb) {
+  if (bound.expression) {
+    // The result of the expression is the value (DWARF 5 section 2.19), so it's used for both
+    // result types.
+    auto on_complete = [cb = std::move(cb)](DwarfExprEval& eval, const Err& err) mutable {
+      if (err.has_error())
+        return cb(err);
+      if (eval.GetResultType() == DwarfExprEval::ResultType::kData)
+        return cb(Err("Unexpected result type from the array bound expression."));
+      DwarfStackEntry result = eval.GetResult();
+      if (result.TreatAsSigned())
+        return cb(static_cast<int128_t>(result.signed_value()));
+      cb(static_cast<int128_t>(result.unsigned_value()));
+    };
+    fxl::RefPtr<Symbol> source = bound.expression->source().Get();
+    auto async_eval = fxl::MakeRefCounted<AsyncDwarfExprEval>(
+        UnitSymbolFactory(source.get()), eval_context->GetDataProvider(), symbol_context,
+        std::move(on_complete));
+    async_eval->Eval(*bound.expression);
+    return;
+  }
+
+  // The bound references a variable that holds the value.
+  const Value* value = bound.variable.Get()->As<Value>();
+  if (!value)
+    return cb(Err("The size of the array isn't in a variable."));
+  eval_context->GetVariableValue(
+      RefPtrTo(value), [eval_context, cb = std::move(cb)](ErrOrValue result) mutable {
+        if (result.has_error())
+          return cb(result.err());
+
+        // The type of the variable decides the signedness.
+        fxl::RefPtr<Type> type = eval_context->GetConcreteType(result.value().type());
+        const BaseType* base_type = type ? type->As<BaseType>() : nullptr;
+        if (base_type && (base_type->base_type() == BaseType::kBaseTypeSigned ||
+                          base_type->base_type() == BaseType::kBaseTypeSignedChar)) {
+          int128_t signed_value = 0;
+          if (Err err = result.value().PromoteTo128(&signed_value); err.has_error())
+            return cb(err);
+          return cb(signed_value);
+        }
+        uint128_t unsigned_value = 0;
+        if (Err err = result.value().PromoteTo128(&unsigned_value); err.has_error())
+          return cb(err);
+        cb(static_cast<int128_t>(unsigned_value));
+      });
+}
 
 enum class ArrayKind {
   kError,
@@ -292,6 +352,66 @@ void CoerceArraySize(const fxl::RefPtr<EvalContext>& eval_context, const ExprVal
       break;
     }
   }
+}
+
+bool HasDynamicArrayBound(const fxl::RefPtr<EvalContext>& eval_context, const Type* type) {
+  fxl::RefPtr<Type> concrete = eval_context->GetConcreteType(type);
+  const ArrayType* array = concrete ? concrete->As<ArrayType>() : nullptr;
+  if (!array)
+    return false;
+  return array->dynamic_bound() || HasDynamicArrayBound(eval_context, array->value_type());
+}
+
+void ResolveDynamicArrayType(const fxl::RefPtr<EvalContext>& eval_context,
+                             const SymbolContext& symbol_context, fxl::RefPtr<Type> type,
+                             fit::callback<void(ErrOr<fxl::RefPtr<Type>>)> cb) {
+  fxl::RefPtr<Type> concrete = eval_context->GetConcreteType(type.get());
+  const ArrayType* array = concrete ? concrete->As<ArrayType>() : nullptr;
+  if (!array)
+    return cb(std::move(type));
+
+  // The inner dimensions are resolved first, because the size of this dimension's elements depends
+  // on them.
+  fxl::RefPtr<ArrayType> array_ref = RefPtrTo(array);
+  ResolveDynamicArrayType(
+      eval_context, symbol_context, RefPtrTo(array->value_type()),
+      [eval_context, symbol_context, type, array_ref,
+       cb = std::move(cb)](ErrOr<fxl::RefPtr<Type>> inner) mutable {
+        if (inner.has_error())
+          return cb(inner.err());
+        fxl::RefPtr<Type> inner_type = inner.take_value();
+
+        if (!array_ref->dynamic_bound()) {
+          if (inner_type.get() == array_ref->value_type())
+            return cb(std::move(type));  // No dynamic dimension.
+          return cb(fxl::RefPtr<Type>(
+              fxl::MakeRefCounted<ArrayType>(std::move(inner_type), array_ref->num_elts())));
+        }
+
+        const DynamicArrayBound& bound = *array_ref->dynamic_bound();
+        EvalDynamicArrayBound(
+            eval_context, symbol_context, bound,
+            [inner_type = std::move(inner_type), kind = bound.kind, lower = bound.lower_bound,
+             cb = std::move(cb)](ErrOr<int128_t> value) mutable {
+              if (value.has_error())
+                return cb(value.err());
+
+              int128_t count = value.value();
+              if (kind == DynamicArrayBound::Kind::kUpperBound)
+                count = count - lower + 1;
+              if (count < 0)
+                return cb(Err("The array has a negative size (%" PRId64 ").",
+                              static_cast<int64_t>(count)));
+
+              uint64_t elt_size = inner_type->byte_size();
+              if (elt_size > 0 && count > static_cast<int128_t>(kMaxDynamicArrayBytes / elt_size)) {
+                return cb(Err("The array has %" PRId64 " elements, which is too large to read.",
+                              static_cast<int64_t>(count)));
+              }
+              cb(fxl::RefPtr<Type>(fxl::MakeRefCounted<ArrayType>(std::move(inner_type),
+                                                                  static_cast<size_t>(count))));
+            });
+      });
 }
 
 }  // namespace zxdb
