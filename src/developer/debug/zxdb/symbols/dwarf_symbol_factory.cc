@@ -144,6 +144,35 @@ std::optional<size_t> DwarfSymbolFactory::ReadArraySubrange(DwarfDieDecoder& ran
   return static_cast<size_t>(count);
 }
 
+std::optional<uint64_t> DwarfSymbolFactory::GetDiscriminantByteSize(
+    const llvm::DWARFDie& variant) const {
+  // The parent of the variant is the variant part, whose DW_AT_discr references the data member
+  // that holds the discriminant.
+  llvm::DWARFDie variant_part = variant.getParent();
+  if (!variant_part || static_cast<DwarfTag>(variant_part.getTag()) != DwarfTag::kVariantPart)
+    return std::nullopt;
+
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kDiscr, DwarfAttr::kType, DwarfAttr::kByteSize};
+  DwarfDieDecoder decoder = MakeDecoder(kAttrs);
+  if (!decoder.Decode(variant_part))
+    return std::nullopt;
+  llvm::DWARFDie member = decoder.GetReference(DwarfAttr::kDiscr);
+  if (!member || !decoder.Decode(member))
+    return std::nullopt;
+
+  // The size is on the type of the member, after typedefs and qualifiers. The limit stops loops in
+  // corrupt symbols.
+  llvm::DWARFDie type = decoder.GetReference(DwarfAttr::kType);
+  for (int i = 0; i < 8 && type; i++) {
+    if (!decoder.Decode(type))
+      return std::nullopt;
+    if (std::optional<uint64_t> byte_size = decoder.GetUnsignedConstant(DwarfAttr::kByteSize))
+      return byte_size;
+    type = decoder.GetReference(DwarfAttr::kType);
+  }
+  return std::nullopt;
+}
+
 std::optional<bool> DwarfSymbolFactory::IsSignedIntegerType(llvm::DWARFDie type) const {
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kEncoding, DwarfAttr::kType};
   DwarfDieDecoder decoder = MakeDecoder(kAttrs);
@@ -1140,9 +1169,18 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeVariant(const llvm::DWARFDie& die)
   if (!decoder.Decode(die))
     return fxl::MakeRefCounted<Symbol>();
 
-  // Assume unsigned discriminant values since this is always true for our current uses. See
-  // Variant::discr_value() comment for more.
-  std::optional<uint64_t> discr_value = decoder.GetUnsignedConstant(DwarfAttr::kDiscrValue);
+  // The evaluator compares the bits of the discriminant member, zero-extended to 64 bits. So the
+  // value must be the bits of the member's size. rustc writes a negative value as those bits in a
+  // larger DW_FORM_data<n> (an i8 of -1 is data2 0x00ff). Other producers can write
+  // DW_FORM_sdata. Keeping only the bits of the member's size gives the same result for both.
+  std::optional<uint64_t> discr_value;
+  if (std::optional<int128_t> value = decoder.GetInteger(DwarfAttr::kDiscrValue, false)) {
+    uint64_t bits = static_cast<uint64_t>(*value);
+    std::optional<uint64_t> size = GetDiscriminantByteSize(die);
+    if (size && *size > 0 && *size < sizeof(uint64_t))
+      bits &= (uint64_t{1} << (8 * *size)) - 1;
+    discr_value = bits;
+  }
 
   // Collect the data members.
   std::vector<LazySymbol> members;

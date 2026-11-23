@@ -24,6 +24,10 @@
 #     14 DW_TAG_variable "const_u64": DW_AT_const_value 0xffffffffffffffff (data8)
 #     15 DW_TAG_variable "const_short": DW_AT_const_value 0x1234 (data2)
 #     16 DW_TAG_variable "const_16": DW_AT_const_value of 16 bytes (data16)
+#     17 DW_TAG_base_type "i8"
+#     18 DW_TAG_base_type "i32"
+#     19 DW_TAG_structure_type "Small": a Rust-style enumeration with an i8 discriminant
+#     20 DW_TAG_structure_type "Wide": a Rust-style enumeration with an i32 discriminant
 #   Unit B (DW_LANG_Fortran90, default lower bound 1):
 #     0  DW_TAG_base_type "integer"
 #     1  integer[10]: DW_AT_upper_bound 10
@@ -134,6 +138,45 @@
         .byte 0
         .uleb128 0x03, 0x08
         .uleb128 0x1c, 0x1e             # DW_FORM_data16
+        .byte 0, 0
+        # 18: DW_TAG_structure_type with children.
+        .uleb128 18, 0x13
+        .byte 1
+        .uleb128 0x03, 0x08             # DW_AT_name
+        .uleb128 0x0b, 0x0b             # DW_AT_byte_size
+        .byte 0, 0
+        # 19: DW_TAG_variant_part with children.
+        .uleb128 19, 0x33
+        .byte 1
+        .uleb128 0x15, 0x13             # DW_AT_discr, DW_FORM_ref4
+        .byte 0, 0
+        # 20: DW_TAG_member.
+        .uleb128 20, 0x0d
+        .byte 0
+        .uleb128 0x03, 0x08             # DW_AT_name
+        .uleb128 0x49, 0x13             # DW_AT_type
+        .uleb128 0x38, 0x0b             # DW_AT_data_member_location, DW_FORM_data1
+        .byte 0, 0
+        # 21 to 24: DW_TAG_variant with DW_AT_discr_value in sdata, data1, data2, and data8.
+        .uleb128 21, 0x19
+        .byte 0
+        .uleb128 0x16, 0x0d             # DW_AT_discr_value, DW_FORM_sdata
+        .byte 0, 0
+        .uleb128 22, 0x19
+        .byte 0
+        .uleb128 0x16, 0x0b             # DW_FORM_data1
+        .byte 0, 0
+        .uleb128 23, 0x19
+        .byte 0
+        .uleb128 0x16, 0x05             # DW_FORM_data2
+        .byte 0, 0
+        .uleb128 24, 0x19
+        .byte 0
+        .uleb128 0x16, 0x07             # DW_FORM_data8
+        .byte 0, 0
+        # 25: DW_TAG_variant without a discriminant value (the default).
+        .uleb128 25, 0x19
+        .byte 0
         .byte 0, 0
         .byte 0
 
@@ -274,6 +317,53 @@
         .asciz "const_16"
         .byte 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07
         .byte 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f
+.Li8:
+        .uleb128 2
+        .asciz "i8"
+        .byte 0x05                      # DW_ATE_signed.
+        .byte 1
+.Li32:
+        .uleb128 2
+        .asciz "i32"
+        .byte 0x05
+        .byte 4
+        # 19: "Small". -1 is written in sdata and in data2 the way rustc writes it.
+        .uleb128 18
+        .asciz "Small"
+        .byte 2
+        .uleb128 19
+        .long .Lsmall_tag - .Lunit_a
+.Lsmall_tag:
+        .uleb128 20
+        .asciz "tag"
+        .long .Li8 - .Lunit_a
+        .byte 0
+        .uleb128 21
+        .sleb128 -1
+        .uleb128 23
+        .short 0x00ff
+        .uleb128 22
+        .byte 2
+        .uleb128 25
+        .byte 0                         # End of the variant part.
+        .byte 0                         # End of "Small".
+        # 20: "Wide". -5 is written in sdata and in data8 the way rustc writes it.
+        .uleb128 18
+        .asciz "Wide"
+        .byte 8
+        .uleb128 19
+        .long .Lwide_tag - .Lunit_a
+.Lwide_tag:
+        .uleb128 20
+        .asciz "tag"
+        .long .Li32 - .Lunit_a
+        .byte 0
+        .uleb128 21
+        .sleb128 -5
+        .uleb128 24
+        .quad 0xfffffffb
+        .byte 0
+        .byte 0
         .byte 0                         # End of unit A.
 .Lunit_a_end:
 

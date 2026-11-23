@@ -447,11 +447,19 @@ llvm::DWARFDie DwarfDieDecoder::DecodeReference(llvm::DWARFUnit* unit,
       break;
     }
     case DwarfForm::kRefAddr: {
-      // This is an absolute DIE address which can be used across units.
+      // This is an offset in the .debug_info section of the referencing unit, so it can be used
+      // across units. DWARFContext::getDIEForOffset() searches only the normal units, so a unit in
+      // a .dwo file looks in the units of .debug_info.dwo itself.
       auto ref_value = form.getAsReferenceUVal();
-      if (ref_value)
-        return context_->getDIEForOffset(*ref_value);
-      break;
+      if (!ref_value)
+        break;
+      if (unit->isDWOUnit()) {
+        if (llvm::DWARFUnit* target =
+                unit->getContext().getDWOUnitsVector().getUnitForOffset(*ref_value))
+          return target->getDIEForOffset(*ref_value);
+        break;
+      }
+      return context_->getDIEForOffset(*ref_value);
     }
     case DwarfForm::kRefSig8: {
       auto ref_value = form.getAsReferenceUVal();

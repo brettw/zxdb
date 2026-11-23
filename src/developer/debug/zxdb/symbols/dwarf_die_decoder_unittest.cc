@@ -4,6 +4,8 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 
+#include <functional>
+
 #include <gtest/gtest.h>
 
 #include "llvm/ADT/StringMap.h"
@@ -464,6 +466,61 @@ class DwarfDieDecoderTest : public testing::Test {
 };
 
 }  // namespace
+
+TEST(DwarfDieDecoder, RefAddrInDwo) {
+  // DW_FORM_ref_addr in a .dwo file references a DIE in another unit of .debug_info.dwo.
+  std::vector<uint8_t> abbrev = {
+      1, 0x11, 1, 0x03, 0x08, 0, 0,  // 1: DW_TAG_compile_unit with children, DW_AT_name.
+      2, 0x34, 0, 0x03, 0x08, 0, 0,  // 2: DW_TAG_variable, DW_AT_name.
+      3, 0x34, 0, 0x49, 0x10, 0, 0,  // 3: DW_TAG_variable, DW_AT_type in DW_FORM_ref_addr.
+      0};
+
+  // Writes a DWARF 4 unit with one variable. Returns the offset of the variable.
+  std::vector<uint8_t> info;
+  auto write_unit = [&info](uint8_t variable_abbrev, const std::function<void()>& write_variable) {
+    size_t start = info.size();
+    AppendInteger(info, 0, 4);  // Unit length, set below.
+    AppendInteger(info, 4, 2);  // Version.
+    AppendInteger(info, 0, 4);  // Abbreviation offset.
+    info.push_back(8);          // Address size.
+    AppendUleb(info, 1);
+    info.insert(info.end(), {'u', 0});
+    uint64_t variable_offset = info.size();
+    AppendUleb(info, variable_abbrev);
+    write_variable();
+    info.push_back(0);  // End of the unit children.
+    uint64_t length = info.size() - start - 4;
+    for (size_t i = 0; i < 4; i++)
+      info[start + i] = static_cast<uint8_t>(length >> (i * 8));
+    return variable_offset;
+  };
+  uint64_t target_offset = write_unit(2, [&info]() { info.insert(info.end(), {'t', 0}); });
+  uint64_t source_offset =
+      write_unit(3, [&info, target_offset]() { AppendInteger(info, target_offset, 4); });
+
+  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
+  auto make_buffer = [](const std::vector<uint8_t>& data, const char* name) {
+    return llvm::MemoryBuffer::getMemBufferCopy(
+        llvm::StringRef(reinterpret_cast<const char*>(data.data()), data.size()), name);
+  };
+  buffers["debug_info.dwo"] = make_buffer(info, "debug_info.dwo");
+  buffers["debug_abbrev.dwo"] = make_buffer(abbrev, "debug_abbrev.dwo");
+  std::unique_ptr<llvm::DWARFContext> context = llvm::DWARFContext::create(buffers, 8, true);
+
+  const llvm::DWARFUnitVector& units = context->getDWOUnitsVector();
+  ASSERT_EQ(2u, units.size());
+  ASSERT_TRUE(units[1]->isDWOUnit());
+  llvm::DWARFDie source = units[1]->getDIEForOffset(source_offset);
+  ASSERT_TRUE(source);
+
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kType};
+  DwarfDieDecoder decoder(context.get(), kAttrs);
+  ASSERT_TRUE(decoder.Decode(source));
+  llvm::DWARFDie target = decoder.GetReference(DwarfAttr::kType);
+  ASSERT_TRUE(target);
+  EXPECT_EQ(target_offset, target.getOffset());
+  EXPECT_EQ(units[0].get(), target.getDwarfUnit());
+}
 
 TEST_F(DwarfDieDecoderTest, AbstractOrigin) {
   static constexpr DwarfAttr kAttrs[] = {

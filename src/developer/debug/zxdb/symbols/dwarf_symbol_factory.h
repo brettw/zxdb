@@ -91,6 +91,10 @@ class DwarfSymbolFactory : public SymbolFactory {
   // of an enumeration. Returns nullopt if the type isn't an integer type or can't be decoded.
   std::optional<bool> IsSignedIntegerType(llvm::DWARFDie type) const;
 
+  // Returns the byte size of the discriminant member of the variant part that contains the
+  // variant, or nullopt if it's unknown.
+  std::optional<uint64_t> GetDiscriminantByteSize(const llvm::DWARFDie& variant) const;
+
   // Returns the language of the unit that contains the DIE.
   DwarfLang GetLanguage(const llvm::DWARFDie& die) const;
 

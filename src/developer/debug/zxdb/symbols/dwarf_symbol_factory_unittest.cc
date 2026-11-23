@@ -31,6 +31,8 @@
 #include "src/developer/debug/zxdb/symbols/template_parameter.h"
 #include "src/developer/debug/zxdb/symbols/test_symbol_module.h"
 #include "src/developer/debug/zxdb/symbols/variable.h"
+#include "src/developer/debug/zxdb/symbols/variant.h"
+#include "src/developer/debug/zxdb/symbols/variant_part.h"
 
 namespace zxdb {
 
@@ -998,6 +1000,38 @@ TEST(DwarfSymbolFactory, ConstValueDataForms) {
   EXPECT_EQ(std::vector<uint8_t>({0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
                                   0x0b, 0x0c, 0x0d, 0x0e, 0x0f}),
             const_bytes(16, 16));
+}
+
+TEST(DwarfSymbolFactory, VariantDiscriminants) {
+  // The discriminant values are the bits of the discriminant member, so a negative value matches
+  // the member however the producer encodes it.
+  AssemblyFixture fixture("data_forms");
+  ASSERT_TRUE(fixture.Init());
+
+  // Returns the discriminant values of the variants of the structure. A default variant is -1.
+  auto discriminants = [&fixture](size_t index) -> std::vector<int64_t> {
+    std::vector<int64_t> result;
+    fxl::RefPtr<Symbol> symbol = fixture.UnitChild(0, index);
+    const Collection* collection = symbol->As<Collection>();
+    if (!collection)
+      return result;
+    const VariantPart* part = collection->variant_part().Get()->As<VariantPart>();
+    if (!part)
+      return result;
+    for (const LazySymbol& lazy : part->variants()) {
+      const Variant* variant = lazy.Get()->As<Variant>();
+      if (variant)
+        result.push_back(variant->discr_value() ? static_cast<int64_t>(*variant->discr_value())
+                                                : -1);
+    }
+    return result;
+  };
+
+  // i8: sdata -1, data2 0x00ff, data1 2, and the default.
+  EXPECT_EQ(std::vector<int64_t>({0xff, 0xff, 2, -1}), discriminants(19));
+
+  // i32: sdata -5 and data8 0xfffffffb.
+  EXPECT_EQ(std::vector<int64_t>({0xfffffffb, 0xfffffffb}), discriminants(20));
 }
 
 TEST(DwarfSymbolFactory, InlinedParameterOrder) {

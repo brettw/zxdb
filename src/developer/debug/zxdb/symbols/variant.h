@@ -26,16 +26,10 @@ class Variant final : public Symbol {
   //
   // The discriminant value may be unset which indicates that this variant is the default one.
   //
-  // DWARF discriminant values can be either signed or unsigned, according to the type associated
-  // with the discriminant data member in the VariantPart.  This makes it complicated do handle
-  // because the full type of the VariantPart needs to be understood just to properly parse the
-  // Variant out of the file.
-  //
-  // Since our only current use of these is Rust which always uses unsigned discriminants, we also
-  // assume unsigned here.
-  //
-  // If in the future we need to support signed discriminants, we could sign-extend the values
-  // during decode so that internally we always deal with unsigned types.
+  // The value is the bits of the discriminant data member of the VariantPart, zero-extended to 64
+  // bits. This is how the evaluator reads the member, so a signed discriminant also matches: an
+  // i8 of -1 is 0xff. The decoder keeps only the bits of the member's size, so the result doesn't
+  // depend on how the producer encoded a negative value.
   const std::optional<uint64_t>& discr_value() const { return discr_value_; }
 
   // Data members. These should be DataMember objects. The offsets of the data members will be from
