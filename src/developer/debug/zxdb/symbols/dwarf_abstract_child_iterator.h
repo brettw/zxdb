@@ -23,9 +23,6 @@ namespace zxdb {
 //     DoSomething(child);
 //   }
 //
-// If the caller already knows the abstract origin (or knows there isn't one), pass it (or null) in
-// as the second argument to DwarfAbstractChildIterator().
-//
 // BACKGROUND
 // 🭶🭶🭶🭶🭶🭶🭶🭶🭶🭶
 // DWARF inline functions are normally split into two parts: the "concrete inlined instance" which
@@ -61,6 +58,19 @@ namespace zxdb {
 // that child can be omitted and the child on the abstract origin should be used. This class allows
 // iteration over the children, and will magically add children of the abstract origin that were
 // not overridden by the concrete instance.
+//
+// ORDER
+// 🭶🭶🭶🭶🭶
+// The children are in the order of the abstract instance tree. The ordering rules for formal
+// parameters and members apply to abstract entries (DWARF 5 section 3.3.8.1), and a concrete
+// instance can omit entries (section 3.3.8.2). For example, Clang omits a parameter that an inlined
+// function doesn't use. So the iterator returns each child of the abstract origin, or the concrete
+// child that references it. The concrete children that reference no child of the abstract origin
+// describe entities of only this instance (section 3.3.8.2), and they come after the others, in
+// their order.
+//
+// In the example below, the result is the "this" parameter from the abstract origin, followed by
+// the concrete "param" parameter.
 //
 // DWARF EXAMPLE
 // 🭶🭶🭶🭶🭶🭶🭶🭶🭶🭶🭶🭶🭶
@@ -101,181 +111,81 @@ namespace zxdb {
 // llvm::DWARFDies are not easily mockable and this logic is complex. As a result, this
 // iterator is templatized so the unit test can specify a different DIE implementation. The
 // iterator calls GetAbstractOrigin() for the DIE type, so a test DIE type needs an overload of it.
+//
+// The constructor computes all the children, so the DIE doesn't need to outlive this object.
 template <class Die>
 class DwarfAbstractChildIteratorBase {
  public:
-  // This would be most naturally expressed as a coroutine with pseudocode that looks like this:
-  //
-  //   Die cur_die = concrete;
-  //   set<Die> seen_origin_dies;
-  //   while (cur_die) {
-  //     // Go through the children at this level
-  //     for (Die child : cur_die.children()) {
-  //       if (!seen_origin_dies_.contains(child))
-  //         YIELD child;
-  //
-  //       seen_origin_dies.insert(child.abstract_origin());
-  //     }
-  //
-  //     // Move up one level in the abstract origin hierarchy.
-  //     cur_die = cur_die.abstract_origin();
-  //   }
-  //
-  // The logic here represents this loop in "unrolled" for as a single C++ iterator.
-  class Iter {
-   public:
-    // Default-constructed one indicates the end. Computing the true end for this iterator requires
-    // going through all of the abstract origins is slow, expecially since this is only used to
-    // compute the loop termination. By ensuring that "everything clear" indicates end(), we can
-    // save this work.
-    Iter() = default;
-
-    // Takes the concrete DIE as a parameter to iterate over its children.
-    //
-    // See DwarfAbstractChildIteratorBase constructor below for the parameters;
-    explicit Iter(const Die& concrete);
-
-    const Die& operator*() const { return **cur_iter_; }
-    const Die* operator->() const { return (*cur_iter_).operator->(); }
-    bool operator==(const Iter& other) const { return cur_iter_ == other.cur_iter_; }
-    bool operator!=(const Iter& other) const { return !operator==(other); }
-    const Iter& operator++() {
-      ++(*cur_iter_);
-      UpdateAfterIteratorChange();
-      return *this;
-    }
-
-   private:
-    // When not set, there's no other DIE to fall back to.
-    bool has_next_abstract_origin() const { return next_abstract_origin_.isValid(); }
-
-    // Indicates we hit the end of the *current* DIE's children (there could be further abstract
-    // origins to fall back to, though).
-    bool cur_iter_at_end() const { return *cur_iter_ == cur_die_.end(); }
-
-    // Adds the current iterator's (if any) abstract origin (if any) to the seen_origin_dies_ list.
-    // This will allow the current DIE to shadow its abstract origins and we'll skip those DIEs if
-    // we get to them.
-    void AddCurIterAbstractOrigin() {
-      if (has_next_abstract_origin() && !cur_iter_at_end()) {
-        if (Die origin = GetAbstractOrigin(**cur_iter_); origin.isValid())
-          seen_origin_dies_.push_back(origin.getOffset());
-      }
-    }
-
-    // Returns true if the given child's offset is in the seen_origin_dies_. This means we've either
-    // visited this DIE already or have seen a child that's shadowed it and it should not be
-    // returned.
-    bool HasSeenAbstractOriginChild(const Die& child) const;
-
-    // Fixes up the iterators after setting or advancing the iterators.
-    void UpdateAfterIteratorChange();
-
-    Die cur_die_;  // !isValid() for end().
-
-    // Set during the "concrete children" iteration loop in the coroutine pseudocode above. This
-    // is nullopt when we reached the end.
-    typename std::optional<typename Die::iterator> cur_iter_;
-
-    // The abstract origin of the cur_die_ is computed whenever we change cur_die_. !isValid()
-    // indicates no next abstract origin.
-    //
-    // Computing this in advance rather than when we switch to this DIE allows an optimization where
-    // we can avoid tracking seen children when there's no next abstract origin. This is useful in
-    // the common case where there's no abstract origin and we can short circuit all the special
-    // logic.
-    Die next_abstract_origin_;
-
-    // A list of all references to all DIEs and abstract origins of those DIEs we've seen.
-    // When we visited a child that itself has an abstract origin, that abstract origin should not
-    // be revisited.
-    //
-    // In the example at the top, this corresponds to skipping the "param" DIE on the abstract
-    // origin because we already visited it on the concrete instance. The parameters of the
-    // "param" abstract origin will have been read automatically when not shadowed by the
-    // DwarfDieDecoder when decoding the concrete instance.
-    //
-    // This is conceptually a set but there are typically only a couple of children and the DWARF
-    // decoding can be performance critical. Doing brute-force in this case is normally faster than
-    // doing heap allocations.
-    std::vector<uint64_t> seen_origin_dies_;
-  };
+  using const_iterator = typename std::vector<Die>::const_iterator;
 
   // Takes the die whose children to iterate over.
-  explicit DwarfAbstractChildIteratorBase(const Die& die) : die_(die) {}
+  explicit DwarfAbstractChildIteratorBase(const Die& die) : children_(Collect(die, kMaxDepth)) {}
 
-  Iter begin() { return Iter(die_); }
-  const Iter& end() const { return end_; }
+  const_iterator begin() const { return children_.begin(); }
+  const_iterator end() const { return children_.end(); }
 
  private:
-  const Die& die_;
+  // The maximum number of abstract origins to follow. This stops cycles in corrupt symbols.
+  static constexpr int kMaxDepth = 8;
 
-  // Empty iterator to be efficiently returned from end().
-  const Iter end_;
+  // Returns the children of the DIE, merged with the children of its abstract origin. See "ORDER"
+  // above.
+  static std::vector<Die> Collect(const Die& die, int depth);
+
+  std::vector<Die> children_;
 };
 
 template <class Die>
-DwarfAbstractChildIteratorBase<Die>::Iter::Iter(const Die& concrete) : cur_die_(concrete) {
-  next_abstract_origin_ = GetAbstractOrigin(cur_die_);
+std::vector<Die> DwarfAbstractChildIteratorBase<Die>::Collect(const Die& die, int depth) {
+  std::vector<Die> own;
+  if (!die.isValid())
+    return own;
+  for (auto iter = die.begin(); iter != die.end(); ++iter)
+    own.push_back(*iter);
 
-  // Only need to track seen DIEs if there's an abstract origin. In the common case where will be
-  // no abstract origin.
-  if (has_next_abstract_origin()) {
-    seen_origin_dies_.reserve(16);
-    seen_origin_dies_.push_back(cur_die_.getOffset());
+  Die origin = GetAbstractOrigin(die);
+  if (!origin.isValid() || origin == die || depth == 0)
+    return own;  // The common case.
+
+  // The abstract origin can have its own abstract origin, so its children are merged first.
+  std::vector<Die> base = Collect(origin, depth - 1);
+
+  // The offsets of the DIEs that the children of this DIE reference.
+  std::vector<std::optional<uint64_t>> own_origins;
+  own_origins.reserve(own.size());
+  for (const Die& child : own) {
+    Die child_origin = GetAbstractOrigin(child);
+    own_origins.push_back(child_origin.isValid() ? std::optional<uint64_t>(child_origin.getOffset())
+                                                 : std::nullopt);
   }
 
-  cur_iter_ = cur_die_.begin();
-  UpdateAfterIteratorChange();  // In case the current DIE has no children.
-}
-
-// This function does several things:
-//  - Transparently skips nodes we don't need to visit. These are the ones tracked in
-//    seen_origin_dies_ which were the ones shadowed by DIEs we already visited.
-//  - Advances to the next deeper abstract origin when we reach the end of the current one.
-//  - Clears the iterators when we hit the end. This ensures that it mathches tne end() Iter
-//    object which has null iterators.
-template <class Die>
-void DwarfAbstractChildIteratorBase<Die>::Iter::UpdateAfterIteratorChange() {
-  // Skip over any unnecessary DIEs in the current child.
-  while (!cur_iter_at_end() && HasSeenAbstractOriginChild(**cur_iter_)) {
-    // All DIEs we iterate over have to add their abstract origins added, even if we skip those DIEs
-    // for returned children. This is because if there are multiple levels of abstract origins, the
-    // one shadowed child could tiself shadow another abstract origin at a deeper level.
-    AddCurIterAbstractOrigin();
-    ++(*cur_iter_);
-  }
-
-  // This needs to be a loop to account for abstract origins with no children (probably this won't
-  // appear in practice but can theoretically happen).
-  while (has_next_abstract_origin() && cur_iter_at_end()) {
-    // Got to the end of this abstract origin, advance to the next one.
-    cur_die_ = next_abstract_origin_;
-    cur_iter_ = cur_die_.begin();
-    next_abstract_origin_ = GetAbstractOrigin(cur_die_);
-
-    if (has_next_abstract_origin())
-      seen_origin_dies_.push_back(cur_die_.getOffset());
-
-    // Skip any unnecessary DIEs in the current abstract origin.
-    while (!cur_iter_at_end() && HasSeenAbstractOriginChild(**cur_iter_)) {
-      AddCurIterAbstractOrigin();
-      ++(*cur_iter_);
+  std::vector<Die> result;
+  result.reserve(base.size() + own.size());
+  std::vector<bool> used(own.size(), false);
+  for (const Die& base_child : base) {
+    // Replace the child of the abstract origin with the child of this DIE that references it. The
+    // trees are small, so a linear search is fast enough.
+    size_t found = own.size();
+    for (size_t i = 0; i < own.size(); i++) {
+      if (!used[i] && own_origins[i] == base_child.getOffset()) {
+        found = i;
+        break;
+      }
+    }
+    if (found < own.size()) {
+      used[found] = true;
+      result.push_back(own[found]);
+    } else {
+      result.push_back(base_child);
     }
   }
 
-  if (cur_iter_at_end()) {
-    cur_iter_ = std::nullopt;  // Hit end, clear the iterator.
-  } else {
-    AddCurIterAbstractOrigin();
+  // The children of only this instance.
+  for (size_t i = 0; i < own.size(); i++) {
+    if (!used[i])
+      result.push_back(own[i]);
   }
-}
-
-template <class Die>
-bool DwarfAbstractChildIteratorBase<Die>::Iter::HasSeenAbstractOriginChild(const Die& child) const {
-  uint64_t child_offset = child.getOffset();
-  return std::find(seen_origin_dies_.begin(), seen_origin_dies_.end(), child_offset) !=
-         seen_origin_dies_.end();
+  return result;
 }
 
 using DwarfAbstractChildIterator = DwarfAbstractChildIteratorBase<llvm::DWARFDie>;

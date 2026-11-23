@@ -13,6 +13,7 @@
 
 #include "llvm/DebugInfo/DWARF/DWARFDie.h"
 #include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
+#include "src/developer/debug/zxdb/common/int128_t.h"
 #include "src/developer/debug/zxdb/symbols/const_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
 #include "src/lib/fxl/macros.h"
@@ -132,6 +133,15 @@ class DwarfDieDecoder {
   std::optional<uint64_t> GetAddress(DwarfAttr attribute) const;
   std::optional<const char*> GetCString(DwarfAttr attribute) const;
 
+  // Returns the value of an integer constant. The value is exact: a signed value is negative when
+  // its sign bit is set, and an unsigned value can use all 64 bits.
+  //
+  // The type of the value decides whether DW_FORM_data1, data2, data4, and data8 are signed (DWARF
+  // 5 section 7.5.5), so the caller gives that. DW_FORM_sdata and DW_FORM_implicit_const are always
+  // signed, and DW_FORM_udata is always unsigned. Returns nullopt for the other forms, including
+  // DW_FORM_data16.
+  std::optional<int128_t> GetInteger(DwarfAttr attribute, bool data_is_signed) const;
+
   // The returned section offset is the raw value. The caller must find the ELF section that it
   // references and interpret it.
   std::optional<uint64_t> GetSectionOffset(DwarfAttr attribute) const;
@@ -139,6 +149,13 @@ class DwarfDieDecoder {
   // Accepts the block and exprloc form classes.
   std::optional<std::vector<uint8_t>> GetBlock(DwarfAttr attribute) const;
 
+  // Returns the constant as the bytes it has in target memory. The type of the value decides how to
+  // read the bytes:
+  //   - DW_FORM_sdata, DW_FORM_udata, and DW_FORM_implicit_const give 8 bytes, sign-extended for
+  //     sdata and implicit_const.
+  //   - DW_FORM_data1 to DW_FORM_data16 give their bytes in target byte order (DWARF 5 section
+  //     7.5.5: "A consumer must use context to know how to interpret the bits").
+  //   - The block forms give the block.
   // Returns an unset ConstValue when the attribute isn't present or has an unsupported form.
   ConstValue GetConstValue(DwarfAttr attribute) const;
 

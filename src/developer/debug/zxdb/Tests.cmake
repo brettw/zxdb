@@ -214,6 +214,7 @@ add_executable(zxdb_tests
   symbols/dwarf_die_ref_unittest.cc
   symbols/dwarf_expr_eval_unittest.cc
   symbols/dwarf_form_unittest.cc
+  symbols/dwarf_lang_unittest.cc
   symbols/dwarf_location_unittest.cc
   symbols/dwarf_op_unittest.cc
   symbols/dwarf_symbol_factory_unittest.cc
@@ -339,6 +340,27 @@ if(ZXDB_GXX)
 endif()
 add_custom_target(zxdb_type_unit_fixtures DEPENDS ${type_unit_fixture_outputs})
 add_dependencies(zxdb_tests zxdb_type_unit_fixtures)
+# A Clang binary with inlined functions whose unused parameters Clang omits from the concrete
+# instances. dwarf_symbol_factory_unittest.cc checks the order of the parameters. The fixture needs
+# Clang.
+set(inline_params_fixture_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/inline_params")
+set(inline_params_fixture_source
+  "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/inline_params/inline_params_fixture.cc")
+set(inline_params_fixture_outputs)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  set(output "${inline_params_fixture_dir}/clang_inline_params.so")
+  add_custom_command(
+    OUTPUT "${output}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${inline_params_fixture_dir}"
+    COMMAND "${CMAKE_CXX_COMPILER}" -g -O2 -shared -fPIC -Wl,--build-id
+      "-fdebug-prefix-map=${PROJECT_SOURCE_DIR}=../.." -o "${output}" "${inline_params_fixture_source}"
+    DEPENDS "${inline_params_fixture_source}"
+    VERBATIM)
+  list(APPEND inline_params_fixture_outputs "${output}")
+endif()
+add_custom_target(zxdb_inline_params_fixtures DEPENDS ${inline_params_fixture_outputs})
+add_dependencies(zxdb_tests zxdb_inline_params_fixtures)
+
 # A Clang binary whose functions use DW_FORM_LLVM_addrx_offset for DW_AT_low_pc.
 # dwarf_symbol_factory_unittest.cc checks the function addresses. The fixture needs Clang.
 set(addrx_offset_fixture_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/addrx_offset")
@@ -359,21 +381,24 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 add_custom_target(zxdb_addrx_offset_fixtures DEPENDS ${addrx_offset_fixture_outputs})
 add_dependencies(zxdb_tests zxdb_addrx_offset_fixtures)
-# A binary from hand-written DWARF with DW_AT_specification chains and abstract origins in another
-# unit. dwarf_symbol_factory_unittest.cc decodes it.
-set(specification_fixture_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/specification")
-set(specification_fixture_source
-  "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/specification/specification_fixture.s")
-set(specification_fixture_output "${specification_fixture_dir}/specification.so")
-add_custom_command(
-  OUTPUT "${specification_fixture_output}"
-  COMMAND "${CMAKE_COMMAND}" -E make_directory "${specification_fixture_dir}"
-  COMMAND "${CMAKE_CXX_COMPILER}" -shared -nostdlib -Wl,--build-id -o
-    "${specification_fixture_output}" "${specification_fixture_source}"
-  DEPENDS "${specification_fixture_source}"
-  VERBATIM)
-add_custom_target(zxdb_specification_fixtures DEPENDS "${specification_fixture_output}")
-add_dependencies(zxdb_tests zxdb_specification_fixtures)
+# Binaries from hand-written DWARF for dwarf_symbol_factory_unittest.cc:
+#   - specification: DW_AT_specification chains and abstract origins in another unit.
+#   - data_forms: array bounds and constants in the DW_FORM_data<n> forms.
+set(assembly_fixture_outputs)
+foreach(name specification data_forms)
+  set(dir "${PROJECT_BINARY_DIR}/test_data/zxdb/${name}")
+  set(source "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/${name}/${name}_fixture.s")
+  set(output "${dir}/${name}.so")
+  add_custom_command(
+    OUTPUT "${output}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${dir}"
+    COMMAND "${CMAKE_CXX_COMPILER}" -shared -nostdlib -Wl,--build-id -o "${output}" "${source}"
+    DEPENDS "${source}"
+    VERBATIM)
+  list(APPEND assembly_fixture_outputs "${output}")
+endforeach()
+add_custom_target(zxdb_assembly_fixtures DEPENDS ${assembly_fixture_outputs})
+add_dependencies(zxdb_tests zxdb_assembly_fixtures)
 # A .dwo file with a type unit that references the .debug_line.dwo table. Only the .dwo goes into the
 # fixture directory: the object file has relocations that the comparison test doesn't apply.
 set(line_table_split_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/line_table_split")

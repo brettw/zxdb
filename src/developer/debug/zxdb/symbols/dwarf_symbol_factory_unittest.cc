@@ -748,12 +748,12 @@ TEST(DwarfSymbolFactory, AddrxOffsetLowPc) {
 
 namespace {
 
-// Loads the hand-written DWARF in test_data/specification. See specification_fixture.s for the
-// DIEs.
-class SpecificationFixture {
+// Loads a binary of hand-written DWARF from test_data/<name>/<name>_fixture.s. See that file for
+// the DIEs.
+class AssemblyFixture {
  public:
-  SpecificationFixture()
-      : setup_(TestSymbolModule::GetTestDataDir() + "specification/specification.so", "") {}
+  explicit AssemblyFixture(const std::string& name)
+      : setup_(TestSymbolModule::GetTestDataDir() + name + "/" + name + ".so", "") {}
 
   bool Init() {
     if (!setup_.Init().ok())
@@ -787,7 +787,7 @@ constexpr size_t kPairOnlyIndex = 6;
 
 TEST(DwarfSymbolFactory, SpecificationOfType) {
   // A type definition outside its class gets the class as its parent from its declaration.
-  SpecificationFixture fixture;
+  AssemblyFixture fixture("specification");
   ASSERT_TRUE(fixture.Init());
   fxl::RefPtr<Symbol> symbol = fixture.UnitChild(0, kInnerDefinitionIndex);
   ASSERT_TRUE(symbol);
@@ -800,7 +800,7 @@ TEST(DwarfSymbolFactory, SpecificationOfType) {
 
 TEST(DwarfSymbolFactory, SpecificationThroughAbstractOrigin) {
   // concrete instance -> (abstract origin) abstract instance -> (specification) declaration.
-  SpecificationFixture fixture;
+  AssemblyFixture fixture("specification");
   ASSERT_TRUE(fixture.Init());
   fxl::RefPtr<Symbol> symbol = fixture.UnitChild(0, kConcreteMethodIndex);
   ASSERT_TRUE(symbol);
@@ -819,7 +819,7 @@ TEST(DwarfSymbolFactory, SpecificationThroughAbstractOrigin) {
 
 TEST(DwarfSymbolFactory, AbstractOriginInOtherUnit) {
   // The concrete instance in unit B has an abstract origin in unit A.
-  SpecificationFixture fixture;
+  AssemblyFixture fixture("specification");
   ASSERT_TRUE(fixture.Init());
   fxl::RefPtr<Symbol> symbol = fixture.UnitChild(1, 0);
   ASSERT_TRUE(symbol);
@@ -864,7 +864,7 @@ TEST(DwarfSymbolFactory, AbstractOriginInOtherUnit) {
 TEST(DwarfSymbolFactory, StaticMemberDefinition) {
   // The definition of a static data member takes its name and type from the declaration in the
   // class, and the class is its parent.
-  SpecificationFixture fixture;
+  AssemblyFixture fixture("specification");
   ASSERT_TRUE(fixture.Init());
   fxl::RefPtr<Symbol> symbol = fixture.UnitChild(0, kStaticDefinitionIndex);
   ASSERT_TRUE(symbol);
@@ -879,7 +879,7 @@ TEST(DwarfSymbolFactory, StaticMemberDefinition) {
 TEST(DwarfSymbolFactory, LowHighPcFromDifferentDies) {
   // DW_AT_low_pc is on the DIE and DW_AT_high_pc is on its abstract origin. They don't make a
   // range together.
-  SpecificationFixture fixture;
+  AssemblyFixture fixture("specification");
   ASSERT_TRUE(fixture.Init());
   fxl::RefPtr<Symbol> symbol = fixture.UnitChild(0, kPairOnlyIndex);
   ASSERT_TRUE(symbol);
@@ -887,6 +887,158 @@ TEST(DwarfSymbolFactory, LowHighPcFromDifferentDies) {
   ASSERT_TRUE(function);
   EXPECT_EQ("PairOnly", function->GetFullName());
   EXPECT_TRUE(function->code_ranges().empty());
+}
+
+namespace {
+
+// Returns the number of elements of each dimension of the array type, outermost first. A dimension
+// of unknown size is -1.
+std::vector<int64_t> GetArrayDimensions(const fxl::RefPtr<Symbol>& symbol) {
+  std::vector<int64_t> result;
+  const Type* type = symbol ? symbol->As<Type>() : nullptr;
+  while (type) {
+    const ArrayType* array = type->As<ArrayType>();
+    if (!array)
+      break;
+    result.push_back(array->num_elts() ? static_cast<int64_t>(*array->num_elts()) : -1);
+    type = array->value_type();
+  }
+  return result;
+}
+
+}  // namespace
+
+TEST(DwarfSymbolFactory, ArrayBounds) {
+  AssemblyFixture fixture("data_forms");
+  ASSERT_TRUE(fixture.Init());
+
+  // The upper bound is the index of the last element.
+  EXPECT_EQ(std::vector<int64_t>({10}), GetArrayDimensions(fixture.UnitChild(0, 3)));
+  EXPECT_EQ(std::vector<int64_t>({10}), GetArrayDimensions(fixture.UnitChild(0, 4)));
+
+  // A data1 upper bound of 0xff is 255 for an unsigned basis type.
+  EXPECT_EQ(std::vector<int64_t>({256}), GetArrayDimensions(fixture.UnitChild(0, 5)));
+
+  // An upper bound of -1 with the lower bound of C is an empty array.
+  EXPECT_EQ(std::vector<int64_t>({0}), GetArrayDimensions(fixture.UnitChild(0, 6)));
+
+  // An explicit lower bound.
+  EXPECT_EQ(std::vector<int64_t>({10}), GetArrayDimensions(fixture.UnitChild(0, 7)));
+
+  // Two dimensions.
+  EXPECT_EQ(std::vector<int64_t>({3, 5}), GetArrayDimensions(fixture.UnitChild(0, 8)));
+
+  // A dynamic bound gives an unknown size.
+  EXPECT_EQ(std::vector<int64_t>({-1}), GetArrayDimensions(fixture.UnitChild(0, 9)));
+
+  // The default lower bound of Fortran is 1.
+  EXPECT_EQ(std::vector<int64_t>({10}), GetArrayDimensions(fixture.UnitChild(1, 1)));
+}
+
+TEST(DwarfSymbolFactory, EnumDataForms) {
+  AssemblyFixture fixture("data_forms");
+  ASSERT_TRUE(fixture.Init());
+
+  // The unsigned type makes the data1 value 0xff 255.
+  fxl::RefPtr<Symbol> unsigned_symbol = fixture.UnitChild(0, 10);
+  const Enumeration* unsigned_enum = unsigned_symbol->As<Enumeration>();
+  ASSERT_TRUE(unsigned_enum);
+  EXPECT_FALSE(unsigned_enum->is_signed());
+  EXPECT_EQ(Enumeration::Map({{1, "kOne"}, {255, "kHigh"}, {0xffffffffffffffff, "kMax"}}),
+            unsigned_enum->values());
+
+  // The signed type makes the data1 value 0xff -1. The map stores signed values as their unsigned
+  // bits.
+  fxl::RefPtr<Symbol> signed_symbol = fixture.UnitChild(0, 11);
+  const Enumeration* signed_enum = signed_symbol->As<Enumeration>();
+  ASSERT_TRUE(signed_enum);
+  EXPECT_TRUE(signed_enum->is_signed());
+  EXPECT_EQ(Enumeration::Map({{2, "kTwo"},
+                              {static_cast<uint64_t>(-1), "kMinusOne"},
+                              {static_cast<uint64_t>(-3), "kMinusThree"}}),
+            signed_enum->values());
+
+  // Without a type, data forms are unsigned and a DW_FORM_sdata value makes the enumeration signed.
+  fxl::RefPtr<Symbol> untyped_symbol = fixture.UnitChild(0, 12);
+  const Enumeration* untyped_enum = untyped_symbol->As<Enumeration>();
+  ASSERT_TRUE(untyped_enum);
+  EXPECT_TRUE(untyped_enum->is_signed());
+  EXPECT_EQ(Enumeration::Map({{0x80, "kA"}, {static_cast<uint64_t>(-1), "kB"}}),
+            untyped_enum->values());
+}
+
+TEST(DwarfSymbolFactory, ConstValueDataForms) {
+  AssemblyFixture fixture("data_forms");
+  ASSERT_TRUE(fixture.Init());
+
+  // Returns the bytes of the constant of the variable, read with the given size.
+  auto const_bytes = [&fixture](size_t index, size_t size) -> std::vector<uint8_t> {
+    fxl::RefPtr<Symbol> symbol = fixture.UnitChild(0, index);
+    const Variable* var = symbol->As<Variable>();
+    if (!var || !var->const_value().has_value())
+      return {};
+    return var->const_value().GetConstValue(size);
+  };
+
+  // The data forms give their bytes in target byte order. A larger read is zero-filled.
+  EXPECT_EQ(std::vector<uint8_t>({0x61}), const_bytes(13, 1));
+  EXPECT_EQ(std::vector<uint8_t>({0x61, 0, 0, 0}), const_bytes(13, 4));
+  EXPECT_EQ(std::vector<uint8_t>(8, 0xff), const_bytes(14, 8));
+  EXPECT_EQ(std::vector<uint8_t>({0x34, 0x12, 0, 0}), const_bytes(15, 4));
+  EXPECT_EQ(std::vector<uint8_t>({0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
+                                  0x0b, 0x0c, 0x0d, 0x0e, 0x0f}),
+            const_bytes(16, 16));
+}
+
+TEST(DwarfSymbolFactory, InlinedParameterOrder) {
+  // Clang omits unused parameters from concrete inlined instances. The parameters keep the order of
+  // the declaration.
+  std::string path = TestSymbolModule::GetTestDataDir() + "inline_params/clang_inline_params.so";
+  if (!std::filesystem::exists(path))
+    GTEST_SKIP() << "The fixture needs Clang.";
+
+  TestSymbolModule setup(path, "");
+  ASSERT_TRUE(setup.Init().ok());
+  llvm::DWARFContext* context = setup.symbols()->binary()->GetLLVMContext();
+
+  struct Case {
+    const char* caller;
+    std::vector<std::string> expected;
+  };
+  bool found_omitted = false;
+  for (const Case& c : {Case{"InlineParamsCaller", {"unused_a", "b", "c"}},
+                        Case{"InlineParamsMethodCaller", {"this", "unused", "param"}}}) {
+    SCOPED_TRACE(c.caller);
+    fxl::RefPtr<Function> caller = GetFunctionWithName(setup.symbols(), {c.caller});
+    ASSERT_TRUE(caller);
+
+    const Function* inlined = nullptr;
+    for (const LazySymbol& block : caller->inner_blocks()) {
+      const Function* function = block.Get()->As<Function>();
+      if (function && function->tag() == DwarfTag::kInlinedSubroutine)
+        inlined = function;
+    }
+    ASSERT_TRUE(inlined);
+
+    // Find whether the fixture has the case this test is for: the concrete instance has fewer
+    // parameter entries than the function.
+    llvm::DWARFDie die = context->getDIEForOffset(inlined->GetLazySymbol().die_ref().offset());
+    ASSERT_TRUE(die);
+    size_t concrete_parameters = 0;
+    for (const llvm::DWARFDie& child : die) {
+      if (static_cast<DwarfTag>(child.getTag()) == DwarfTag::kFormalParameter)
+        concrete_parameters++;
+    }
+    if (concrete_parameters < c.expected.size())
+      found_omitted = true;
+
+    std::vector<std::string> names;
+    for (const LazySymbol& param : inlined->parameters())
+      names.push_back(param.Get()->GetAssignedName());
+    EXPECT_EQ(c.expected, names);
+  }
+  if (!found_omitted)
+    GTEST_SKIP() << "Clang wrote all parameters, so the fixture doesn't test omitted ones.";
 }
 
 // TODO(brettw) test using statements. See GetUsing() in type_test.cc

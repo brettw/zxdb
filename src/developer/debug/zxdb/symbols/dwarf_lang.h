@@ -5,6 +5,8 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_LANG_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_LANG_H_
 
+#include <stdint.h>
+
 namespace zxdb {
 
 enum class DwarfLang : int {
@@ -54,6 +56,10 @@ enum class DwarfLang : int {
 bool DwarfLangIsCFamily(DwarfLang lang);
 
 const char* DwarfLangToString(DwarfLang lang);
+
+// Returns the default lower bound of array subranges in the language (DWARF 5 Table 7.17). Returns
+// 0 for languages that the table doesn't list.
+int64_t DwarfLangDefaultLowerBound(DwarfLang lang);
 
 }  // namespace zxdb
 

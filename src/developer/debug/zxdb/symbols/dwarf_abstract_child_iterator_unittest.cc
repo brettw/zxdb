@@ -133,7 +133,9 @@ TEST(DwarfAbstractChildIterator, Abstract) {
   //     304 ---------- 204
   //                    205
   //
-  // As a result, iterating should show, in order: 301, 303, 304, 202, 205, and 100.
+  // As a result, iterating should show the children in the order of abstract2, with each one
+  // replaced by the child that shadows it, then the children of only abstract1: 100, 301, 202, 303,
+  // 304, 205. 304 shadows 204, which is a child of only abstract1, so it takes that position.
 
   TestDie concrete(1);
   TestDie abstract1(2);
@@ -166,7 +168,7 @@ TEST(DwarfAbstractChildIterator, Abstract) {
   concrete.abstract_origin() = abstract1;
 
   // Iterate through the values.
-  std::vector<uint64_t> expected{301, 303, 304, 202, 205, 100};  // See comment above.
+  std::vector<uint64_t> expected{100, 301, 202, 303, 304, 205};  // See comment above.
   size_t i = 0;
   for (const auto& child : TestIterator(concrete)) {
     ASSERT_LT(i, expected.size());
@@ -201,6 +203,82 @@ TEST(DwarfAbstractChildIterator, ConcreteNoChildren) {
   EXPECT_EQ(cur->getOffset(), 102u);
   ++cur;
   EXPECT_EQ(cur, iter.end());
+}
+
+namespace {
+
+// Returns the offsets of the children that the iterator gives.
+std::vector<uint64_t> ChildOffsets(const TestDie& die) {
+  std::vector<uint64_t> result;
+  for (const auto& child : TestIterator(die))
+    result.push_back(child.getOffset());
+  return result;
+}
+
+}  // namespace
+
+TEST(DwarfAbstractChildIterator, OmittedChild) {
+  // Clang omits a parameter that an inlined function doesn't use. The parameters keep the order of
+  // the abstract origin:
+  //
+  //   CONCRETE       ABSTRACT
+  //                    100 (unused parameter)
+  //     201 ---------- 101
+  //     202 ---------- 102
+  TestDie concrete(1);
+  TestDie abstract(2);
+  abstract.children().emplace_back(100);
+  abstract.children().emplace_back(101);
+  abstract.children().emplace_back(102);
+  concrete.children().emplace_back(201);
+  concrete.children().back().abstract_origin() = abstract.children()[1];
+  concrete.children().emplace_back(202);
+  concrete.children().back().abstract_origin() = abstract.children()[2];
+  concrete.abstract_origin() = abstract;
+
+  EXPECT_EQ(std::vector<uint64_t>({100, 201, 202}), ChildOffsets(concrete));
+}
+
+TEST(DwarfAbstractChildIterator, ConcreteOnlyChildren) {
+  // Children of only the concrete instance come after the others, in their order, also when they
+  // come first in the concrete instance.
+  TestDie concrete(1);
+  TestDie abstract(2);
+  abstract.children().emplace_back(100);
+  abstract.children().emplace_back(101);
+  concrete.children().emplace_back(200);  // Only in the concrete instance.
+  concrete.children().emplace_back(201);
+  concrete.children().back().abstract_origin() = abstract.children()[0];
+  concrete.children().emplace_back(202);  // Only in the concrete instance.
+  concrete.abstract_origin() = abstract;
+
+  EXPECT_EQ(std::vector<uint64_t>({201, 101, 200, 202}), ChildOffsets(concrete));
+}
+
+TEST(DwarfAbstractChildIterator, DuplicateReference) {
+  // Two concrete children that reference the same child. The first replaces it, and the second is
+  // kept with the children of only the concrete instance.
+  TestDie concrete(1);
+  TestDie abstract(2);
+  abstract.children().emplace_back(100);
+  abstract.children().emplace_back(101);
+  concrete.children().emplace_back(201);
+  concrete.children().back().abstract_origin() = abstract.children()[1];
+  concrete.children().emplace_back(202);
+  concrete.children().back().abstract_origin() = abstract.children()[1];
+  concrete.abstract_origin() = abstract;
+
+  EXPECT_EQ(std::vector<uint64_t>({100, 201, 202}), ChildOffsets(concrete));
+}
+
+TEST(DwarfAbstractChildIterator, SelfOrigin) {
+  // A DIE that is its own abstract origin gives its children once.
+  TestDie die(1);
+  die.children().emplace_back(100);
+  die.children().emplace_back(101);
+  die.abstract_origin() = die;
+
+  EXPECT_EQ(std::vector<uint64_t>({100, 101}), ChildOffsets(die));
 }
 
 }  // namespace zxdb

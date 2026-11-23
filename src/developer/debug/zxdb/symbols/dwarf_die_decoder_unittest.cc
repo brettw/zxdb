@@ -538,6 +538,46 @@ TEST_F(DwarfDieDecoderTest, Forms) {
   EXPECT_EQ(expected_block, decoder.GetBlock(DwarfAttr::kLocation));
 }
 
+TEST_F(DwarfDieDecoderTest, GetInteger) {
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kConstValue, DwarfAttr::kCount,
+                                         DwarfAttr::kDeclaration, DwarfAttr::kLocation};
+  DwarfDieDecoder decoder(context(), kAttrs);
+  ASSERT_TRUE(decoder.Decode(GetDie(forms_offset())));
+
+  // DW_FORM_sdata and DW_FORM_implicit_const are signed in both cases.
+  EXPECT_EQ(-5, decoder.GetInteger(DwarfAttr::kConstValue, false));
+  EXPECT_EQ(-5, decoder.GetInteger(DwarfAttr::kConstValue, true));
+  EXPECT_EQ(kImplicitCount, decoder.GetInteger(DwarfAttr::kCount, false));
+
+  // Flags and blocks aren't integers.
+  EXPECT_EQ(std::nullopt, decoder.GetInteger(DwarfAttr::kDeclaration, false));
+  EXPECT_EQ(std::nullopt, decoder.GetInteger(DwarfAttr::kLocation, false));
+
+  // DW_FORM_udata is unsigned in both cases.
+  ASSERT_TRUE(decoder.Decode(GetDie(other_forms_offset())));
+  EXPECT_EQ(9, decoder.GetInteger(DwarfAttr::kConstValue, true));
+
+  // A missing attribute.
+  EXPECT_EQ(std::nullopt, decoder.GetInteger(DwarfAttr::kCount, false));
+}
+
+TEST_F(DwarfDieDecoderTest, GetIntegerData) {
+  // DW_AT_decl_line is DW_FORM_data1, and DW_AT_high_pc is DW_FORM_data4.
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kDeclLine, DwarfAttr::kHighPc};
+  DwarfDieDecoder decoder(context(), kAttrs);
+  ASSERT_TRUE(decoder.Decode(GetDie(concrete_offset())));
+  EXPECT_EQ(20, decoder.GetInteger(DwarfAttr::kDeclLine, false));
+  EXPECT_EQ(20, decoder.GetInteger(DwarfAttr::kDeclLine, true));
+  EXPECT_EQ(0x20, decoder.GetInteger(DwarfAttr::kHighPc, true));
+
+  // The constant of a data form is its bytes.
+  static constexpr DwarfAttr kLineAttrs[] = {DwarfAttr::kDeclLine};
+  DwarfDieDecoder line_decoder(context(), kLineAttrs);
+  ASSERT_TRUE(line_decoder.Decode(GetDie(concrete_offset())));
+  EXPECT_EQ(std::vector<uint8_t>({20}),
+            line_decoder.GetConstValue(DwarfAttr::kDeclLine).GetConstValue(1));
+}
+
 TEST_F(DwarfDieDecoderTest, WrongForm) {
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kDeclaration, DwarfAttr::kAddrBase,
                                          DwarfAttr::kLocation};

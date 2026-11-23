@@ -14,6 +14,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/shared/logging/logging.h"
 #include "src/developer/debug/zxdb/common/checked_math.h"
+#include "src/developer/debug/zxdb/common/int128_t.h"
 #include "src/developer/debug/zxdb/common/ref_ptr_to.h"
 #include "src/developer/debug/zxdb/symbols/array_type.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
@@ -27,6 +28,7 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_lang.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_location.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit_impl.h"
@@ -67,28 +69,9 @@ FileLine MakeFileLine(llvm::DWARFUnit* unit, const std::optional<std::string>& f
   return FileLine();
 }
 
-// Extract the DW_AT_count attribute which Clang generates, and DW_AT_upper_bound which GCC
-// generates.
-constexpr DwarfAttr kArraySubrangeAttrs[] = {DwarfAttr::kCount, DwarfAttr::kUpperBound};
-
-// Extracts the subrange size from an array subrange DIE. Returns the value on success, nullopt on
-// failure.
-//
-// The decoder must use kArraySubrangeAttrs.
-std::optional<size_t> ReadArraySubrange(DwarfDieDecoder& range_decoder,
-                                        const llvm::DWARFDie& subrange_die) {
-  if (!range_decoder.Decode(subrange_die))
-    return std::nullopt;
-
-  std::optional<uint64_t> count = range_decoder.GetUnsignedConstant(DwarfAttr::kCount);
-  std::optional<uint64_t> upper_bound = range_decoder.GetUnsignedConstant(DwarfAttr::kUpperBound);
-  if (!count && !upper_bound)
-    return std::nullopt;
-
-  if (count)
-    return static_cast<size_t>(*count);
-  return static_cast<size_t>(*upper_bound);
-}
+// The attributes of an array subrange. Clang writes DW_AT_count, and GCC writes DW_AT_upper_bound.
+constexpr DwarfAttr kArraySubrangeAttrs[] = {DwarfAttr::kCount, DwarfAttr::kUpperBound,
+                                             DwarfAttr::kLowerBound, DwarfAttr::kType};
 
 // Returns true if the form uses any of the addr "x" encodings (relocatable references to the
 // address table).
@@ -134,6 +117,95 @@ llvm::DWARFContext* DwarfSymbolFactory::GetLLVMContext() const {
     return binary_->GetLLVMContext();
   }
   return nullptr;
+}
+
+std::optional<size_t> DwarfSymbolFactory::ReadArraySubrange(DwarfDieDecoder& range_decoder,
+                                                            const llvm::DWARFDie& subrange_die,
+                                                            int64_t default_lower_bound) const {
+  if (!range_decoder.Decode(subrange_die))
+    return std::nullopt;
+
+  // The basis type of the subrange decides the signedness of the bounds. Without a type, the basis
+  // type is a signed integer (DWARF 5 section 5.13).
+  bool is_signed = true;
+  if (llvm::DWARFDie type = range_decoder.GetReference(DwarfAttr::kType))
+    is_signed = IsSignedIntegerType(type).value_or(false);
+
+  int128_t count = 0;
+  if (std::optional<int128_t> count_value =
+          range_decoder.GetInteger(DwarfAttr::kCount, is_signed)) {
+    count = *count_value;
+  } else if (std::optional<int128_t> upper =
+                 range_decoder.GetInteger(DwarfAttr::kUpperBound, is_signed)) {
+    // The upper bound is the index of the last element, so an upper bound one below the lower bound
+    // is an empty array.
+    std::optional<int128_t> lower = range_decoder.GetInteger(DwarfAttr::kLowerBound, is_signed);
+    if (!lower && range_decoder.Has(DwarfAttr::kLowerBound))
+      return std::nullopt;  // A dynamic lower bound.
+    count = *upper - lower.value_or(default_lower_bound) + 1;
+  } else {
+    // No bound, or a dynamic bound (a reference or an expression). The size is unknown.
+    return std::nullopt;
+  }
+
+  if (count < 0 || count > static_cast<int128_t>(std::numeric_limits<size_t>::max()))
+    return std::nullopt;
+  return static_cast<size_t>(count);
+}
+
+std::optional<bool> DwarfSymbolFactory::IsSignedIntegerType(llvm::DWARFDie type) const {
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kEncoding, DwarfAttr::kType};
+  DwarfDieDecoder decoder = MakeDecoder(kAttrs);
+
+  // Typedefs, qualifiers, and enumerations can wrap the base type. The limit stops loops in corrupt
+  // symbols.
+  for (int i = 0; i < 8 && type; i++) {
+    if (!decoder.Decode(type))
+      return std::nullopt;
+    switch (static_cast<DwarfTag>(type.getTag())) {
+      case DwarfTag::kBaseType: {
+        std::optional<uint64_t> encoding = decoder.GetUnsignedConstant(DwarfAttr::kEncoding);
+        if (!encoding)
+          return std::nullopt;
+        switch (*encoding) {
+          case BaseType::kBaseTypeSigned:
+          case BaseType::kBaseTypeSignedChar:
+            return true;
+          case BaseType::kBaseTypeUnsigned:
+          case BaseType::kBaseTypeUnsignedChar:
+          case BaseType::kBaseTypeBoolean:
+          case BaseType::kBaseTypeUTF:
+            return false;
+          default:
+            return std::nullopt;
+        }
+      }
+      case DwarfTag::kTypedef:
+      case DwarfTag::kConstType:
+      case DwarfTag::kVolatileType:
+      case DwarfTag::kEnumerationType:
+        type = decoder.GetReference(DwarfAttr::kType);
+        break;
+      default:
+        return std::nullopt;
+    }
+  }
+  return std::nullopt;
+}
+
+DwarfLang DwarfSymbolFactory::GetLanguage(const llvm::DWARFDie& die) const {
+  llvm::DWARFUnit* unit = die.getDwarfUnit();
+  if (!unit)
+    return DwarfLang::kNone;
+
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kLanguage};
+  DwarfDieDecoder decoder = MakeDecoder(kAttrs);
+  if (!decoder.Decode(unit->getUnitDIE()))
+    return DwarfLang::kNone;
+  std::optional<uint64_t> language = decoder.GetUnsignedConstant(DwarfAttr::kLanguage);
+  if (!language || *language >= static_cast<uint64_t>(DwarfLang::kLast))
+    return DwarfLang::kNone;
+  return static_cast<DwarfLang>(*language);
 }
 
 llvm::DWARFUnit* DwarfSymbolFactory::GetUnitForDieRef(DwarfDieRef die_ref) const {
@@ -413,11 +485,12 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeArrayType(const llvm::DWARFDie& di
 
   // Find all subranges stored in the declaration order. More than one means a multi-dimensional
   // array.
+  int64_t default_lower_bound = DwarfLangDefaultLowerBound(GetLanguage(die));
   DwarfDieDecoder range_decoder = MakeDecoder(kArraySubrangeAttrs);
   std::vector<std::optional<size_t>> subrange_sizes;
   for (const llvm::DWARFDie& child : die) {
     if (static_cast<DwarfTag>(child.getTag()) == DwarfTag::kSubrangeType)
-      subrange_sizes.push_back(ReadArraySubrange(range_decoder, child));
+      subrange_sizes.push_back(ReadArraySubrange(range_decoder, child, default_lower_bound));
   }
 
   // Require a subrange with a count in it. If we find cases where this isn't the case, we could add
@@ -726,13 +799,18 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeEnum(const llvm::DWARFDie& die) co
   static constexpr DwarfAttr kEnumeratorAttrs[] = {DwarfAttr::kName, DwarfAttr::kConstValue};
   DwarfDieDecoder enumerator_decoder = MakeDecoder(kEnumeratorAttrs);
 
-  // Enum values can be signed or unsigned. This is determined by looking at the form of the storage
-  // for the underlying types. Since there are many values, we set the "signed" flag if any of them
-  // were signed, since a small positive integer could be represented either way but a signed value
-  // must be encoded differently.
+  // Enum values can be signed or unsigned. The underlying type decides, as in LLDB. It also decides
+  // how to read DW_FORM_data<n> values, which GCC uses for non-negative values (DWARF 5 section
+  // 7.5.5).
   //
-  // This could be enhanced by using ConstValues directly. See the enumeration header file for more.
-  bool is_signed = false;
+  // Without a known underlying type, the enumeration is signed if any value has DW_FORM_sdata. A
+  // small positive integer could be represented either way but a signed value must be encoded
+  // differently.
+  std::optional<bool> type_is_signed;
+  if (type)
+    type_is_signed = IsSignedIntegerType(type);
+  bool is_signed = type_is_signed.value_or(false);
+
   Enumeration::Map map;
   for (const llvm::DWARFDie& child : die) {
     if (static_cast<DwarfTag>(child.getTag()) != DwarfTag::kEnumerator)
@@ -740,25 +818,21 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeEnum(const llvm::DWARFDie& die) co
     if (!enumerator_decoder.Decode(child))
       continue;
 
-    std::optional<uint64_t> enumerator_value;
-    if (const DwarfDieDecoder::AttributeValue* value =
-            enumerator_decoder.GetValue(DwarfAttr::kConstValue)) {
-      DwarfForm form = static_cast<DwarfForm>(value->form.getForm());
-      if (form == DwarfForm::kUdata) {
-        enumerator_value = value->form.getAsUnsignedConstant();
-      } else if (form == DwarfForm::kSdata) {
-        // Cast signed values to unsigned.
-        if (std::optional<int64_t> signed_value = value->form.getAsSignedConstant()) {
+    if (!type_is_signed) {
+      if (const DwarfDieDecoder::AttributeValue* value =
+              enumerator_decoder.GetValue(DwarfAttr::kConstValue)) {
+        if (static_cast<DwarfForm>(value->form.getForm()) == DwarfForm::kSdata)
           is_signed = true;
-          enumerator_value = static_cast<uint64_t>(*signed_value);
-        }
       }
-      // Other forms are corrupted symbols or an unsupported format, so skip them.
     }
 
+    // The map stores signed values as their unsigned bits. Other forms are corrupted symbols or an
+    // unsupported format, so skip them.
+    std::optional<int128_t> value =
+        enumerator_decoder.GetInteger(DwarfAttr::kConstValue, type_is_signed.value_or(false));
     std::optional<const char*> enumerator_name = enumerator_decoder.GetCString(DwarfAttr::kName);
-    if (enumerator_name && enumerator_value)
-      map[*enumerator_value] = std::string(*enumerator_name);
+    if (enumerator_name && value)
+      map[static_cast<uint64_t>(*value)] = std::string(*enumerator_name);
   }
 
   LazySymbol lazy_type;

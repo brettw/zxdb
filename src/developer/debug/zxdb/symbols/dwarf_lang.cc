@@ -21,6 +21,28 @@ bool DwarfLangIsCFamily(DwarfLang lang) {
   // clang-format on
 }
 
+int64_t DwarfLangDefaultLowerBound(DwarfLang lang) {
+  switch (lang) {
+    case DwarfLang::kAda83:
+    case DwarfLang::kCobol74:
+    case DwarfLang::kCobol85:
+    case DwarfLang::kFortran77:
+    case DwarfLang::kFortran90:
+    case DwarfLang::kPascal83:
+    case DwarfLang::kModula2:
+    case DwarfLang::kAda95:
+    case DwarfLang::kFortran95:
+    case DwarfLang::kPLI:
+    case DwarfLang::kModula3:
+    case DwarfLang::kJulia:
+    case DwarfLang::kFortran03:
+    case DwarfLang::kFortran08:
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 const char* DwarfLangToString(DwarfLang lang) {
   // clang-format off
   switch (lang) {

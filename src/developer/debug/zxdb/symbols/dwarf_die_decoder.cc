@@ -180,6 +180,38 @@ std::optional<std::vector<uint8_t>> DwarfDieDecoder::GetBlock(DwarfAttr attribut
   return std::vector<uint8_t>(block->begin(), block->end());
 }
 
+std::optional<int128_t> DwarfDieDecoder::GetInteger(DwarfAttr attribute,
+                                                    bool data_is_signed) const {
+  const AttributeValue* value = GetValue(attribute);
+  if (!value)
+    return std::nullopt;
+
+  const llvm::DWARFFormValue& form = value->form;
+  switch (static_cast<DwarfForm>(form.getForm())) {
+    case DwarfForm::kData1:
+    case DwarfForm::kData2:
+    case DwarfForm::kData4:
+    case DwarfForm::kData8:
+      if (!data_is_signed)
+        break;
+      [[fallthrough]];
+    case DwarfForm::kSdata:
+    case DwarfForm::kImplicitConst:
+      // LLVM sign-extends the data forms.
+      if (std::optional<int64_t> as_signed = form.getAsSignedConstant())
+        return *as_signed;
+      return std::nullopt;
+    case DwarfForm::kUdata:
+      break;
+    default:
+      return std::nullopt;
+  }
+
+  if (std::optional<uint64_t> as_unsigned = form.getAsUnsignedConstant())
+    return *as_unsigned;
+  return std::nullopt;
+}
+
 ConstValue DwarfDieDecoder::GetConstValue(DwarfAttr attribute) const {
   const AttributeValue* value = GetValue(attribute);
   if (!value)
@@ -190,9 +222,29 @@ ConstValue DwarfDieDecoder::GetConstValue(DwarfAttr attribute) const {
   if (form_code == DwarfForm::kUdata) {
     if (std::optional<uint64_t> opt_unsigned = form.getAsUnsignedConstant())
       return ConstValue(*opt_unsigned);
-  } else if (form_code == DwarfForm::kSdata) {
+  } else if (form_code == DwarfForm::kSdata || form_code == DwarfForm::kImplicitConst) {
     if (std::optional<int64_t> opt_signed = form.getAsSignedConstant())
       return ConstValue(static_cast<int64_t>(*opt_signed));
+  } else if (form_code == DwarfForm::kData1 || form_code == DwarfForm::kData2 ||
+             form_code == DwarfForm::kData4 || form_code == DwarfForm::kData8) {
+    // LLVM gives the value as an integer. Write its bytes in target byte order.
+    std::optional<uint64_t> bits = form.getAsUnsignedConstant();
+    if (!bits)
+      return ConstValue();
+    size_t size = form_code == DwarfForm::kData1   ? 1
+                  : form_code == DwarfForm::kData2 ? 2
+                  : form_code == DwarfForm::kData4 ? 4
+                                                   : 8;
+    bool little_endian = value->unit->getContext().isLittleEndian();
+    std::vector<uint8_t> bytes(size);
+    for (size_t i = 0; i < size; i++)
+      bytes[little_endian ? i : size - 1 - i] = static_cast<uint8_t>(*bits >> (8 * i));
+    return ConstValue(std::move(bytes));
+  } else if (form_code == DwarfForm::kData16) {
+    // LLVM keeps the 16 bytes as a block, in the byte order of the file.
+    std::optional<llvm::ArrayRef<uint8_t>> block = form.getAsBlock();
+    if (block && block->size() == 16)
+      return ConstValue(std::vector<uint8_t>(block->begin(), block->end()));
   } else if (DwarfFormIsBlock(form_code)) {
     std::optional<llvm::ArrayRef<uint8_t>> block = form.getAsBlock();
     if (block && !block->empty())

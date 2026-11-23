@@ -12,6 +12,7 @@
 
 #include "src/developer/debug/zxdb/common/address_range.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_lang.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 #include "src/developer/debug/zxdb/symbols/symbol_factory.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
@@ -79,6 +80,19 @@ class DwarfSymbolFactory : public SymbolFactory {
 
   // Returns the unit that contains the DIE, or null.
   llvm::DWARFUnit* GetUnitForDieRef(DwarfDieRef die_ref) const;
+
+  // Returns the number of elements of an array subrange, or nullopt if it's unknown. The decoder
+  // must use kArraySubrangeAttrs. The default lower bound depends on the language of the unit.
+  std::optional<size_t> ReadArraySubrange(DwarfDieDecoder& range_decoder,
+                                          const llvm::DWARFDie& subrange_die,
+                                          int64_t default_lower_bound) const;
+
+  // Returns whether the integer type is signed, after typedefs, qualifiers, and the underlying type
+  // of an enumeration. Returns nullopt if the type isn't an integer type or can't be decoded.
+  std::optional<bool> IsSignedIntegerType(llvm::DWARFDie type) const;
+
+  // Returns the language of the unit that contains the DIE.
+  DwarfLang GetLanguage(const llvm::DWARFDie& die) const;
 
   // Makes a decoder for the given attribute table. The decoder uses the binary, so it finds type
   // unit signatures and file tables in the binary's caches.
