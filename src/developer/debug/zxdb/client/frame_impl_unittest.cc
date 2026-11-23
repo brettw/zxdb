@@ -14,12 +14,14 @@
 #include "src/developer/debug/zxdb/client/remote_api_test.h"
 #include "src/developer/debug/zxdb/client/session.h"
 #include "src/developer/debug/zxdb/client/thread.h"
+#include "src/developer/debug/zxdb/expr/eval_context.h"
 #include "src/developer/debug/zxdb/symbols/code_block.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/location.h"
 #include "src/developer/debug/zxdb/symbols/symbol_test_parent_setter.h"
 #include "src/developer/debug/zxdb/symbols/variable.h"
+#include "src/developer/debug/zxdb/symbols/variable_test_support.h"
 
 namespace zxdb {
 
@@ -150,6 +152,48 @@ TEST_F(FrameImplTest, AsyncBasePointer) {
   debug::MessageLoop::Current()->RunUntilNoTasks();
   ASSERT_TRUE(called);
   EXPECT_EQ(kMemoryValue, result_base);
+}
+
+TEST_F(FrameImplTest, CanonicalFrameBase) {
+  MockThread thread(InjectProcess(1234));
+  constexpr uint64_t kIp = 0x1000;
+  constexpr uint64_t kSp = 0x2000;
+  constexpr uint64_t kCfa = 0x2040;
+  auto function = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);
+  function->set_frame_base(VariableLocation(DwarfExpr({DwarfOp::kCallFrameCfa})));
+  Location location(kIp, FileLine("file.cc", 12), 0, SymbolContext::ForRelativeAddresses(),
+                    function);
+
+  auto make_frame = [&](uint64_t sp, uint64_t cfa) {
+    debug_ipc::StackFrame record(kIp, sp, cfa);
+    record.regs.emplace_back(RegisterID::kX64_rip, kIp);
+    return std::make_unique<FrameImpl>(&thread, record, location);
+  };
+
+  Stack& stack = thread.GetStack();
+  std::vector<std::unique_ptr<Frame>> partial;
+  partial.push_back(make_frame(kSp, 0));
+  stack.SetFramesForTest(std::move(partial), false);
+  EXPECT_EQ(0u, stack[0]->GetBasePointer());
+
+  std::vector<std::unique_ptr<Frame>> full;
+  full.push_back(make_frame(kSp, kCfa));
+  full.push_back(make_frame(kCfa, 0));
+  stack.SetFramesForTest(std::move(full), true);
+  EXPECT_EQ(kCfa, stack[0]->GetBasePointer());
+  EXPECT_EQ(0u, stack[1]->GetBasePointer());
+
+  // DW_OP_fbreg -8 locates the local eight bytes below the CFA.
+  auto local =
+      MakeUint64VariableForTest("local", VariableLocation(DwarfExpr({DwarfOp::kFbreg, 0x78})));
+  mock_remote_api()->AddMemory(kCfa - 8, {42, 0, 0, 0, 0, 0, 0, 0});
+  std::optional<ErrOrValue> result;
+  stack[0]->GetEvalContext()->GetVariableValue(
+      local, [&](ErrOrValue value) { result = std::move(value); });
+  loop().RunUntilNoTasks();
+  ASSERT_TRUE(result);
+  ASSERT_FALSE(result->has_error()) << result->err().msg();
+  EXPECT_EQ(42u, result->value().GetAs<uint64_t>());
 }
 
 // Tests the function to set a register. It should call the backend with the new value, and then

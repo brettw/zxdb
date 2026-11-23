@@ -252,10 +252,9 @@ bool FrameImpl::EnsureBasePointer() {
   // Binding |this| here is OK because the DwarfExprEval is owned by us and won't give callbacks
   // after it's destroyed.
   auto save_result = [this](DwarfExprEval* eval, const Err&) {
-    // We don't currently report errors for frame base requests, but instead just fall back on
-    // what was computed by the backend.
+    // A memory location describes the frame base by its address (DWARF 5 section 3.3.5).
     computed_base_pointer_ = 0;
-    if (eval->is_success() && eval->GetResultType() == DwarfExprEval::ResultType::kValue) {
+    if (eval->is_success() && eval->GetResultType() != DwarfExprEval::ResultType::kData) {
       DwarfStackEntry result = eval->GetResult();
       if (result.TreatAsUnsigned())
         computed_base_pointer_ = result.unsigned_value();
