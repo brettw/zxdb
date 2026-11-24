@@ -5,10 +5,11 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_EXPR_TEMPLATE_TYPE_EXTRACTOR_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_EXPR_TEMPLATE_TYPE_EXTRACTOR_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "src/developer/debug/zxdb/common/err.h"
+#include "src/developer/debug/zxdb/symbols/identifier.h"
 
 namespace zxdb {
 
@@ -52,6 +53,9 @@ struct TemplateTypeResult {
 };
 
 TemplateTypeResult ExtractTemplateType(const std::vector<ExprToken>& tokens, size_t begin_token);
+
+// Splits a compiler-supplied function name at top-level scope separators.
+std::optional<Identifier> ParseQualifiedFunctionName(const std::string& name);
 
 }  // namespace zxdb
 

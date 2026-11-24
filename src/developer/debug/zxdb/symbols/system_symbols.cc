@@ -52,8 +52,10 @@ BuildIDIndex::Entry LoadLocalModuleSymbols(const std::string& name, const std::s
 
 }  // namespace
 
-SystemSymbols::SystemSymbols(RequestDownloadFunction f)
-    : request_download_(std::move(f)), weak_factory_(this) {}
+SystemSymbols::SystemSymbols(RequestDownloadFunction f, FunctionNameParser function_name_parser)
+    : request_download_(std::move(f)),
+      function_name_parser_(function_name_parser),
+      weak_factory_(this) {}
 
 SystemSymbols::~SystemSymbols() = default;
 
@@ -109,7 +111,8 @@ Err SystemSymbols::GetModule(const std::string& name, const std::string& build_i
   }
 
   auto binary = std::make_unique<DwarfBinaryImpl>(entry.debug_info, entry.binary, build_id);
-  auto module_impl = fxl::MakeRefCounted<ModuleSymbolsImpl>(std::move(binary), entry.build_dir);
+  auto module_impl = fxl::MakeRefCounted<ModuleSymbolsImpl>(std::move(binary), entry.build_dir,
+                                                            function_name_parser_);
   if (Err err = module_impl->Load(create_index_); err.has_error()) {
     return err;
   }

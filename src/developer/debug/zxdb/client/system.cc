@@ -33,6 +33,7 @@
 #include "src/developer/debug/zxdb/client/tracepoint.h"
 #include "src/developer/debug/zxdb/common/join_callbacks.h"
 #include "src/developer/debug/zxdb/common/string_util.h"
+#include "src/developer/debug/zxdb/expr/template_type_extractor.h"
 #include "src/developer/debug/zxdb/expr/vector_register_format.h"
 #include "src/developer/debug/zxdb/symbols/loaded_module_symbols.h"
 #include "src/developer/debug/zxdb/symbols/module_symbol_status.h"
@@ -274,7 +275,8 @@ fxl::RefPtr<SettingSchema> CreateSchema() {
 System::System(Session* session)
     : ClientObject(session),
       download_manager_(this),
-      symbols_(std::bind_front(&DownloadManager::RequestDownload, &download_manager_)),
+      symbols_(std::bind_front(&DownloadManager::RequestDownload, &download_manager_),
+               ParseQualifiedFunctionName),
       settings_(GetSchema(), nullptr),
       weak_factory_(this) {
   // Create the default target.

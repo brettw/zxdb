@@ -6,6 +6,7 @@
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_MODULE_SYMBOLS_IMPL_H_
 
 #include <map>
+#include <mutex>
 #include <unordered_map>
 
 #include "gtest/gtest_prod.h"
@@ -58,6 +59,10 @@ class ModuleSymbolsImpl final : public ModuleSymbols, public DwarfSymbolFactory:
   fxl::WeakPtr<ModuleSymbolsImpl> GetWeakPtr();
 
   // ModuleSymbols implementation.
+  std::vector<Location> ResolveNamedSymbols(const SymbolContext& context,
+                                            const ResolveOptions& options, const Identifier& query,
+                                            std::vector<LazySymbol> symbols) const override;
+  const FunctionNameIndex& GetFunctionNames() const override;
   ModuleSymbolStatus GetStatus() const override;
   std::time_t GetModificationTime() const override;
   std::string GetBuildDir() const override;
@@ -108,7 +113,8 @@ class ModuleSymbolsImpl final : public ModuleSymbols, public DwarfSymbolFactory:
   //
   // The build_dir, if not empty, will be used to override the compilation_dir of FileLine objects,
   // which is useful because in Fuchsia checkout, the compilation_dir will always be ".".
-  explicit ModuleSymbolsImpl(std::unique_ptr<DwarfBinaryImpl> binary, const std::string& build_dir);
+  explicit ModuleSymbolsImpl(std::unique_ptr<DwarfBinaryImpl> binary, const std::string& build_dir,
+                             FunctionNameParser function_name_parser);
   ~ModuleSymbolsImpl() override;
 
   // Helpers for ResolveInputLocation() for the different types of inputs.
@@ -118,9 +124,7 @@ class ModuleSymbolsImpl final : public ModuleSymbols, public DwarfSymbolFactory:
   std::vector<Location> ResolveSymbolInputLocation(const SymbolContext& symbol_context,
                                                    const InputLocation& input_location,
                                                    const ResolveOptions& options) const;
-  std::vector<Location> ResolveDebugNamesSymbolInputLocation(const SymbolContext& symbol_context,
-                                                             const Identifier& symbol_to_find,
-                                                             const ResolveOptions& options) const;
+  std::vector<LazySymbol> FindDebugNamesSymbols(const Identifier& name) const;
   std::vector<Location> ResolveAddressInputLocation(const SymbolContext& symbol_context,
                                                     const InputLocation& input_location,
                                                     const ResolveOptions& options) const;
@@ -177,7 +181,8 @@ class ModuleSymbolsImpl final : public ModuleSymbols, public DwarfSymbolFactory:
   // location will be the beginning of the ELF symbol.
   Location MakeElfSymbolLocation(const SymbolContext& symbol_context,
                                  std::optional<uint64_t> relative_address,
-                                 const ElfSymbolRecord& record) const;
+                                 const ElfSymbolRecord& record, FileLine file_line = {},
+                                 int column = 0) const;
 
   // Fills the index and populates the dwo files.
   void CreateIndex();
@@ -196,6 +201,9 @@ class ModuleSymbolsImpl final : public ModuleSymbols, public DwarfSymbolFactory:
   std::unordered_map<uint64_t, size_t> dwo_skeleton_offset_to_index_;
 
   std::string build_dir_;
+
+  // Splits recovered function names. The index is rebuilt by CreateIndex() and needs it again.
+  FunctionNameParser function_name_parser_;
 
   // Guaranteed non-null. This is a unique pointer to allow us to move it despite the Index object
   // being non-moveable.
@@ -219,6 +227,7 @@ class ModuleSymbolsImpl final : public ModuleSymbols, public DwarfSymbolFactory:
   //    IndexDieRefToSymbol.
   using ElfSymbolMap = std::multimap<std::string, const ElfSymbolRecord>;
   ElfSymbolMap mangled_elf_symbols_;
+  mutable std::once_flag index_elf_functions_;
 
   // All symbols in the mangled_elf_symbols_ map (pointers owned by that structure) sorted by the
   // relative address. Theoretically there can be more than one symbol for the same address.

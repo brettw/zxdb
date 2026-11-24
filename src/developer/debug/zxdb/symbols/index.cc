@@ -127,6 +127,21 @@ class NamedSymbolRef : public IndexNode::SymbolRef {
   bool has_modified_template_name_ = false;
 };
 
+// A unit-level declaration can lack enclosing scopes. A linkage name can also be the only
+// name available. Both spellings must refer to the definition, even when a separate DIE names it.
+void IndexFunctionNames(FunctionNameIndex& names, const NamedSymbolRef& ref,
+                        llvm::DWARFDie definition, llvm::DWARFDie origin) {
+  auto declaration = origin ? origin : definition;
+  if (declaration.getParent() == declaration.getDwarfUnit()->getUnitDIE()) {
+    if (auto name = definition.getShortName(); name && std::string_view(name).contains("::"))
+      names.AddQualifiedName(name, ref);
+  } else if (!ref.name().empty() || definition.getShortName()) {
+    return;  // The enclosing declarations supply the scope.
+  }
+  if (auto linkage = definition.getLinkageName())
+    names.AddLinkageName(linkage, ref, ref.name());
+}
+
 // Returns true if the given abbreviation defines a PC range.
 bool AbbrevHasCode(const llvm::DWARFAbbreviationDeclaration* abbrev) {
   for (const auto spec : abbrev->attributes()) {
@@ -198,7 +213,7 @@ class UnitIndexer {
   // To use, first call Scan() to populate the indexable_ array, then call Index() to add the
   // items to the given index node root. The Scan pass will additionally add any entrypoint
   // functions it finds to the main_functions vector.
-  void Scan(std::vector<IndexNode::SymbolRef>* main_functions);
+  void Scan(std::vector<IndexNode::SymbolRef>* main_functions, FunctionNameIndex* names);
   void Index(IndexNode* root);
 
  private:
@@ -261,7 +276,8 @@ class UnitIndexer {
 };
 
 // The symbol storage will be filled with the indexable entries.
-void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
+void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
+                       FunctionNameIndex* names) {
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kSpecification, DwarfAttr::kDeclaration,
                                          DwarfAttr::kConstValue,    DwarfAttr::kMainSubprogram,
                                          DwarfAttr::kName,          DwarfAttr::kAbstractOrigin};
@@ -335,9 +351,8 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
 
     // Compute the offset of a separate declaration if this DIE has one. This can be unit-relative
     // or .debug_info-relative (global).
-    uint64_t decl_offset = 0;
-    if (llvm::DWARFDie decl_die = decoder.GetReference(DwarfAttr::kSpecification))
-      decl_offset = decl_die.getOffset();
+    llvm::DWARFDie decl = decoder.GetReference(DwarfAttr::kSpecification);
+    uint64_t decl_offset = decl ? decl.getOffset() : 0;
 
     FX_DCHECK(scanner_.die_index() < indexable_.size());
     std::optional<bool> is_declaration = decoder.GetBool(DwarfAttr::kDeclaration);
@@ -348,6 +363,12 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions) {
     indexable_[scanner_.die_index()] =
         NamedSymbolRef(ref_kind, dwo_index_, unit_.GetDieRef(die->getOffset()), kind,
                        name ? *name : "", decl_offset, decoder.Has(DwarfAttr::kAbstractOrigin));
+
+    if (kind == IndexNode::Kind::kFunction) {
+      IndexFunctionNames(*names, indexable_[scanner_.die_index()],
+                         llvm::DWARFDie(unit_.GetLLVMUnit(), die),
+                         decl ? decl : decoder.GetReference(DwarfAttr::kAbstractOrigin));
+    }
 
     // Check for "main" function annotation.
     std::optional<bool> is_main_subprogram = decoder.GetBool(DwarfAttr::kMainSubprogram);
@@ -730,7 +751,7 @@ void Index::IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, bool forc
     UnitIndexer indexer(unit, dwo_index);
     indexer.set_force_slow_path(force_slow_path);
 
-    indexer.Scan(&main_functions_);
+    indexer.Scan(&main_functions_, &function_names_);
     indexer.Index(&root_);
   }
 

@@ -714,9 +714,6 @@ TEST(DwarfSymbolFactory, TypeUnitReference) {
 TEST(DwarfSymbolFactory, AddrxOffsetLowPc) {
   // A DW_AT_low_pc of DW_FORM_LLVM_addrx_offset is an address table entry plus an offset.
   std::string path = TestSymbolModule::GetTestDataDir() + "addrx_offset/clang_addrx_offset.so";
-  if (!std::filesystem::exists(path))
-    GTEST_SKIP() << "The fixture needs Clang.";
-
   TestSymbolModule setup(path, "");
   ASSERT_TRUE(setup.Init().ok());
   llvm::DWARFContext* context = setup.symbols()->binary()->GetLLVMContext();
@@ -1060,9 +1057,6 @@ TEST(DwarfSymbolFactory, InlinedParameterOrder) {
   // Clang omits unused parameters from concrete inlined instances. The parameters keep the order of
   // the declaration.
   std::string path = TestSymbolModule::GetTestDataDir() + "inline_params/clang_inline_params.so";
-  if (!std::filesystem::exists(path))
-    GTEST_SKIP() << "The fixture needs Clang.";
-
   TestSymbolModule setup(path, "");
   ASSERT_TRUE(setup.Init().ok());
   llvm::DWARFContext* context = setup.symbols()->binary()->GetLLVMContext();

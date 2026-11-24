@@ -62,6 +62,10 @@ class MockModuleSymbols : public ModuleSymbols {
   void set_build_dir(const std::string& build_dir) { build_dir_ = build_dir; }
 
   // ModuleSymbols implementation.
+  std::vector<Location> ResolveNamedSymbols(const SymbolContext& context,
+                                            const ResolveOptions& options, const Identifier& query,
+                                            std::vector<LazySymbol> symbols) const override;
+  const FunctionNameIndex& GetFunctionNames() const override { return index_.function_names(); }
   ModuleSymbolStatus GetStatus() const override;
   std::time_t GetModificationTime() const override { return modification_time_; }
   std::string GetBuildDir() const override { return build_dir_; }

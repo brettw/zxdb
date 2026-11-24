@@ -10,7 +10,7 @@
 #include <string>
 #include <string_view>
 
-#include "src/developer/debug/zxdb/symbols/identifier.h"
+#include "src/developer/debug/zxdb/symbols/function_name_index.h"
 #include "src/developer/debug/zxdb/symbols/index_node.h"
 #include "src/developer/debug/zxdb/symbols/skeleton_unit.h"
 #include "src/developer/debug/zxdb/symbols/unit_index.h"
@@ -34,7 +34,8 @@ class DwarfUnit;
 
 class Index {
  public:
-  Index() = default;
+  explicit Index(FunctionNameParser function_name_parser = nullptr)
+      : function_names_(root_, function_name_parser) {}
   ~Index() = default;
 
   // Returns the information on the .dwo files that are referenced by this binary.
@@ -80,6 +81,9 @@ class Index {
   const std::vector<IndexNode::SymbolRef>& main_functions() const { return main_functions_; }
   std::vector<IndexNode::SymbolRef>& main_functions() { return main_functions_; }
 
+  FunctionNameIndex& function_names() { return function_names_; }
+  const FunctionNameIndex& function_names() const { return function_names_; }
+
   const IndexNode& root() const { return root_; }
   IndexNode& root() { return root_; }
 
@@ -100,6 +104,7 @@ class Index {
 
   // Symbol index.
   IndexNode root_ = IndexNode(IndexNode::Kind::kRoot);
+  FunctionNameIndex function_names_;
 
   // Maps full path names to compile units that reference them. This must not be mutated once the
   // file_name_index_ is built.

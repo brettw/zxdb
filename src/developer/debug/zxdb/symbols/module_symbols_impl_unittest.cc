@@ -424,6 +424,12 @@ TEST(ModuleSymbols, ResolvePLTEntry) {
   ResolveOptions options;
   options.symbolize = true;
 
+  EXPECT_TRUE(setup.symbols()
+                  ->ResolveInputLocation(
+                      symbol_context, InputLocation(Identifier(TestSymbolModule::kPltFunctionName)),
+                      options)
+                  .empty());
+
   // Name->PLT symbol.
   auto result = setup.symbols()->ResolveInputLocation(
       symbol_context,
@@ -628,6 +634,28 @@ TEST(ModuleSymbols, StrippedElfSymbols) {
   ASSERT_TRUE(elf_symbol);
   EXPECT_EQ(kSymName, elf_symbol->linkage_name());
   EXPECT_EQ("GetIntPtr()", elf_symbol->GetFullName());
+}
+
+TEST(ModuleSymbols, FunctionNameParserInSplitUnit) {
+  const std::string dir = TestSymbolModule::GetTestDataDir() + "fission/";
+  TestSymbolModule module(dir + "fission", "fission");
+  auto function_name_parser = [](const std::string& name) -> std::optional<Identifier> {
+    if (name == "CallOther")
+      return Identifier(IdentifierQualification::kGlobal, IdentifierComponent("alternate"));
+    return std::nullopt;
+  };
+  ASSERT_TRUE(module.Init(dir, true, function_name_parser).ok());
+
+  // Inspect the DWARF index before an ELF lookup can supply the same name.
+  size_t matches = 0;
+  module.symbols()->GetIndex().function_names().Visit(
+      Identifier("alternate"), false, [&](const Identifier&, const FunctionNameIndex::Ref& ref) {
+        ++matches;
+        auto dwarf = std::get_if<IndexNode::SymbolRef>(&ref);
+        EXPECT_TRUE(dwarf && !dwarf->is_main_binary());
+        return true;
+      });
+  EXPECT_EQ(1u, matches);
 }
 
 // Tests that a unified index is created for all .dwo files.

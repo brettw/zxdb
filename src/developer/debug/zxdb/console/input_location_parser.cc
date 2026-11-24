@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <set>
 
 #include "src/developer/debug/zxdb/client/frame.h"
 #include "src/developer/debug/zxdb/client/process.h"
@@ -21,6 +22,7 @@
 #include "src/developer/debug/zxdb/expr/find_name.h"
 #include "src/developer/debug/zxdb/expr/found_name.h"
 #include "src/developer/debug/zxdb/expr/permissive_input_location.h"
+#include "src/developer/debug/zxdb/format/format_name.h"
 #include "src/developer/debug/zxdb/format/string_util.h"
 #include "src/developer/debug/zxdb/symbols/identifier.h"
 #include "src/developer/debug/zxdb/symbols/index.h"
@@ -265,8 +267,7 @@ Err ResolveInputLocations(const ProcessSymbols* process_symbols,
   ResolveOptions options;
   options.symbolize = symbolize;
 
-  *locations = ResolvePermissiveInputLocations(process_symbols, options,
-                                               FindNameContext(process_symbols), input_locations);
+  *locations = ResolvePermissiveInputLocations(process_symbols, options, input_locations);
 
   if (locations->empty()) {
     if (input_locations.size() == 1) {
@@ -451,11 +452,20 @@ void CompleteInputLocation(const Command& command, const std::string& prefix,
   options.max_results = kMaxFunctions;
   found_names.clear();
   FindName(*find_context, options, prefix_identifier, &found_names);
-  for (const FoundName& found : found_names) {
-    // When completing names, globally qualify the names to prevent ambiguity.
-    completions->push_back(found.function()->GetIdentifier().GetFullName());
+  std::set<std::string> functions;
+  for (const FoundName& found : found_names)
+    functions.insert(FormatIdentifierForInput(found.function()->GetIdentifier()));
+
+  const Identifier query = ToIdentifier(prefix_identifier);
+  for (const auto* module : command.target()->GetSymbols()->GetModuleSymbols()) {
+    if (functions.size() >= kMaxFunctions)
+      break;
+    module->GetFunctionNames().Visit(query, true, [&](const Identifier& name, const auto&) {
+      functions.insert(FormatIdentifierForInput(name));
+      return functions.size() < kMaxFunctions;
+    });
   }
-  options.find_functions = false;
+  completions->insert(completions->end(), functions.begin(), functions.end());
 }
 
 }  // namespace zxdb

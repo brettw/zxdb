@@ -89,7 +89,8 @@ class TestSymbolModule {
 
   ~TestSymbolModule();
 
-  Err Init(const std::string& build_dir = "", bool should_index = true);
+  Err Init(const std::string& build_dir = "", bool should_index = true,
+           FunctionNameParser function_name_parser = nullptr);
 
   ModuleSymbolsImpl* symbols() const { return symbols_.get(); }
 

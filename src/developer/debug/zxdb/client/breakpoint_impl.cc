@@ -217,12 +217,10 @@ void BreakpointImpl::DidLoadModuleSymbols(Process* process, LoadedModuleSymbols*
   if (!CouldApplyToProcess(process))
     return;  // Irrelevant process.
 
-  FindNameContext find_context(process->GetSymbols());
-
   ResolveOptions options = GetResolveOptions();
   bool needs_sync = false;
-  for (const auto& loc : ExpandPermissiveInputLocationNames(find_context, settings_.locations)) {
-    auto resolved_locations = module->ResolveInputLocation(loc, options);
+  for (const auto& loc : settings_.locations) {
+    auto resolved_locations = ResolvePermissiveInputLocation(*module, options, loc);
 
     needs_sync |= procs_[process].AddLocations(this, process, resolved_locations);
 
@@ -433,10 +431,9 @@ bool BreakpointImpl::RegisterProcess(Process* process) {
 
   // Resolve addresses.
   ResolveOptions options = GetResolveOptions();
-  FindNameContext find_context(process->GetSymbols());
 
-  auto resolved_locations = ResolvePermissiveInputLocations(process->GetSymbols(), options,
-                                                            find_context, settings_.locations);
+  auto resolved_locations =
+      ResolvePermissiveInputLocations(process->GetSymbols(), options, settings_.locations);
 
   changed |= record.AddLocations(this, process, resolved_locations);
 

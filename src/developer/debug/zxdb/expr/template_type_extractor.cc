@@ -7,6 +7,7 @@
 #include <lib/syslog/cpp/macros.h>
 
 #include "src/developer/debug/zxdb/expr/expr_token.h"
+#include "src/developer/debug/zxdb/expr/expr_tokenizer.h"
 #include "src/developer/debug/zxdb/expr/operator_keyword.h"
 
 namespace zxdb {
@@ -46,18 +47,21 @@ bool NeedsSpaceBefore(const std::vector<ExprToken>& tokens, size_t first_index, 
     return true;
 
   // Most other things can go next to each other as far as valid C++ goes. These are some cases that
-  // this does incorrectly, see the comment above ExtractTemplateType() for why this isn't so bad
+  // this does incorrectly, see the comment above DoExtractTemplateType() for why this isn't so bad
   // and how it could be improved.
   return false;
 }
 
-}  // namespace
-
+// When stop_at_scope is true, stop before the top-level "::" that ends a name component. For
+// example, Box<ns::T>::f yields Box<ns::T>. A conversion operator keeps its qualified target type,
+// as in operator ns::T.
+//
 // Currently it assumes all operators can be put next to each other without affecting meaning. When
 // we're canonicalizing types for the purposes of string comparisons, this is almost certainly the
 // case. If we start using the output from this function for more things, we'll want to handle these
 // cases better.
-TemplateTypeResult ExtractTemplateType(const std::vector<ExprToken>& tokens, size_t begin_token) {
+TemplateTypeResult DoExtractTemplateType(const std::vector<ExprToken>& tokens, size_t begin_token,
+                                         bool stop_at_scope) {
   TemplateTypeResult result;
 
   bool inhibit_next_space = false;
@@ -78,7 +82,8 @@ TemplateTypeResult ExtractTemplateType(const std::vector<ExprToken>& tokens, siz
       nesting.emplace_back(i, ExprTokenType::kGreater);
     } else if (nesting.empty() &&
                (type == ExprTokenType::kGreater || type == ExprTokenType::kRightParen ||
-                type == ExprTokenType::kComma)) {
+                type == ExprTokenType::kComma ||
+                (stop_at_scope && type == ExprTokenType::kColonColon))) {
       // These tokens mark the end of a type when seen without nesting. Usually this marks the end
       // of the enclosing cast or template.
       break;
@@ -96,7 +101,13 @@ TemplateTypeResult ExtractTemplateType(const std::vector<ExprToken>& tokens, siz
         inhibit_next_space = true;
         continue;  // Skip the code that appends the token at the bottom. We already did it.
       }
-      // Otherwise the "operator" keyword is invalid. Fall through to append as a literal.
+      // A conversion operator includes its target type, which can itself be qualified.
+      if (stop_at_scope && nesting.empty()) {
+        result.canonical_name += "operator ";
+        stop_at_scope = false;
+        continue;
+      }
+      // Fall through to append the keyword as a literal.
     }
 
     if (!inhibit_next_space && NeedsSpaceBefore(tokens, begin_token, i))
@@ -117,6 +128,36 @@ TemplateTypeResult ExtractTemplateType(const std::vector<ExprToken>& tokens, siz
     result.end_token = tokens.size();
   }
   return result;
+}
+
+}  // namespace
+
+TemplateTypeResult ExtractTemplateType(const std::vector<ExprToken>& tokens, size_t begin_token) {
+  return DoExtractTemplateType(tokens, begin_token, false);
+}
+
+std::optional<Identifier> ParseQualifiedFunctionName(const std::string& name) {
+  ExprTokenizer tokenizer(name);
+  if (!tokenizer.Tokenize())
+    return std::nullopt;
+  const auto& tokens = tokenizer.tokens();
+  Identifier result(IdentifierQualification::kGlobal);
+  size_t pos = !tokens.empty() && tokens.front().type() == ExprTokenType::kColonColon ? 1 : 0;
+  while (pos < tokens.size()) {
+    auto component = DoExtractTemplateType(tokens, pos, true);
+    if (!component.success || component.end_token == pos)
+      return std::nullopt;
+    if (component.canonical_name == "(anonymous namespace)")
+      result.AppendComponent(IdentifierComponent(SpecialIdentifier::kAnon));
+    else
+      result.AppendComponent(IdentifierComponent(std::move(component.canonical_name)));
+    pos = component.end_token;
+    if (pos == tokens.size())
+      return result;
+    if (tokens[pos++].type() != ExprTokenType::kColonColon)
+      return std::nullopt;
+  }
+  return std::nullopt;
 }
 
 }  // namespace zxdb

@@ -9,6 +9,9 @@ lookup subsystem (Layer 2) for `zxdb`. It decodes DWARF Debug Information
 Entries (DIEs), line tables, and ELF symbols into a reference-counted object
 graph, and evaluates DWARF location expressions (`DwarfExprEval`).
 
+For lookup behavior with incomplete DWARF or ELF symbols alone, see
+[Finding a breakpoint by function name](name_lookup.md).
+
 ## Interface
 
 Public headers expose these symbol classes, factories, and evaluators:
@@ -160,8 +163,9 @@ Using `zxdb/symbols` produces these disk, cache, and IPC side effects:
   the binary has 256 KB or more of line tables: one, plus one for each 2 MB,
   up to six.
 - `ElfSymbolRecord::GetUnmangledName()` demangles and caches the name on demand.
-  Loading a module builds its ELF name and address indices without demangling
-  each symbol.
+  Loading a module builds the raw ELF name and address indices. The first
+  function-name lookup or completion indexes the source spellings of defined
+  ELF functions.
 - `SystemSymbols::GetModule()` loads ELF and DWARF files from disk via
   `BuildIDIndex` and builds the symbol `Index`, or calls
   `RequestDownloadFunction` when local symbols are missing.

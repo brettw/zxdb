@@ -19,11 +19,12 @@ namespace {
 class ModuleIndexer {
  public:
   ModuleIndexer(fxl::WeakPtr<ModuleSymbols> module_symbols, DwarfBinary& binary,
-                const std::string& build_dir)
+                const std::string& build_dir, FunctionNameParser function_name_parser)
       : weak_module_symbols_(std::move(module_symbols)),
         binary_(binary),
         build_dir_(build_dir),
-        index_(std::make_unique<Index>()) {}
+        function_name_parser_(function_name_parser),
+        index_(std::make_unique<Index>(function_name_parser)) {}
 
   ModuleIndexerResult GetResult();
 
@@ -40,6 +41,7 @@ class ModuleIndexer {
   fxl::WeakPtr<ModuleSymbols> weak_module_symbols_;
   DwarfBinary& binary_;
   const std::string build_dir_;
+  const FunctionNameParser function_name_parser_;
 
   std::mutex index_mutex_;
   std::unique_ptr<Index> index_;  // Guarded by index_mutex_.
@@ -115,13 +117,14 @@ std::unique_ptr<DwoInfo> ModuleIndexer::IndexOneDwo(size_t skeleton_index,
     return nullptr;
   }
 
-  Index dwo_index;
+  Index dwo_index(function_name_parser_);
   dwo_index.CreateIndex(*dwo_info->binary(), static_cast<int32_t>(skeleton_index));
 
   // Merge into the main index.
   {
     std::unique_lock<std::mutex> lock(index_mutex_);
     index_->root().MergeFrom(dwo_index.root());
+    index_->function_names().MergeFrom(dwo_index.function_names());
   }
 
   return dwo_info;
@@ -142,8 +145,9 @@ std::string ModuleIndexer::DwoPathForSkeleton(const SkeletonUnit& skeleton) cons
 }  // namespace
 
 ModuleIndexerResult IndexModule(fxl::WeakPtr<ModuleSymbols> module_symbols, DwarfBinary& binary,
-                                const std::string& build_dir) {
-  ModuleIndexer indexer(module_symbols, binary, build_dir);
+                                const std::string& build_dir,
+                                FunctionNameParser function_name_parser) {
+  ModuleIndexer indexer(module_symbols, binary, build_dir, function_name_parser);
 
   // This must be done first to discover all of the .dwo references in the main binary.
   indexer.IndexMainBinary();

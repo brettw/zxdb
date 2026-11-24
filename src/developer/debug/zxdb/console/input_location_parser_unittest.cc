@@ -13,6 +13,7 @@
 #include "src/developer/debug/zxdb/client/session.h"
 #include "src/developer/debug/zxdb/common/test_with_loop.h"
 #include "src/developer/debug/zxdb/console/command.h"
+#include "src/developer/debug/zxdb/expr/expr_parser.h"
 #include "src/developer/debug/zxdb/expr/mock_eval_context.h"
 #include "src/developer/debug/zxdb/symbols/collection.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
@@ -370,6 +371,29 @@ TEST_F(InputLocationParserTest, CompleteInputLocation) {
   CompleteInputLocation(command, "aNamespace::Class::M", &found);
   ASSERT_EQ(1u, found.size());
   EXPECT_EQ("::aNamespace::Class::MemberFunction", found[0]);
+
+  auto& names = mock_module_symbols_->index().function_names();
+  Identifier name;
+  ASSERT_TRUE(ExprParser::ParseIdentifier("::a::b::foo", &name).ok());
+  names.Add(name, IndexNode::SymbolRef());
+  names.Add(name, IndexNode::SymbolRef());
+  found.clear();
+  CompleteInputLocation(command, "b::fo", &found);
+  EXPECT_EQ((std::vector<std::string>{"::a::b::foo"}), found);
+  Identifier local(IdentifierQualification::kGlobal, IdentifierComponent("main()"));
+  local.AppendComponent(IdentifierComponent("G"));
+  local.AppendComponent(IdentifierComponent("operator int"));
+  names.Add(local, IndexNode::SymbolRef());
+  found.clear();
+  CompleteInputLocation(command, "G::op", &found);
+  ASSERT_EQ(1u, found.size());
+  Identifier parsed;
+  ASSERT_TRUE(ExprParser::ParseIdentifier(found.front(), &parsed).ok());
+  EXPECT_EQ(local, parsed);
+
+  found.clear();
+  CompleteInputLocation(command, "::b::fo", &found);
+  EXPECT_TRUE(found.empty());
 }
 
 }  // namespace zxdb

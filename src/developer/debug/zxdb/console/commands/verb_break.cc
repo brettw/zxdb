@@ -131,6 +131,13 @@ ELF PLT breakpoints for system calls
   The supplied string must be the exact name in the ELF binary. This means C++
   symbols must be mangled.
 
+Function names with incomplete debug information
+
+  If the compiler omitted enclosing scopes, zxdb can recover a function name
+  such as a::b::f from DWARF or from a defined ELF function. You can also use
+  b::f or f when the omitted scopes are namespaces or their kinds are unknown.
+  Include known class names. Use ::a::b::f to require the full path.
+
 Breakpoints on overloaded functions
 
   If a named function has multiple overloads, the debugger will set a breakpoint

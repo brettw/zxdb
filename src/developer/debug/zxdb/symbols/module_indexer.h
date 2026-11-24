@@ -34,7 +34,8 @@ struct ModuleIndexerResult {
 // Note the usage of the DwarfBinary doesn't really change anything but it causes a bunch of caching
 // stuff on the LLVM objects that require a non-const reference.
 ModuleIndexerResult IndexModule(fxl::WeakPtr<ModuleSymbols> module_symbols, DwarfBinary& binary,
-                                const std::string& build_dir);
+                                const std::string& build_dir,
+                                FunctionNameParser function_name_parser);
 
 }  // namespace zxdb
 

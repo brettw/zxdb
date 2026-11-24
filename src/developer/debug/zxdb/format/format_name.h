@@ -45,6 +45,10 @@ struct FormatIdentifierOptions {
 OutputBuffer FormatIdentifier(const Identifier& str, const FormatIdentifierOptions& options);
 OutputBuffer FormatIdentifier(const ParsedIdentifier& str, const FormatIdentifierOptions& options);
 
+// Returns a spelling that can be passed back to the expression parser, including literal
+// escapes for components such as local function scopes and conversion operators.
+std::string FormatIdentifierForInput(const Identifier& identifier);
+
 struct FormatFunctionNameOptions {
   // Options for name formatting.
   FormatIdentifierOptions name;

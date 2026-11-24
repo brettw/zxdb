@@ -12,6 +12,7 @@
 #include "src/developer/debug/zxdb/common/err.h"
 #include "src/developer/debug/zxdb/symbols/build_id_index.h"
 #include "src/developer/debug/zxdb/symbols/debug_symbol_file_type.h"
+#include "src/developer/debug/zxdb/symbols/identifier.h"
 #include "src/lib/fxl/macros.h"
 #include "src/lib/fxl/memory/ref_counted.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
@@ -36,7 +37,8 @@ class SystemSymbols {
   using RequestDownloadFunction =
       std::function<void(const std::string& build_id, DebugSymbolFileType file_type)>;
 
-  explicit SystemSymbols(RequestDownloadFunction f);
+  explicit SystemSymbols(RequestDownloadFunction f,
+                         FunctionNameParser function_name_parser = nullptr);
   ~SystemSymbols();
 
   BuildIDIndex& build_id_index() { return build_id_index_; }
@@ -75,6 +77,7 @@ class SystemSymbols {
   void SaveModule(const std::string& build_id, ModuleSymbols* module);
 
   RequestDownloadFunction request_download_;
+  FunctionNameParser function_name_parser_;
 
   BuildIDIndex build_id_index_;
 

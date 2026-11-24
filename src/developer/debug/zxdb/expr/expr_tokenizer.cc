@@ -7,6 +7,7 @@
 #include <ctype.h>
 #include <lib/syslog/cpp/macros.h>
 
+#include <array>
 #include <type_traits>
 
 #include "src/developer/debug/zxdb/expr/number_parser.h"
@@ -33,12 +34,8 @@ bool IsIntegerContinuingChar(char c) { return isalnum(c) || c == '\'' || c == '_
 const std::vector<const ExprTokenRecord*>& TokensWithFirstChar(char c) {
   // Lookup table for all 7-bit characters.
   constexpr unsigned char kMaxLookupChar = 0x80;
-  static std::vector<const ExprTokenRecord*> mapping[kMaxLookupChar];
-  static bool initialized = false;
-
-  if (!initialized) {
-    // Construct the lookup table.
-    initialized = true;
+  static const auto mapping = [] {
+    std::array<std::vector<const ExprTokenRecord*>, kMaxLookupChar> by_char;
     for (size_t i = 0; i < kNumExprTokenTypes; i++) {
       ExprTokenType type = static_cast<ExprTokenType>(i);
 
@@ -49,9 +46,10 @@ const std::vector<const ExprTokenRecord*>& TokensWithFirstChar(char c) {
 
       const ExprTokenRecord& record = RecordForTokenType(type);
       if (!record.static_value.empty())
-        mapping[static_cast<size_t>(record.static_value[0])].push_back(&record);
+        by_char[static_cast<size_t>(record.static_value[0])].push_back(&record);
     }
-  }
+    return by_char;
+  }();
 
   if (static_cast<unsigned char>(c) >= kMaxLookupChar) {
     static std::vector<const ExprTokenRecord*> empty_records;

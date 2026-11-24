@@ -14,6 +14,7 @@
 
 #include "lib/fit/function.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_debug_names.h"
+#include "src/developer/debug/zxdb/symbols/identifier.h"
 #include "src/developer/debug/zxdb/symbols/index_node.h"
 #include "src/developer/debug/zxdb/symbols/location.h"
 #include "src/developer/debug/zxdb/symbols/module_symbol_status.h"
@@ -31,6 +32,7 @@ namespace zxdb {
 class DwarfUnit;
 class FileLine;
 class Function;
+class FunctionNameIndex;
 struct InputLocation;
 class LineDetails;
 class Index;
@@ -103,6 +105,14 @@ class ModuleSymbols : public fxl::RefCountedThreadSafe<ModuleSymbols> {
   virtual std::vector<Location> ResolveInputLocation(
       const SymbolContext& symbol_context, const InputLocation& input_location,
       const ResolveOptions& options = ResolveOptions()) const = 0;
+
+  // Resolves source symbols and alternate function spellings in this module. Relative queries
+  // may omit leading components of an alternate spelling.
+  virtual std::vector<Location> ResolveNamedSymbols(const SymbolContext& context,
+                                                    const ResolveOptions& options,
+                                                    const Identifier& query,
+                                                    std::vector<LazySymbol> symbols) const = 0;
+  virtual const FunctionNameIndex& GetFunctionNames() const = 0;
 
   // Returns the low-level DwarfUnit(s) that covers the given address, or null if no match. The
   // pointers in the structure will be null if not found.

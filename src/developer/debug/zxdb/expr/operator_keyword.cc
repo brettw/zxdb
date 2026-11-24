@@ -59,6 +59,7 @@ const ExprTokenType kOverloadableOperators[][kMaxOps] = {
   {ExprTokenType::kShiftRightEquals, ExprTokenType::kInvalid, ExprTokenType::kInvalid},
   {ExprTokenType::kEquality,         ExprTokenType::kInvalid, ExprTokenType::kInvalid},
   {ExprTokenType::kInequality,       ExprTokenType::kInvalid, ExprTokenType::kInvalid},
+  {ExprTokenType::kSpaceship,         ExprTokenType::kInvalid, ExprTokenType::kInvalid},
   {ExprTokenType::kLessEqual,        ExprTokenType::kInvalid, ExprTokenType::kInvalid},
   {ExprTokenType::kGreaterEqual,     ExprTokenType::kInvalid, ExprTokenType::kInvalid},
   {ExprTokenType::kDoubleAnd,        ExprTokenType::kInvalid, ExprTokenType::kInvalid},

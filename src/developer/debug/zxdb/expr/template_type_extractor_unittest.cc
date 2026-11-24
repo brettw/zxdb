@@ -153,4 +153,20 @@ TEST(TemplateTypeExtractor, OtherOperator) {
   EXPECT_EQ("operator", result.canonical_name);
 }
 
+TEST(TemplateTypeExtractor, QualifiedFunctionName) {
+  auto name = ParseQualifiedFunctionName("::a::Box<b::Pair<c::T, int> >::operator<");
+  ASSERT_TRUE(name);
+  ASSERT_EQ(3u, name->components().size());
+  EXPECT_EQ("Box<b::Pair<c::T, int>>", name->components()[1].name());
+  EXPECT_EQ("operator<", name->components()[2].name());
+  name = ParseQualifiedFunctionName("a::X::operator b::T");
+  ASSERT_TRUE(name);
+  EXPECT_EQ("operator b::T", name->components().back().name());
+  name = ParseQualifiedFunctionName("X::operator<=>");
+  ASSERT_TRUE(name);
+  EXPECT_EQ("operator<=>", name->components().back().name());
+  for (const char* bad : {"", "::", "a::::f", "a::", "a::Box<b::T::f"})
+    EXPECT_FALSE(ParseQualifiedFunctionName(bad)) << bad;
+}
+
 }  // namespace zxdb

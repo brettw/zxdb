@@ -5,6 +5,7 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_IDENTIFIER_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_IDENTIFIER_H_
 
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -56,6 +57,10 @@ class IdentifierComponent {
 //
 // See also "ParsedIdentifier" in the "expr" library which adds more parsing when possible.
 using Identifier = IdentifierBase<IdentifierComponent>;
+
+// Parses a compiler-supplied name into globally qualified components. Split DWARF units may
+// invoke the parser concurrently. A null parser disables lookup by recovered qualified names.
+using FunctionNameParser = std::optional<Identifier> (*)(const std::string&);
 
 }  // namespace zxdb
 

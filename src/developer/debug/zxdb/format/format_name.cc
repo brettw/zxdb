@@ -7,6 +7,7 @@
 #include <ctype.h>
 
 #include "src/developer/debug/shared/string_util.h"
+#include "src/developer/debug/zxdb/expr/expr_parser.h"
 #include "src/developer/debug/zxdb/expr/expr_tokenizer.h"
 #include "src/developer/debug/zxdb/symbols/collection.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
@@ -180,6 +181,26 @@ OutputBuffer FormatFunctionName(const Function* function,
     }
   }
 
+  return result;
+}
+
+std::string FormatIdentifierForInput(const Identifier& identifier) {
+  std::string result;
+  for (const auto& component : identifier.components()) {
+    if (!result.empty() || identifier.qualification() == IdentifierQualification::kGlobal)
+      result += "::";
+    std::string name = component.GetName(false);
+    Identifier parsed;
+    if (name.empty()) {
+      result += kAnonIdentifierComponentName;
+    } else if (component.special() != SpecialIdentifier::kNone ||
+               (ExprParser::ParseIdentifier(name, &parsed).ok() &&
+                parsed.components().size() == 1 && parsed.components().front() == component)) {
+      result += name;
+    } else {
+      result += "$(" + EscapeComponent(name) + ")";
+    }
+  }
   return result;
 }
 

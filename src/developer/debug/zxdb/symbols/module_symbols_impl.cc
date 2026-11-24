@@ -213,10 +213,12 @@ std::string_view StripTemplateArgs(std::string_view leaf) {
 }  // namespace
 
 ModuleSymbolsImpl::ModuleSymbolsImpl(std::unique_ptr<DwarfBinaryImpl> binary,
-                                     const std::string& build_dir)
+                                     const std::string& build_dir,
+                                     FunctionNameParser function_name_parser)
     : binary_(std::move(binary)),
       build_dir_(build_dir),
-      index_(std::make_unique<Index>()),  // Placeholder empty index so this is never null.
+      function_name_parser_(function_name_parser),
+      index_(std::make_unique<Index>(function_name_parser)),
       weak_factory_(this),
       symbol_weak_factory_(this) {}
 
@@ -480,23 +482,6 @@ std::vector<Location> ModuleSymbolsImpl::ResolveSymbolInputLocation(
   if (!HasOnlySupportedSpecialIdentifierTypes(input_location.name))
     return {};  // Unsupported symbol type.
 
-  // Special-case for ELF/PLT functions.
-  //
-  // Note that this only checks the ELF index when explicitly requested. This is because for a given
-  // function, say "pthread_key_create", it will have a .so with the implementation, and each module
-  // that references it will have a PLT thunk (a type of ELF symbol). Matching all the ELF symbols
-  // is not what the user wants when they ask for information or a breakpoint on this function (the
-  // breakpoint will end up meaning 2 breaks per call).
-  //
-  // At the same time, it would be nice to use ELF symbols when debugging non-symbolized binaries.
-  // We can't just ask if the index is empty to detech this case since "unsymbolized" binaries can
-  // sometimes have a few trivial DWARF symbols.
-  //
-  // Just falling back to ELF symbols here when the main lookup matches nothing doesn't work because
-  // the calling modules in the pthread example above will have only the PLT match. To make it work,
-  // every caller of this function that combines results from more than one module (including
-  // FindName and ProcessSymbols) needs to have some filtering or prioritizing and how this should
-  // work is non-obvious.
   if (auto plt_name = GetSpecialInputLocation(input_location, SpecialIdentifier::kPlt))
     return ResolvePltName(symbol_context, *plt_name);
   if (auto elf_name = GetSpecialInputLocation(input_location, SpecialIdentifier::kElf))
@@ -523,38 +508,78 @@ std::vector<Location> ModuleSymbolsImpl::ResolveSymbolInputLocation(
     }
   }
 
-  // When the accelerator table is available, query the table directly using the leaf name.
-  // This avoids scanning the zxdb index tree.
+  std::vector<LazySymbol> symbols;
   if (HasDebugNames()) {
-    return ResolveDebugNamesSymbolInputLocation(symbol_context, symbol_to_find, options);
+    symbols = FindDebugNamesSymbols(symbol_to_find);
+  } else {
+    for (const auto& ref : index_->FindExact(symbol_to_find))
+      symbols.push_back(IndexSymbolRefToSymbol(ref));
   }
+  symbol_to_find.set_qualification(IdentifierQualification::kGlobal);
+  return ResolveNamedSymbols(symbol_context, options, symbol_to_find, std::move(symbols));
+}
 
-  // TODO(bug 37654) it would be nice if this could be deleted and all code go through
-  // expr/find_name.h to query the index. As-is this duplicates some of FindName's logic in a less
-  // flexible way.
-  for (const auto& ref : index_->FindExact(symbol_to_find)) {
-    LazySymbol lazy_symbol = IndexSymbolRefToSymbol(ref);
-    const Symbol* symbol = lazy_symbol.Get();
+const FunctionNameIndex& ModuleSymbolsImpl::GetFunctionNames() const {
+  std::call_once(index_elf_functions_, [this] {
+    for (const auto* record : elf_addresses_) {
+      if (record->is_function)
+        index_->function_names().AddLinkageName(record->linkage_name.c_str(), record);
+    }
+  });
+  return index_->function_names();
+}
 
-    if (const Function* function = symbol->As<Function>()) {
-      // Symbol is a function.
-      AppendLocationForFunction(symbol_context, options, function, &result);
-    } else if (const Variable* variable = symbol->As<Variable>()) {
-      // Symbol is a variable. This will be the case for global variables and file- and class-level
-      // statics. This always symbolizes since we already computed the symbol.
-      result.push_back(LocationForVariable(symbol_context, RefPtrTo(variable)));
-    } else {
-      // Unknown type of symbol.
+std::vector<Location> ModuleSymbolsImpl::ResolveNamedSymbols(
+    const SymbolContext& context, const ResolveOptions& options, const Identifier& query,
+    std::vector<LazySymbol> symbols) const {
+  std::vector<const ElfSymbolRecord*> elf;
+  GetFunctionNames().Visit(query, false, [&](const Identifier&, const FunctionNameIndex::Ref& ref) {
+    if (auto dwarf = std::get_if<IndexNode::SymbolRef>(&ref))
+      symbols.push_back(IndexSymbolRefToSymbol(*dwarf));
+    else
+      elf.push_back(std::get<const ElfSymbolRecord*>(ref));
+    return true;
+  });
+
+  // Compare entry addresses before applying the requested prologue adjustment.
+  std::set<uint64_t> entries;
+  std::vector<Location> result;
+  std::set<LazySymbol> seen;
+  for (const auto& lazy : symbols) {
+    if (!seen.insert(lazy).second)
       continue;
+    const Symbol* symbol = lazy.Get();
+    if (const auto* function = symbol->As<Function>()) {
+      if (function->code_ranges().empty())
+        continue;
+      entries.insert(function->code_ranges()[0].begin());
+      AppendLocationForFunction(context, options, function, &result);
+    } else if (const auto* variable = symbol->As<Variable>()) {
+      result.push_back(LocationForVariable(context, RefPtrTo(variable)));
     }
   }
-
+  for (const auto* record : elf) {
+    if (!entries.insert(record->relative_address).second)
+      continue;
+    auto address = context.RelativeToAbsolute(record->relative_address);
+    if (!options.symbolize) {
+      result.emplace_back(Location::State::kAddress, address);
+    } else {
+      auto dwarf = DwarfLocationForAddress(context, address, options, nullptr);
+      if (dwarf && dwarf->symbol()) {
+        result.push_back(std::move(*dwarf));
+      } else {
+        result.push_back(MakeElfSymbolLocation(context, std::nullopt, *record,
+                                               dwarf ? dwarf->file_line() : FileLine(),
+                                               dwarf ? dwarf->column() : 0));
+      }
+    }
+  }
   return result;
 }
 
-std::vector<Location> ModuleSymbolsImpl::ResolveDebugNamesSymbolInputLocation(
-    const SymbolContext& symbol_context, const Identifier& symbol_to_find,
-    const ResolveOptions& options) const {
+std::vector<LazySymbol> ModuleSymbolsImpl::FindDebugNamesSymbols(
+    const Identifier& symbol_to_find) const {
   if (symbol_to_find.components().empty()) {
     return {};
   }
@@ -571,7 +596,7 @@ std::vector<Location> ModuleSymbolsImpl::ResolveDebugNamesSymbolInputLocation(
     }
   }
 
-  std::vector<Location> result;
+  std::vector<LazySymbol> result;
   for (const auto& entry : entries) {
     if (entry.tag != DwarfTag::kSubprogram && entry.tag != DwarfTag::kInlinedSubroutine &&
         entry.tag != DwarfTag::kVariable) {
@@ -583,11 +608,7 @@ std::vector<Location> ModuleSymbolsImpl::ResolveDebugNamesSymbolInputLocation(
       continue;
     }
 
-    if (const Function* function = symbol->As<Function>()) {
-      AppendLocationForFunction(symbol_context, options, function, &result);
-    } else if (const Variable* variable = symbol->As<Variable>()) {
-      result.push_back(LocationForVariable(symbol_context, RefPtrTo(variable)));
-    }
+    result.push_back(std::move(lazy_symbol));
   }
   return result;
 }
@@ -810,9 +831,8 @@ std::optional<Location> ModuleSymbolsImpl::ElfLocationForAddress(
                              << absolute_address;
     return std::nullopt;  // Too far away.
   }
-  return Location(
-      absolute_address, std::move(file_line), column, symbol_context,
-      fxl::MakeRefCounted<ElfSymbol>(const_cast<ModuleSymbolsImpl*>(this)->GetWeakPtr(), *record));
+  return MakeElfSymbolLocation(symbol_context, relative_addr, *record, std::move(file_line),
+                               column);
 }
 
 Location ModuleSymbolsImpl::LocationForVariable(const SymbolContext& symbol_context,
@@ -1094,18 +1114,11 @@ void ModuleSymbolsImpl::ResolveLineInputLocationForFile(const SymbolContext& sym
 
 Location ModuleSymbolsImpl::MakeElfSymbolLocation(const SymbolContext& symbol_context,
                                                   std::optional<uint64_t> relative_address,
-                                                  const ElfSymbolRecord& record) const {
-  uint64_t absolute_address;
-  if (relative_address) {
-    // Caller specified a more specific address (normally inside the ELF symbol).
-    absolute_address = symbol_context.RelativeToAbsolute(*relative_address);
-  } else {
-    // Take address from the ELF symbol.
-    absolute_address = symbol_context.RelativeToAbsolute(record.relative_address);
-  }
-
+                                                  const ElfSymbolRecord& record, FileLine file_line,
+                                                  int column) const {
   return Location(
-      absolute_address, FileLine(), 0, symbol_context,
+      symbol_context.RelativeToAbsolute(relative_address.value_or(record.relative_address)),
+      std::move(file_line), column, symbol_context,
       fxl::MakeRefCounted<ElfSymbol>(const_cast<ModuleSymbolsImpl*>(this)->GetWeakPtr(), record));
 }
 
@@ -1118,7 +1131,8 @@ void ModuleSymbolsImpl::CreateIndex() {
   //
   // Although it will be slightly slower to create, the memory savings may make such a change
   // worth it for large programs.
-  ModuleIndexerResult result = IndexModule(GetWeakPtr(), *binary_, build_dir_);
+  ModuleIndexerResult result =
+      IndexModule(GetWeakPtr(), *binary_, build_dir_, function_name_parser_);
   index_ = std::move(result.index);
   dwos_ = std::move(result.dwo_info);
 
@@ -1155,10 +1169,12 @@ void ModuleSymbolsImpl::FillElfSymbols() {
     if (sym.st_value == 0)
       continue;  // No address for this symbol. Probably imported.
 
+    bool is_function = symbol_type == elflib::STT_FUNC && sym.st_shndx != llvm::ELF::SHN_UNDEF;
     // The source map is sorted, so each normal symbol belongs at the end.
     auto inserted = mangled_elf_symbols_.emplace_hint(
         mangled_elf_symbols_.end(), std::piecewise_construct, std::forward_as_tuple(name),
-        std::forward_as_tuple(ElfSymbolType::kNormal, sym.st_value, sym.st_size, name));
+        std::forward_as_tuple(ElfSymbolType::kNormal, sym.st_value, sym.st_size, name,
+                              is_function));
 
     // Append all addresses for now, this will be sorted at the bottom.
     elf_addresses_.push_back(&inserted->second);

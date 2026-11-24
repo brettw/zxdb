@@ -28,9 +28,12 @@ struct ElfSymbolRecord {
 
   // Stores the linkage name. Demangling is deferred until the name is requested.
   explicit ElfSymbolRecord(ElfSymbolType type, uint64_t relative_address, uint64_t size,
-                           const std::string& linkage_name);
+                           const std::string& linkage_name, bool is_function = false);
 
   ElfSymbolType type = ElfSymbolType::kNormal;
+
+  // Defined ELF functions also participate in ordinary function-name lookup.
+  bool is_function = false;
 
   // Address relative to the beginning of the associated module of this symbol.
   uint64_t relative_address = 0;

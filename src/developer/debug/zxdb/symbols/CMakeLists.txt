@@ -32,6 +32,7 @@ add_library(zxdb_symbols STATIC
   file_line.cc
   find_line.cc
   function.cc
+  function_name_index.cc
   function_type.cc
   identifier.cc
   identifier_base.cc

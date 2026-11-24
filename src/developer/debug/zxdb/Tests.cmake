@@ -341,46 +341,54 @@ endif()
 add_custom_target(zxdb_type_unit_fixtures DEPENDS ${type_unit_fixture_outputs})
 add_dependencies(zxdb_tests zxdb_type_unit_fixtures)
 # A Clang binary with inlined functions whose unused parameters Clang omits from the concrete
-# instances. dwarf_symbol_factory_unittest.cc checks the order of the parameters. The fixture needs
-# Clang.
+# instances. dwarf_symbol_factory_unittest.cc checks the order of the parameters.
 set(inline_params_fixture_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/inline_params")
 set(inline_params_fixture_source
   "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/inline_params/inline_params_fixture.cc")
-set(inline_params_fixture_outputs)
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  set(output "${inline_params_fixture_dir}/clang_inline_params.so")
-  add_custom_command(
-    OUTPUT "${output}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${inline_params_fixture_dir}"
-    COMMAND "${CMAKE_CXX_COMPILER}" -g -O2 -shared -fPIC -Wl,--build-id
-      "-fdebug-prefix-map=${PROJECT_SOURCE_DIR}=../.." -o "${output}" "${inline_params_fixture_source}"
-    DEPENDS "${inline_params_fixture_source}"
-    VERBATIM)
-  list(APPEND inline_params_fixture_outputs "${output}")
-endif()
-add_custom_target(zxdb_inline_params_fixtures DEPENDS ${inline_params_fixture_outputs})
+set(inline_params_fixture_output "${inline_params_fixture_dir}/clang_inline_params.so")
+add_custom_command(
+  OUTPUT "${inline_params_fixture_output}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${inline_params_fixture_dir}"
+  COMMAND "${CMAKE_CXX_COMPILER}" -g -O2 -shared -fPIC -Wl,--build-id
+    "-fdebug-prefix-map=${PROJECT_SOURCE_DIR}=../.." -o "${inline_params_fixture_output}"
+    "${inline_params_fixture_source}"
+  DEPENDS "${inline_params_fixture_source}"
+  VERBATIM)
+add_custom_target(zxdb_inline_params_fixtures DEPENDS "${inline_params_fixture_output}")
 add_dependencies(zxdb_tests zxdb_inline_params_fixtures)
 
 # A Clang binary whose functions use DW_FORM_LLVM_addrx_offset for DW_AT_low_pc.
-# dwarf_symbol_factory_unittest.cc checks the function addresses. The fixture needs Clang.
+# dwarf_symbol_factory_unittest.cc checks the function addresses.
 set(addrx_offset_fixture_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/addrx_offset")
 set(addrx_offset_fixture_source
   "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/addrx_offset/addrx_offset_fixture.cc")
-set(addrx_offset_fixture_outputs)
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  set(output "${addrx_offset_fixture_dir}/clang_addrx_offset.so")
+set(addrx_offset_fixture_output "${addrx_offset_fixture_dir}/clang_addrx_offset.so")
+add_custom_command(
+  OUTPUT "${addrx_offset_fixture_output}"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${addrx_offset_fixture_dir}"
+  COMMAND "${CMAKE_CXX_COMPILER}" -g -gdwarf-5 -O0 -mllvm -minimize-addr-in-v5=Form -shared -fPIC
+    -Wl,--build-id "-fdebug-prefix-map=${PROJECT_SOURCE_DIR}=../.."
+    -o "${addrx_offset_fixture_output}" "${addrx_offset_fixture_source}"
+  DEPENDS "${addrx_offset_fixture_source}"
+  VERBATIM)
+add_custom_target(zxdb_addrx_offset_fixtures DEPENDS "${addrx_offset_fixture_output}")
+add_dependencies(zxdb_tests zxdb_addrx_offset_fixtures)
+# Exercise the same incomplete DWARF with and without the optional name accelerator.
+set(function_name_source "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/function_names/functions.ll")
+set(function_name_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/function_names")
+foreach(accelerator Disable Dwarf)
+  set(output "${function_name_dir}/${accelerator}.so")
   add_custom_command(
     OUTPUT "${output}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory "${addrx_offset_fixture_dir}"
-    COMMAND "${CMAKE_CXX_COMPILER}" -g -gdwarf-5 -O0 -mllvm -minimize-addr-in-v5=Form -shared -fPIC
-      -Wl,--build-id "-fdebug-prefix-map=${PROJECT_SOURCE_DIR}=../.." -o "${output}"
-      "${addrx_offset_fixture_source}"
-    DEPENDS "${addrx_offset_fixture_source}"
+    COMMAND "${CMAKE_COMMAND}" -E make_directory "${function_name_dir}"
+    COMMAND "${CMAKE_CXX_COMPILER}" -shared -nostdlib -Wl,--build-id -mllvm
+      "-accel-tables=${accelerator}" "${function_name_source}" -o "${output}"
+    DEPENDS "${function_name_source}"
     VERBATIM)
-  list(APPEND addrx_offset_fixture_outputs "${output}")
-endif()
-add_custom_target(zxdb_addrx_offset_fixtures DEPENDS ${addrx_offset_fixture_outputs})
-add_dependencies(zxdb_tests zxdb_addrx_offset_fixtures)
+  list(APPEND function_name_outputs "${output}")
+endforeach()
+add_custom_target(zxdb_function_name_fixtures DEPENDS ${function_name_outputs})
+add_dependencies(zxdb_tests zxdb_function_name_fixtures)
 # Binaries from hand-written DWARF for dwarf_symbol_factory_unittest.cc:
 #   - specification: DW_AT_specification chains and abstract origins in another unit.
 #   - data_forms: array bounds and constants in the DW_FORM_data<n> forms.

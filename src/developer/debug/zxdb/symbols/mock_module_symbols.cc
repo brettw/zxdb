@@ -155,4 +155,16 @@ std::optional<uint64_t> MockModuleSymbols::GetDebugAddrEntry(uint64_t addr_base,
   return std::nullopt;
 }
 
+std::vector<Location> MockModuleSymbols::ResolveNamedSymbols(
+    const SymbolContext& context, const ResolveOptions& options, const Identifier& query,
+    std::vector<LazySymbol> symbols) const {
+  std::vector<Location> locations;
+  for (const auto& symbol : symbols) {
+    auto found =
+        ResolveInputLocation(context, InputLocation(symbol.Get()->GetIdentifier()), options);
+    locations.insert(locations.end(), found.begin(), found.end());
+  }
+  return locations;
+}
+
 }  // namespace zxdb
