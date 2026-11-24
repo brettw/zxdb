@@ -72,9 +72,28 @@ LinuxProcessHandle::~LinuxProcessHandle() {
 std::string LinuxProcessHandle::GetName() const {
   // Use only the module name. This process name will be used as the module name for the main
   // module so must not include the command line.
-  if (auto cmdline = linux::GetCommandLine(task_->pid()); !cmdline.empty())
-    return cmdline[0];
+  if (std::string argv0 = linux::GetArgv0(task_->pid()); !argv0.empty())
+    return argv0;
   return linux::GetExe(task_->pid());
+}
+
+std::vector<std::string> LinuxProcessHandle::GetFilterNames() const {
+  // Filters match the command name (argv[0]) and the executable path. Either one can be a path, so
+  // the base names are also included for exact matches.
+  std::vector<std::string> names;
+  auto add_name = [&names](std::string name) {
+    if (!name.empty() && std::ranges::find(names, name) == names.end())
+      names.push_back(std::move(name));
+  };
+  auto add_name_and_base_name = [&add_name](const std::string& name) {
+    add_name(name);
+    if (size_t last_slash = name.rfind('/'); last_slash != std::string::npos)
+      add_name(name.substr(last_slash + 1));
+  };
+
+  add_name_and_base_name(linux::GetArgv0(task_->pid()));
+  add_name_and_base_name(linux::GetExe(task_->pid()));
+  return names;
 }
 
 std::vector<std::unique_ptr<ThreadHandle>> LinuxProcessHandle::GetChildThreads() const {

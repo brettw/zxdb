@@ -215,6 +215,12 @@ std::vector<std::string> GetCommandLine(int pid) {
                               fxl::kKeepWhitespace, fxl::kSplitWantNonEmpty);
 }
 
+std::string GetArgv0(int pid) {
+  // The arguments in /proc/<pid>/cmdline are null-terminated, so argv[0] ends at the first null.
+  std::string cmdline = ReadProcFile(pid, "cmdline");
+  return cmdline.substr(0, cmdline.find('\0'));
+}
+
 uint64_t GetLdSoLoadAddress(int pid) { return ReadAuxv(pid)[AT_BASE]; }
 
 std::optional<LdSoInfo> GetLdSoInfo(int pid) {

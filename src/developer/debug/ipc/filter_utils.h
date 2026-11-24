@@ -9,6 +9,7 @@
 #include <string>
 
 #include "src/developer/debug/ipc/records.h"
+#include "src/developer/debug/shared/platform.h"
 
 namespace debug_ipc {
 
@@ -19,11 +20,19 @@ bool FilterMatches(const Filter& filter, const std::string& process_name,
 
 struct FilterResolutionOptions {
   bool exact = false;
+
+  // The platform of the debugged system. Only Fuchsia has component filters and a process name
+  // length limit.
+  debug::Platform platform = debug::Platform::kUnknown;
 };
 
 // Resolves the filter type from the pattern.
-// If the resolved type is one of the process name types, and the pattern exceeds
-// Zircon's maximum name length (31 characters), it will be trimmed to 31 characters.
+//
+// On Fuchsia, URLs, monikers, and component names resolve to component filter types. If the
+// resolved type is one of the process name types and the pattern exceeds Zircon's maximum name
+// length (31 characters), the pattern is trimmed to 31 characters.
+//
+// On other platforms, all patterns resolve to process name types and are not changed.
 Filter::Type ResolveFilterType(std::string& pattern, const FilterResolutionOptions& options = {});
 
 // Returns the filter from the given |filters| that has |id|.

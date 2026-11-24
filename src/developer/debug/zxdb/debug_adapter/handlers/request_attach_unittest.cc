@@ -352,4 +352,30 @@ TEST_F(RequestAttachTest, MultipleFiltersTearDown) {
 
 }  // namespace
 
+class RequestAttachLinuxTest : public RequestAttachTest {
+ protected:
+  debug::Platform GetPlatform() const override { return debug::Platform::kLinux; }
+};
+
+TEST_F(RequestAttachLinuxTest, AttachProcessNames) {
+  InitializeDebugging();
+
+  // Fuchsia component patterns are process names on Linux. Long names aren't trimmed.
+  const std::vector<std::string> kPatterns = {"/usr/bin/program", "my_component.cm",
+                                              "a_process_name_with_more_than_31_characters"};
+  for (const std::string& pattern : kPatterns) {
+    dap::AttachRequestZxdb req = {};
+    req.process = pattern;
+    auto got = SendAttachRequest(req);
+    EXPECT_FALSE(got.error) << pattern;
+  }
+
+  auto filters = context().session()->system().GetFilters();
+  ASSERT_EQ(filters.size(), kPatterns.size());
+  for (size_t i = 0; i < kPatterns.size(); i++) {
+    EXPECT_EQ(filters[i]->pattern(), kPatterns[i]);
+    EXPECT_EQ(filters[i]->type(), debug_ipc::Filter::Type::kProcessNameSubstr);
+  }
+}
+
 }  // namespace zxdb

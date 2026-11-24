@@ -128,6 +128,13 @@ Callers and implementations must preserve these invariants:
   breakpoint afterward to avoid self-deletion during hit handling.
 - `SystemInterface` is non-movable because `ComponentManager` holds a raw
   back-pointer to it.
+- Only Fuchsia agents watch a root job. Filter updates search the job from
+  `SystemInterface::GetRootJob` when no root job is watched. On Linux, that job
+  lists every process in `/proc`. Linux process name filters match the command
+  name, the executable path, and the base name of each. Filters never match the
+  processes in `DebugAgentOptions::filter_excluded_koids`. The integrated agent
+  excludes itself and its zxdb frontend.
+- Filter updates look up component information only for recursive filters.
 - Recursive filter matching creates new `kComponentMonikerPrefix` filters only
   for moniker patterns not already present in `DebugAgent::filters_`.
 - `DebuggedJob` and `AttachConfig` distinguish the exclusive `"job"` exception

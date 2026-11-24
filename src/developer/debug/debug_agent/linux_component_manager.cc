@@ -4,7 +4,6 @@
 
 #include "src/developer/debug/debug_agent/linux_component_manager.h"
 
-#include "lib/syslog/cpp/macros.h"
 #include "src/developer/debug/ipc/records.h"
 
 namespace debug_agent {
@@ -21,8 +20,8 @@ std::vector<debug_ipc::ComponentInfo> LinuxComponentManager::FindComponentInfoWi
 
 const std::map<std::string, debug_ipc::ComponentInfo>&
 LinuxComponentManager::GetNonElfComponentInfo() const {
-  FX_NOTIMPLEMENTED();
-  static std::map<std::string, debug_ipc::ComponentInfo> map;
+  // Linux has no components, so there's nothing to report.
+  static const std::map<std::string, debug_ipc::ComponentInfo> map;
   return map;
 }
 

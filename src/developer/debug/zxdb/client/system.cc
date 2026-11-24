@@ -673,6 +673,13 @@ void System::DidConnect(Where where) {
   // Force the debug agent to reload its second-chance exception handling policy.
   OnSettingChanged(settings(), ClientSettings::System::kSecondChanceExceptions);
 
+  // Filters created before the connection resolve their patterns for the connected platform.
+  bool filters_changed = false;
+  for (auto& filter : filters_)
+    filters_changed |= filter->ResolvePendingPattern();
+  if (filters_changed)
+    SyncFilters();
+
   // When debugging locally, fall back to using symbols from the local modules themselves if not
   // found in the normal symbol locations.
   GetSymbols()->set_enable_local_fallback(where == Where::kLocal);

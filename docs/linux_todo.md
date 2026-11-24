@@ -29,45 +29,23 @@ IDs are stable references; do not renumber the remaining items after removal.
 
 ### Process discovery and attachment
 
-- [ ] **L01 · P1 · Fix attachment by process name (reproduced agent crash).**
-  Fuchsia initializes `DebugAgent::root_job_`; Linux does not.
-  `OnUpdateFilter()` nevertheless asserts and dereferences it for every nonempty
-  filter update. A local `attach zxdb_audit_no_such_process` prints that it is
-  waiting, then aborts the agent with `Check failed: root_job_` at
-  `debug_agent.cc:564`. This affects existing-process matching too, including DAP
-  pattern attachment. The root README's claim that existing-process filters work
-  is therefore incorrect at this baseline. Linux can enumerate `/proc`, but that
-  does not make the filter request path work.
-  **Complete when:** existing-name attach, no-match, multiple-match, filter
-  removal, and process-exit races work without an assertion or null dereference;
-  update the README. Test console and DAP paths.
-  Sources: [agent initialization and OnUpdateFilter][agent],
-  [Linux job enumeration and unsupported Attach][linux-job].
-
-- [ ] **L02 · P1 · Give process filters Linux naming rules.**
-  Shared `ResolveFilterType()` truncates process patterns to 31 characters and
-  interprets `/path` as a component moniker, a slash-containing name as a moniker
-  suffix, and `.cm` as a component name. These Fuchsia rules are used for Linux
-  console/DAP filters too. Linux process names come from `argv[0]` or `/proc/exe`,
-  so fixing L01 alone does not provide reliable path or long-name matching.
-  **Complete when:** Linux exact/substring matching has documented executable
-  path and basename semantics; long names, slashes, `.cm` names, and DAP patterns
-  work without changing Fuchsia resolution. Depends on L01 for end-to-end tests.
-  Sources: [ResolveFilterType][filters], [LinuxProcessHandle::GetName][linux-process].
-
 - [ ] **L03 · P1 · Observe future unrelated processes and name changes.**
   Fuchsia job watches report process creation and process-name changes, enabling
   filters to attach before the process proceeds. Linux job attachment returns
   `No jobs on Linux`; its ptrace events cover traced tasks and their descendants,
-  not arbitrary future processes. The console's promise that filters attach to
-  newly launched processes is misleading for native Linux.
+  not arbitrary future processes.
   **Complete when:** a supported Linux monitoring strategy implements and tests
   future-name matching, rename/exec matching, removal, duplicate suppression, and
   permission failures. Define whether stopping before user code is guaranteed;
   document any weaker timing guarantee. Following already-traced forks is not
-  sufficient. Depends on L01–L02; also affects terminal-based DAP launch (L12).
+  sufficient. Also affects terminal-based DAP launch (L12).
   Sources: [Zircon job events][zircon-job], [Linux job handle][linux-job],
   [Linux task events][linux-task].
+
+- [ ] **L28 · P1 · Attach fails under restricted ptrace scope.**
+  With Yama `ptrace_scope` set to 1, the default on many distributions, a user
+  without `CAP_SYS_PTRACE` can't trace a process that isn't a descendant of the
+  agent. PID and name attachment to existing processes fail for this user.
 
 ### Registers, breakpoints, and expression evaluation
 
@@ -181,7 +159,7 @@ Sources: [Linux thread registers][linux-thread], [Linux general-register mapping
   Without `RunInTerminal`, the launch handler accepts only a component URL and
   calls `RunComponent`. With `RunInTerminal`, it installs an attach filter and
   asks the client to launch a command. It does not route native ELF launch to
-  `RunBinary`; the filter route is blocked by L01–L03. Numeric-PID DAP attachment
+  `RunBinary`; the filter route is blocked by L03. Numeric-PID DAP attachment
   and console `run` are separate implemented paths.
   **Complete when:** a documented Linux launch request launches the intended
   executable/arguments, honors the advertised options, binds breakpoints before
@@ -271,7 +249,7 @@ Sources: [Linux thread registers][linux-thread], [Linux general-register mapping
   cgroups are not interchangeable with Zircon jobs.
   **Close when:** choose any supported Linux grouping model and test its scope
   semantics, or consistently mark job-only/recursive component operations as
-  Fuchsia-only. Keep ordinary process enumeration and L01–L03 independent.
+  Fuchsia-only. Keep ordinary process enumeration and L03 independent.
   Sources: [Linux job interface][linux-job-h], [Linux job implementation][linux-job],
   [Linux process interface][linux-process-h], [Fuchsia jobs][zircon-job].
 
@@ -377,7 +355,7 @@ implementation exists; it is not a claim that every edge case was tested here.
 | --- | --- |
 | `Hello`, `Status` | Implemented; hardware capabilities and limbo differ (L05–L06, L20) |
 | `Kill`, `Attach`, `Detach`, `Pause`, `Resume` | Direct PID/task control implemented; minimal attach and exception strategy differ (L17–L18) |
-| `ProcessTree`, `UpdateFilter` | Flat process listing exists; filters are defective/incomplete (L01–L03, L19) |
+| `ProcessTree`, `UpdateFilter` | Flat process listing exists; filters miss unrelated new processes (L03, L19) |
 | `Threads`, `ThreadStatus` | Implemented thread/stack paths; wait detail differs (L24) |
 | `ReadMemory`, `WriteMemory` | Implemented, including software-breakpoint-aware handling |
 | `AddOrChangeBreakpoint`, `RemoveBreakpoint` | Software implementation exists; hardware execution/data gaps (L04–L06) |
@@ -396,12 +374,13 @@ lifecycle, component-derived filter creation, and Fuchsia service log delivery
 depend on the missing or platform-specific facilities above. A shared wire type
 or frontend handler is not evidence that the Linux backend produces the event.
 
-Do not re-add these as blanket missing features: PID attachment, native binary
-launch, software breakpoints, pause/resume, source/instruction stepping, general
-register writes, signal forwarding/details, thread lifecycle, traced fork/vfork/
-exec handling, mapped ELF/module lookup, ELF/DWARF symbol reading, ordinary
-expression evaluation, synchronous unwinding, and minidump reading. Their
-implemented paths remain subject to normal bug reports and regression testing.
+Do not re-add these as blanket missing features: PID attachment, name
+attachment to existing processes, native binary launch, software breakpoints,
+pause/resume, source/instruction stepping, general register writes, signal
+forwarding/details, thread lifecycle, traced fork/vfork/exec handling, mapped
+ELF/module lookup, ELF/DWARF symbol reading, ordinary expression evaluation,
+synchronous unwinding, and minidump reading. Their implemented paths remain
+subject to normal bug reports and regression testing.
 
 Native PTY/input support, PATH search, configurable fork-follow policy, and broad
 launch environment controls may be useful Linux enhancements, but this audit did
@@ -409,16 +388,13 @@ not establish corresponding supported Fuchsia frontend features. Likewise,
 segment-selector registers, extra register IDs absent from the shared protocol,
 and shared expression/DWARF limitations are not automatically Linux parity gaps.
 
-Verification for this documentation change: source comparison and one local
-process-name filter probe. The probe's frontend exit code was zero even though
-the child agent printed the fatal assertion; the diagnostic, not the exit code,
-establishes L01. No implementation changes or full test-suite run were made.
+Verification for this documentation change: source comparison. No
+implementation changes or full test-suite run were made.
 
 [agent]: ../src/developer/debug/debug_agent/debug_agent.cc
 [linux-job]: ../src/developer/debug/debug_agent/linux_job_handle.cc
 [linux-job-h]: ../src/developer/debug/debug_agent/linux_job_handle.h
 [zircon-job]: ../src/developer/debug/debug_agent/zircon_job_handle.cc
-[filters]: ../src/developer/debug/ipc/filter_utils.cc
 [linux-process]: ../src/developer/debug/debug_agent/linux_process_handle.cc
 [linux-process-h]: ../src/developer/debug/debug_agent/linux_process_handle.h
 [zircon-process]: ../src/developer/debug/debug_agent/zircon_process_handle.cc

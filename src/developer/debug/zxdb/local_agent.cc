@@ -6,6 +6,7 @@
 
 #include <fcntl.h>
 #include <lib/syslog/cpp/macros.h>
+#include <unistd.h>
 
 #include <thread>
 
@@ -35,8 +36,13 @@ int RunLocalAgent(fbl::unique_fd read_pipe, fbl::unique_fd write_pipe,
     // The debug agent is independent of whether it's connected or not.
     // DebugAgent::Disconnect is called by ~SocketConnection is called by ~SocketServer, so the
     // debug agent must be destructed after the SocketServer.
+    // Name filters must not match this agent or the zxdb frontend that forked it. Both run the zxdb
+    // executable.
+    debug_agent::DebugAgentOptions options{
+        .filter_excluded_koids = {static_cast<zx_koid_t>(getpid()),
+                                  static_cast<zx_koid_t>(getppid())}};
     debug_agent::DebugAgent debug_agent(
-        std::make_unique<debug_agent::LinuxSystemInterface>(inherited_sigpipe_ignored));
+        std::make_unique<debug_agent::LinuxSystemInterface>(inherited_sigpipe_ignored), options);
     auto buffer =
         std::make_unique<debug::BufferedBidiPipe>(std::move(read_pipe), std::move(write_pipe));
 

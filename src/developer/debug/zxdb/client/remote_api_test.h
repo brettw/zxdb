@@ -103,6 +103,9 @@ class RemoteAPITest : public TestWithLoop {
   // mock_remote_api();
   virtual std::unique_ptr<RemoteAPI> GetRemoteAPIImpl();
 
+  // Sets the session platform and notifies the system of the connection, like a handshake does.
+  void SimulateConnection(debug::Platform platform);
+
   // Allows tests to override the architecture for the test to run in. Defaults to x64/Fuchsia.
   virtual debug::Arch GetArch() const { return debug::Arch::kX64; }
   virtual debug::Platform GetPlatform() const { return debug::Platform::kFuchsia; }

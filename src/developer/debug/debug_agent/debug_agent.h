@@ -37,6 +37,10 @@ class SystemInterface;
 // Main state and control for the debug agent.
 struct DebugAgentOptions {
   bool monitor_root_job = true;
+
+  // Processes that filters never match, such as the debugger's own processes. An attached debugger
+  // process would stop the debugger.
+  std::vector<zx_koid_t> filter_excluded_koids;
 };
 
 class DebugAgent : public RemoteAPI, public Breakpoint::ProcessDelegate, public debug::LogBackend {
@@ -203,6 +207,9 @@ class DebugAgent : public RemoteAPI, public Breakpoint::ProcessDelegate, public 
   RecursiveFilterMatchResult CheckForRecursiveFilterMatches(
       const Filter& filter, const std::vector<debug_ipc::ComponentInfo>& component_info);
 
+  // Returns the existing tasks in the system that match the filter.
+  std::vector<debug_ipc::MatchedTask> ApplyFilterToSystem(const Filter& filter);
+
   std::vector<debug_ipc::FilterMatch> AccumulateFilterMatches(const ProcessHandle& handle);
 
   // Attempts to attach to the given process and sends a AttachReply message
@@ -240,6 +247,7 @@ class DebugAgent : public RemoteAPI, public Breakpoint::ProcessDelegate, public 
   uint32_t ipc_version_ = 0;
   DebugAgentOptions options_;
 
+  // The watched root job. Only Fuchsia has one. Other platforms leave it null.
   DebuggedJob* root_job_ = nullptr;
   std::map<zx_koid_t, std::unique_ptr<DebuggedProcess>> procs_;
   std::map<zx_koid_t, std::unique_ptr<DebuggedJob>> jobs_;

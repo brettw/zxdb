@@ -90,6 +90,10 @@ class ProcessHandle {
   virtual zx_koid_t GetKoid() const = 0;
   virtual std::string GetName() const = 0;
 
+  // Returns the names that process name filters match. A filter matches the process when it
+  // matches any of these names.
+  virtual std::vector<std::string> GetFilterNames() const { return {GetName()}; }
+
   virtual std::vector<std::unique_ptr<ThreadHandle>> GetChildThreads() const = 0;
 
   // Get the Koid of the enclosing job.

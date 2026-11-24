@@ -44,21 +44,23 @@ Target* FindOrCreateIdleTarget(System& system) {
   return system.CreateNewTarget(/*clone=*/nullptr);
 }
 
-// Reuses an existing filter from this DAP session if one matches (pattern, type), or creates
-// and tracks a new connection-scoped filter so disconnect teardown leaves persistent user
+// Reuses an existing filter from this DAP session if one matches the resolved (pattern, type), or
+// creates and tracks a new connection-scoped filter so disconnect teardown leaves persistent user
 // filters (e.g. from ~/.fuchsia/debug/zxdbrc) untouched.
-Filter* FindOrCreateFilter(DebugAdapterContext* context, const std::string& pattern,
-                           debug_ipc::Filter::Type type) {
+Filter* FindOrCreateFilter(DebugAdapterContext* context, const std::string& pattern, bool exact) {
+  // ResolveFilterType can trim the pattern, so it gets a copy.
+  std::string resolved_pattern = pattern;
+  const debug_ipc::Filter::Type type = debug_ipc::ResolveFilterType(
+      resolved_pattern, {.exact = exact, .platform = context->session()->platform()});
   for (Filter* existing_filter : context->filters()) {
-    if (existing_filter && existing_filter->pattern() == pattern &&
+    if (existing_filter && existing_filter->pattern() == resolved_pattern &&
         existing_filter->type() == type) {
       return existing_filter;
     }
   }
 
   Filter* filter = context->session()->system().CreateNewFilter();
-  filter->SetPattern(pattern);
-  filter->SetType(type);
+  filter->SetPatternAndResolveType(pattern, exact);
   context->StoreFilter(filter);
   return filter;
 }
@@ -75,8 +77,7 @@ dap::ResponseOrError<dap::AttachResponse> OnRequestAttach(DebugAdapterContext* c
     return err;
   }
 
-  // Mutable copy: ResolveFilterType trims process-name patterns to Zircon's 31-char limit.
-  std::string pattern = req.process;
+  const std::string& pattern = req.process;
   const bool is_recursive = req.recursive.value(false);
   const bool is_weak = req.weak.value(false);
   const bool is_exact = req.exact.value(false);
@@ -113,8 +114,7 @@ dap::ResponseOrError<dap::AttachResponse> OnRequestAttach(DebugAdapterContext* c
     return response;
   }
 
-  const debug_ipc::Filter::Type type = debug_ipc::ResolveFilterType(pattern, {.exact = is_exact});
-  Filter* filter = FindOrCreateFilter(context, pattern, type);
+  Filter* filter = FindOrCreateFilter(context, pattern, is_exact);
 
   // Always synchronize option flags so a reused filter does not retain stale settings.
   filter->SetRecursive(is_recursive);

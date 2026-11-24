@@ -58,7 +58,7 @@ Handler implementations must preserve these invariants:
 
 - `OnRequestAttach` requires a non-empty process pattern. It parses decimal
   strings as `uint64_t` KOIDs for direct attach and resolves symbolic patterns
-  via `debug_ipc::ResolveFilterType`.
+  via `debug_ipc::ResolveFilterType` for the session platform.
 - Without client `RunInTerminal` support, `OnRequestLaunch` requires
   `req.process` to contain `://` and end with `.cm`.
 - `OnRequestBreakpoint` requires `req.source.path` to be present, absolute, and

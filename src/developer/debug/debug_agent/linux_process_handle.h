@@ -30,6 +30,7 @@ class LinuxProcessHandle final : public ProcessHandle, public LinuxTaskObserver 
   NativeProcessHandle& GetNativeHandle() override { return task_; }
   zx_koid_t GetKoid() const override { return task_->pid(); }
   std::string GetName() const override;
+  std::vector<std::string> GetFilterNames() const override;
   std::vector<std::unique_ptr<ThreadHandle>> GetChildThreads() const override;
   zx_koid_t GetJobKoid() const override { return 0; }
   debug::Status Kill() override;

@@ -150,6 +150,9 @@ std::map<uint64_t, AttachConfig> GetAttachConfigsForFilterMatches(
 Filter::Type ResolveFilterType(std::string& pattern, const FilterResolutionOptions& options) {
   constexpr size_t kMaxProcessNameLength = 31;
 
+  if (options.platform != debug::Platform::kFuchsia)
+    return options.exact ? Filter::Type::kProcessName : Filter::Type::kProcessNameSubstr;
+
   if (options.exact) {
     if (pattern.size() > kMaxProcessNameLength) {
       pattern.resize(kMaxProcessNameLength);

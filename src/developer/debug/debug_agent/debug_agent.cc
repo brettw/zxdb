@@ -561,25 +561,28 @@ void DebugAgent::OnUpdateFilter(const debug_ipc::UpdateFilterRequest& request,
   for (const auto& debug_ipc_filter : request.filters) {
     auto filter = Filter(debug_ipc_filter);
     // Search all of the known ELF processes in the system for a match.
-    FX_DCHECK(root_job_);
-    std::vector<debug_ipc::MatchedTask> matched_processes =
-        filter.ApplyToJob(root_job_->job_handle(), *system_interface_);
-    for (const auto& match : matched_processes) {
-      std::vector<debug_ipc::ComponentInfo> component_info;
+    std::vector<debug_ipc::MatchedTask> matched_processes = ApplyFilterToSystem(filter);
 
-      if (auto process = system_interface().GetProcess(match.koid)) {
-        component_info = system_interface().GetComponentManager().FindComponentInfo(*process);
-      } else if (filter.filter().config.job_only) {
-        // If this filter was configured with job_only then the koid values provided here will be
-        // the koid of the job itself.
-        component_info = system_interface().GetComponentManager().FindComponentInfo(match.koid);
+    // Only recursive filters use the component information of the matches. Each lookup can search
+    // all processes in the system, so other filters skip it.
+    if (filter.filter().config.recursive) {
+      for (const auto& match : matched_processes) {
+        std::vector<debug_ipc::ComponentInfo> component_info;
+
+        if (auto process = system_interface().GetProcess(match.koid)) {
+          component_info = system_interface().GetComponentManager().FindComponentInfo(*process);
+        } else if (filter.filter().config.job_only) {
+          // If this filter was configured with job_only then the koid values provided here will be
+          // the koid of the job itself.
+          component_info = system_interface().GetComponentManager().FindComponentInfo(match.koid);
+        }
+
+        auto result = CheckForRecursiveFilterMatches(filter, component_info);
+        filters_.insert(filters_.end(), result.new_filters.begin(), result.new_filters.end());
+        reply->matched_processes_for_filter.insert(reply->matched_processes_for_filter.end(),
+                                                   result.new_matches.begin(),
+                                                   result.new_matches.end());
       }
-
-      auto result = CheckForRecursiveFilterMatches(filter, component_info);
-      filters_.insert(filters_.end(), result.new_filters.begin(), result.new_filters.end());
-      reply->matched_processes_for_filter.insert(reply->matched_processes_for_filter.end(),
-                                                 result.new_matches.begin(),
-                                                 result.new_matches.end());
     }
 
     // Also search all of the non-ELF components that we know about for a match to resolve recursive
@@ -694,8 +697,8 @@ std::vector<debug_ipc::ProcessThreadId> DebugAgent::ClientSuspendAll(zx_koid_t e
 }
 
 bool DebugAgent::IsAttachedToParentOrAncestorOf(zx_koid_t parent) {
-  FX_DCHECK(root_job_);
-  zx_koid_t root_koid = root_job_->koid();
+  // Without a watched root job, the walk continues until the job has no parent.
+  zx_koid_t root_koid = root_job_ ? root_job_->koid() : ZX_KOID_INVALID;
   while (parent != ZX_KOID_INVALID && parent != root_koid) {
     auto debugged_job = GetDebuggedJob(parent);
     if (debugged_job && debugged_job->type() == JobExceptionChannelType::kException) {
@@ -744,9 +747,7 @@ DebugAgent::RecursiveFilterMatchResult DebugAgent::CheckForRecursiveFilterMatche
         // Tell the client(s) that we created a new filter.
         SendNotification(filter_created);
 
-        FX_DCHECK(root_job_);
-        std::vector<debug_ipc::MatchedTask> new_matches =
-            recursive_filter->ApplyToJob(root_job_->job_handle(), system_interface());
+        std::vector<debug_ipc::MatchedTask> new_matches = ApplyFilterToSystem(*recursive_filter);
         if (!new_matches.empty()) {
           result.new_matches.emplace_back(recursive_filter->filter().id, new_matches);
         }
@@ -757,6 +758,23 @@ DebugAgent::RecursiveFilterMatchResult DebugAgent::CheckForRecursiveFilterMatche
   }
 
   return result;
+}
+
+std::vector<debug_ipc::MatchedTask> DebugAgent::ApplyFilterToSystem(const Filter& filter) {
+  // Fuchsia searches the watched root job. Other platforms don't watch a root job, so they search
+  // the job that the system interface reports as the root.
+  std::vector<debug_ipc::MatchedTask> matches;
+  if (root_job_) {
+    matches = filter.ApplyToJob(root_job_->job_handle(), *system_interface_);
+  } else if (std::unique_ptr<JobHandle> root_job = system_interface_->GetRootJob()) {
+    matches = filter.ApplyToJob(*root_job, *system_interface_);
+  }
+
+  std::erase_if(matches, [this](const debug_ipc::MatchedTask& match) {
+    return std::ranges::find(options_.filter_excluded_koids, match.koid) !=
+           options_.filter_excluded_koids.end();
+  });
+  return matches;
 }
 
 std::vector<debug_ipc::FilterMatch> DebugAgent::AccumulateFilterMatches(

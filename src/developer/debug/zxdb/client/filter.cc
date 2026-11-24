@@ -157,12 +157,44 @@ Filter::Filter(Session* session, std::optional<debug_ipc::Filter> filter)
 
 void Filter::SetType(debug_ipc::Filter::Type type) {
   filter_.type = type;
+  unresolved_pattern_.reset();
   Sync();
 }
 
 void Filter::SetPattern(const std::string& pattern) {
   filter_.pattern = pattern;
+  unresolved_pattern_.reset();
   Sync();
+}
+
+void Filter::SetPatternAndResolveType(const std::string& pattern, bool exact) {
+  ResolvePattern(pattern, exact);
+  Sync();
+}
+
+bool Filter::ResolvePendingPattern() {
+  if (!unresolved_pattern_ || session()->platform() == debug::Platform::kUnknown)
+    return false;
+
+  const debug_ipc::Filter::Type old_type = filter_.type;
+  const std::string old_pattern = filter_.pattern;
+  UnresolvedPattern unresolved = std::move(*unresolved_pattern_);
+  ResolvePattern(unresolved.pattern, unresolved.exact);
+  return filter_.type != old_type || filter_.pattern != old_pattern;
+}
+
+void Filter::ResolvePattern(const std::string& pattern, bool exact) {
+  const debug::Platform platform = session()->platform();
+
+  std::string resolved = pattern;
+  filter_.type = debug_ipc::ResolveFilterType(resolved, {.exact = exact, .platform = platform});
+  filter_.pattern = std::move(resolved);
+
+  if (platform == debug::Platform::kUnknown) {
+    unresolved_pattern_ = UnresolvedPattern{.pattern = pattern, .exact = exact};
+  } else {
+    unresolved_pattern_.reset();
+  }
 }
 
 void Filter::SetJobKoid(zx_koid_t job_koid) {
@@ -187,6 +219,7 @@ void Filter::SetJobOnly(bool job_only) {
 
 void Filter::SetFilter(const debug_ipc::Filter& filter) {
   filter_ = filter;
+  unresolved_pattern_.reset();
   Sync();
 }
 

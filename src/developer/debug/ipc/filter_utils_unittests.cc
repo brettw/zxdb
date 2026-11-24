@@ -206,4 +206,51 @@ TEST(FilterUtils, ConflictingFiltersDifferentTargets) {
   EXPECT_EQ(no_attach->second.target, TaskType::kProcess);
 }
 
+TEST(FilterUtils, ResolveFilterTypeFuchsia) {
+  constexpr FilterResolutionOptions kFuchsia{.platform = debug::Platform::kFuchsia};
+  const std::string kLongName = "a_process_name_with_more_than_31_characters";
+
+  std::string pattern = "fuchsia-pkg://devhost/package#meta/component.cm";
+  EXPECT_EQ(ResolveFilterType(pattern, kFuchsia), Filter::Type::kComponentUrl);
+  pattern = "/core/component";
+  EXPECT_EQ(ResolveFilterType(pattern, kFuchsia), Filter::Type::kComponentMoniker);
+  pattern = "core/component";
+  EXPECT_EQ(ResolveFilterType(pattern, kFuchsia), Filter::Type::kComponentMonikerSuffix);
+  pattern = "component.cm";
+  EXPECT_EQ(ResolveFilterType(pattern, kFuchsia), Filter::Type::kComponentName);
+
+  // Process names are trimmed to the Zircon limit.
+  pattern = kLongName;
+  EXPECT_EQ(ResolveFilterType(pattern, kFuchsia), Filter::Type::kProcessNameSubstr);
+  EXPECT_EQ(pattern, kLongName.substr(0, 31));
+  pattern = kLongName;
+  EXPECT_EQ(ResolveFilterType(pattern, {.exact = true, .platform = debug::Platform::kFuchsia}),
+            Filter::Type::kProcessName);
+  EXPECT_EQ(pattern, kLongName.substr(0, 31));
+}
+
+TEST(FilterUtils, ResolveFilterTypeOtherPlatforms) {
+  const std::string kLongName = "a_process_name_with_more_than_31_characters";
+
+  for (debug::Platform platform : {debug::Platform::kLinux, debug::Platform::kUnknown}) {
+    // Patterns that are components on Fuchsia are process names on other platforms. They aren't
+    // trimmed.
+    for (const std::string& original :
+         {std::string("fuchsia-pkg://devhost/package#meta/component.cm"),
+          std::string("/usr/bin/program"), std::string("bin/program"), std::string("component.cm"),
+          kLongName}) {
+      std::string pattern = original;
+      EXPECT_EQ(ResolveFilterType(pattern, {.platform = platform}),
+                Filter::Type::kProcessNameSubstr)
+          << original;
+      EXPECT_EQ(pattern, original);
+
+      EXPECT_EQ(ResolveFilterType(pattern, {.exact = true, .platform = platform}),
+                Filter::Type::kProcessName)
+          << original;
+      EXPECT_EQ(pattern, original);
+    }
+  }
+}
+
 }  // namespace debug_ipc

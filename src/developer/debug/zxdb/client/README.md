@@ -79,6 +79,11 @@ owned by `System`.
 `Filter` watches for matching process names, job KOIDs, or component
 monikers/URLs and attaches automatically when a match starts.
 
+`Filter::SetPatternAndResolveType` resolves the filter type for the session
+platform. Before a connection, the platform is unknown. Then the filter keeps
+the original pattern, and `System::DidConnect` resolves it again for the
+connected platform. An explicit type or pattern cancels this resolution.
+
 ### Tracepoint
 
 `System` owns all `Tracepoint` objects globally. A tracepoint defines a location

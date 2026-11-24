@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include "src/developer/debug/debug_agent/mock_process_handle.h"
 #include "src/developer/debug/debug_agent/mock_system_interface.h"
 #include "src/developer/debug/debug_agent/system_interface.h"
 #include "src/developer/debug/ipc/records.h"
@@ -62,6 +63,32 @@ TEST(Filter, MatchProcess) {
   process = system_interface->GetProcess(26);
   filter = {.type = debug_ipc::Filter::Type::kComponentMonikerSuffix, .pattern = "fixed/moniker"};
   EXPECT_TRUE(Filter(filter).MatchesProcess(*process, *system_interface));
+}
+
+TEST(Filter, MatchProcessFilterNames) {
+  auto system_interface = MockSystemInterface::CreateWithData();
+
+  MockProcessHandle process(100, "./prog");
+  process.set_filter_names({"./prog", "prog", "/usr/bin/prog"});
+
+  auto matches = [&](debug_ipc::Filter::Type type, std::string pattern) {
+    debug_ipc::Filter filter{.type = type, .pattern = std::move(pattern)};
+    return Filter(filter).MatchesProcess(process, *system_interface);
+  };
+
+  // An exact filter matches any of the names.
+  EXPECT_TRUE(matches(debug_ipc::Filter::Type::kProcessName, "prog"));
+  EXPECT_TRUE(matches(debug_ipc::Filter::Type::kProcessName, "./prog"));
+  EXPECT_TRUE(matches(debug_ipc::Filter::Type::kProcessName, "/usr/bin/prog"));
+  EXPECT_FALSE(matches(debug_ipc::Filter::Type::kProcessName, "bin/prog"));
+
+  // A substring filter matches part of any of the names.
+  EXPECT_TRUE(matches(debug_ipc::Filter::Type::kProcessNameSubstr, "usr/bin"));
+  EXPECT_TRUE(matches(debug_ipc::Filter::Type::kProcessNameSubstr, "./pr"));
+  EXPECT_FALSE(matches(debug_ipc::Filter::Type::kProcessNameSubstr, "sbin"));
+
+  // Component filters don't match the process names.
+  EXPECT_FALSE(matches(debug_ipc::Filter::Type::kComponentName, "prog"));
 }
 
 TEST(Filter, ApplyToJob) {

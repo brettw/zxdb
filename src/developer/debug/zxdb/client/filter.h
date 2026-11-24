@@ -8,6 +8,7 @@
 #include <zircon/types.h>
 
 #include <optional>
+#include <string>
 
 #include "src/developer/debug/ipc/records.h"
 #include "src/developer/debug/zxdb/client/client_object.h"
@@ -29,6 +30,15 @@ class Filter : public ClientObject {
 
   void SetType(debug_ipc::Filter::Type type);
   debug_ipc::Filter::Type type() const { return filter_.type; }
+
+  // Sets the pattern and the type that debug_ipc::ResolveFilterType gives for the session
+  // platform. The resolution can trim the pattern. Before a connection, the platform isn't known.
+  // Then the filter keeps the original pattern and resolves it again when the session connects.
+  void SetPatternAndResolveType(const std::string& pattern, bool exact);
+
+  // Resolves the pattern from SetPatternAndResolveType again if the platform wasn't known when it
+  // was set. Returns true if the filter changed. The caller must sync the filters.
+  bool ResolvePendingPattern();
 
   void SetPattern(const std::string& pattern);
   const std::string& pattern() const { return filter_.pattern; }
@@ -54,8 +64,17 @@ class Filter : public ClientObject {
   static fxl::RefPtr<SettingSchema> GetSchema();
 
  private:
+  // A pattern that waits for the session platform. See SetPatternAndResolveType.
+  struct UnresolvedPattern {
+    std::string pattern;
+    bool exact = false;
+  };
+
   // Sync the filter to the debug_agent. Must be called when the filter changes.
   void Sync();
+
+  // Sets the type and pattern from the pattern for the current session platform.
+  void ResolvePattern(const std::string& pattern, bool exact);
 
   // Implements the SettingStore interface for the Filter (uses composition instead of inheritance
   // to keep the Filter API simpler).
@@ -75,6 +94,8 @@ class Filter : public ClientObject {
 
   // The real filter.
   debug_ipc::Filter filter_;
+
+  std::optional<UnresolvedPattern> unresolved_pattern_;
 };
 
 }  // namespace zxdb

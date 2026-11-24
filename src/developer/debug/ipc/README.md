@@ -105,9 +105,10 @@ Callers and protocol definitions must preserve these invariants:
 
 These functions produce the following state and callback side effects:
 
-- `ResolveFilterType` truncates its `pattern` string argument in place to 31
-  characters (Zircon's process name limit) for `kProcessName` and
-  `kProcessNameSubstr`.
+- On Fuchsia, `ResolveFilterType` truncates its `pattern` string argument in
+  place to 31 characters (Zircon's process name limit) for `kProcessName` and
+  `kProcessNameSubstr`. For other platforms, including `kUnknown`, it resolves
+  every pattern to a process name type and does not change the pattern.
 - `GenerateFilterIdValue` advances a function-local static random number engine
   (`std::independent_bits_engine`) to generate 24-bit IDs and asserts that the
   upper 8 bits are zero.

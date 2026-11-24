@@ -26,6 +26,11 @@ void RemoteAPITest::SetUp() {
   session_ = std::make_unique<Session>(GetRemoteAPIImpl(), GetArch(), GetPlatform(), 4096);
 }
 
+void RemoteAPITest::SimulateConnection(debug::Platform platform) {
+  ASSERT_TRUE(session_->SetArch(GetArch(), platform, 4096).ok());
+  session_->system().DidConnect(System::Where::kRemote);
+}
+
 void RemoteAPITest::TearDown() { session_.reset(); }
 
 void RemoteAPITest::InjectModule(Process* process, fxl::RefPtr<ModuleSymbols> mod_sym,

@@ -236,4 +236,31 @@ TEST_F(VerbAttach, Filter) {
   EXPECT_TRUE(GetLastFilter().config.job_only);
 }
 
+class VerbAttachLinux : public VerbAttach {
+ protected:
+  debug::Platform GetPlatform() const override { return debug::Platform::kLinux; }
+};
+
+TEST_F(VerbAttachLinux, Filter) {
+  // Fuchsia component patterns are process names on Linux.
+  for (const char* pattern : {"/usr/bin/program", "bin/program", "component.cm",
+                              "fuchsia-pkg://devhost/package#meta/component.cm"}) {
+    console().ProcessInputLine(std::string("attach ") + pattern);
+    EXPECT_EQ(debug_ipc::Filter::Type::kProcessNameSubstr, GetLastFilter().type) << pattern;
+    EXPECT_EQ(pattern, GetLastFilter().pattern);
+  }
+
+  // Long names aren't trimmed.
+  console().FlushOutputEvents();
+  const std::string kLongName = "a_process_name_with_more_than_31_characters";
+  console().ProcessInputLine("attach --exact " + kLongName);
+  EXPECT_EQ(debug_ipc::Filter::Type::kProcessName, GetLastFilter().type);
+  EXPECT_EQ(kLongName, GetLastFilter().pattern);
+  auto event = console().GetOutputEvent();
+  ASSERT_EQ(fxl::StringPrintf("Waiting for process matching \"%s\".\n"
+                              "Type \"filter\" to see the current filters.",
+                              kLongName.c_str()),
+            event.output.AsString());
+}
+
 }  // namespace zxdb

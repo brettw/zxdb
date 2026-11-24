@@ -7,6 +7,8 @@
 #include <lib/syslog/cpp/macros.h>
 #include <zircon/types.h>
 
+#include <algorithm>
+
 #include "src/developer/debug/debug_agent/component_manager.h"
 #include "src/developer/debug/debug_agent/job_handle.h"
 #include "src/developer/debug/debug_agent/system_interface.h"
@@ -32,7 +34,12 @@ bool Filter::MatchesProcess(const ProcessHandle& process, SystemInterface& syste
   }
 
   const auto& components = system_interface.GetComponentManager().FindComponentInfo(process);
-  return debug_ipc::FilterMatches(filter_, process.GetName(), components);
+  std::vector<std::string> names = process.GetFilterNames();
+  if (names.empty())
+    names.emplace_back();  // Component filters don't use the name but still need one check.
+  return std::ranges::any_of(names, [&](const std::string& name) {
+    return debug_ipc::FilterMatches(filter_, name, components);
+  });
 }
 
 bool Filter::MatchesComponent(const std::string& moniker, const std::string& url) const {

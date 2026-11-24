@@ -4,7 +4,6 @@
 
 #include "src/developer/debug/zxdb/console/commands/verb_attach.h"
 
-#include "src/developer/debug/ipc/filter_utils.h"
 #include "src/developer/debug/ipc/records.h"
 #include "src/developer/debug/shared/string_util.h"
 #include "src/developer/debug/zxdb/client/filter.h"
@@ -51,7 +50,8 @@ Arguments
         Attaching to processes with an exact name. The argument will be
         interpreted as a filter that requires an exact match against the process
         name. This bypasses any heuristics below and is useful if the process
-        name looks like a pid/koid, a URL, or a moniker.
+        name looks like a pid/koid, a URL, or a moniker. See "Attaching to
+        processes by a process name" for the names on Linux.
 
     --weak
         Tells the backend to attach to any matching processes, but the front end
@@ -63,6 +63,7 @@ Arguments
         filter and all other flags to attach.
 
     --recursive
+        [Fuchsia only]
         Attaching recursively to a component means that when matched, an
         implicit moniker prefix filter will also be installed and will match any
         subsequent components that are launched under this component's realm.
@@ -80,6 +81,8 @@ Attaching to a process by a process id
 
 Attaching to processes by a component moniker
 
+  [Fuchsia only]
+
   Arguments starting with "/" will be interpreted as an exact component moniker.
   This will create a filter that matches all processes in the component with the
   given moniker.
@@ -94,6 +97,8 @@ Attaching to processes by a component moniker
 
 Attaching to processes by a component URL
 
+  [Fuchsia only]
+
   Arguments that look like a URL, e.g., starting with "fuchsia-pkg://" or
   "fuchsia-boot://", will be interpreted as a component URL. This will create a
   filter that matches all processes in components with the given URL.
@@ -103,6 +108,8 @@ Attaching to processes by a component URL
 
 Attaching to processes by a component name
 
+  [Fuchsia only]
+
   Arguments ending with ".cm" will be interpreted as a component name. The
   component name is defined as the base name of the component manifest. So a
   component with an URL "fuchsia-pkg://devhost/foobar#meta/foobar.cm" has a
@@ -111,6 +118,8 @@ Attaching to processes by a component name
 
 Attaching to all processes within a realm
 
+  [Fuchsia only]
+
   Using any of the above component filters, using the --recursive option will
   attach to _all_ processes found under the realm of a matching component. The
   component can be specified with either exact moniker, moniker substring, or
@@ -118,6 +127,8 @@ Attaching to all processes within a realm
   to many processes, which will slow down the system.
 
 Attaching to the root job of a realm
+
+  [Fuchsia only]
 
   Using any of the above component filters, use the --job-only option to attach
   to the root job of that component. No processes will be attached unless
@@ -135,11 +146,21 @@ Attaching to processes by a process name
   that will be used to matches any part of the process name. Matched processes
   will be attached.
 
+  On Fuchsia, the process name is the Zircon object name. Patterns longer than
+  31 characters are trimmed to this length.
+
+  On Linux, all arguments are process names, including ones that look like
+  monikers, URLs, or component names. A filter matches both the command name
+  (argv[0]) and the executable path. With --exact, the argument must equal the
+  command name, the executable path, or the base name of either one. Patterns
+  aren't trimmed.
+
 How "attach" works
 
   Except attaching by a process id, all other "attach" commands will create
   filters. Filters are applied to all processes in the system, both current
-  processes and future ones.
+  processes and future ones. On Linux, filters check a new process only when
+  an attached process forks it.
 
   You can:
 
@@ -162,37 +183,41 @@ Examples
   attach foobar
       Attaches to processes with "foobar" in their process names.
 
+  attach --exact foobar
+      On Linux, attaches to processes started as "foobar", "./foobar", or
+      "/usr/bin/foobar".
+
   attach /core/foobar
-      Attaches to processes in the component /core/foobar.
+      [Fuchsia] Attaches to processes in the component /core/foobar.
 
   attach --recursive /core/foobar
-      Attaches to all processes found in the realm rooted at /core/foobar.
+      [Fuchsia] Attaches to all processes found in the realm rooted at /core/foobar.
 
   attach foo/bar
-      Attaches to processes in the component(s) with foo/bar in their moniker.
+      [Fuchsia] Attaches to processes in the component(s) with foo/bar in their moniker.
 
   attach --recursive foo/bar
-      Attaches to all processes in all realms rooted at any moniker containing
+      [Fuchsia] Attaches to all processes in all realms rooted at any moniker containing
       foo/bar.
 
   attach fuchsia-pkg://devhost/foobar#meta/foobar.cm
-      Attaches to processes in components with the above component URL.
+      [Fuchsia] Attaches to processes in components with the above component URL.
 
   attach --recursive fuchsia-pkg://devhost/foobar#meta/foobar.cm
-      Attaches to all processes in the realm rooted at any moniker associated
+      [Fuchsia] Attaches to all processes in the realm rooted at any moniker associated
       with the given URL.
 
   attach foobar.cm
-      Attaches to processes in components with the above name.
+      [Fuchsia] Attaches to processes in components with the above name.
 
   attach --job-only foobar.cm
-      Attaches to the root job within the realm associated with foobar.cm
+      [Fuchsia] Attaches to the root job within the realm associated with foobar.cm
 
   attach --exact /pkg/bin/foobar
       Attaches to processes with a name "/pkg/bin/foobar".
 
   attach --job 2037
-      Attaches to all processes under the job with koid 2037.
+      [Fuchsia] Attaches to all processes under the job with koid 2037.
 )";
 
 void RunVerbAttach(const Command& cmd, fxl::RefPtr<CommandContext> cmd_context) {
@@ -279,18 +304,15 @@ void RunVerbAttach(const Command& cmd, fxl::RefPtr<CommandContext> cmd_context) 
     filter->SetJobKoid(job_koid);
   }
 
-  std::string original_pattern = pattern;
-  auto type = debug_ipc::ResolveFilterType(pattern, {.exact = cmd.HasSwitch(kSwitchExact)});
-
-  if (pattern.size() < original_pattern.size()) {
+  filter->SetPatternAndResolveType(pattern, cmd.HasSwitch(kSwitchExact));
+  if (filter->pattern().size() < pattern.size()) {
     Console::get()->Output(OutputBuffer(
         Syntax::kWarning,
         "The filter is trimmed to " + std::to_string(kZirconMaxNameLength) +
             " characters because it's the maximum length for a process name in Zircon."));
   }
 
-  filter->SetType(type);
-  filter->SetPattern(pattern);
+  pattern = filter->pattern();
 
   console_context->SetActiveFilter(filter);
 

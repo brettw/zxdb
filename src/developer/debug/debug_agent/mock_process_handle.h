@@ -32,6 +32,9 @@ class MockProcessHandle : public ProcessHandle {
   explicit MockProcessHandle(zx_koid_t process_koid, std::string name = std::string());
 
   void set_name(std::string n) { name_ = std::move(n); }
+
+  // Sets the names for process name filters. When this is empty, only the name is used.
+  void set_filter_names(std::vector<std::string> names) { filter_names_ = std::move(names); }
   void set_job_koid(zx_koid_t koid) { job_koid_ = koid; }
 
   // Sets the threads. These will be copied since we need to return a new unique_ptr for each call
@@ -56,6 +59,9 @@ class MockProcessHandle : public ProcessHandle {
   NativeProcessHandle& GetNativeHandle() override { return null_handle_; }
   zx_koid_t GetKoid() const override { return process_koid_; }
   std::string GetName() const override { return name_; }
+  std::vector<std::string> GetFilterNames() const override {
+    return filter_names_.empty() ? ProcessHandle::GetFilterNames() : filter_names_;
+  }
   std::vector<std::unique_ptr<ThreadHandle>> GetChildThreads() const override;
   zx_koid_t GetJobKoid() const override { return job_koid_; }
   debug::Status Kill() override;
@@ -85,6 +91,7 @@ class MockProcessHandle : public ProcessHandle {
   zx_koid_t process_koid_;
   zx_koid_t job_koid_ = ZX_KOID_INVALID;
   std::string name_;
+  std::vector<std::string> filter_names_;
 
   bool is_attached_ = false;
 

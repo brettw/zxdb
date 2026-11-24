@@ -46,6 +46,10 @@ Compile the program with debug information (`-g`) for source-level debugging.
 Use `--symbol-path=/path/to/binary` if its symbols cannot be found automatically.
 Linux ptrace permissions apply to local launches and attachments.
 
+To debug a program that is already running, use `attach <pid>` or
+`attach <name>`. A name matches part of the command name or the executable
+path. With `attach --exact`, the name must equal one of these or its base name.
+
 The DAP server can use the integrated agent too:
 
 ```sh

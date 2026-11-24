@@ -68,8 +68,13 @@ std::map<std::string, std::string> GetStatus(int pid);
 // Returns the executable file name as defined in /proc/<pid>/exe. Empty on failure.
 std::string GetExe(int pid);
 
-// Returns the command line for the given process. Will be empty on failure.
+// Returns the command line for the given process. Will be empty on failure. Empty arguments are
+// omitted.
 std::vector<std::string> GetCommandLine(int pid);
+
+// Returns the first command-line argument (argv[0]) of the process. It's empty when the process
+// set an empty argv[0] and on failure.
+std::string GetArgv0(int pid);
 
 // Returns the load address of the ld.so for the given process ID. Returns 0 on failure.
 uint64_t GetLdSoLoadAddress(int pid);
