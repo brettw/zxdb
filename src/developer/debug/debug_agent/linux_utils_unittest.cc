@@ -49,6 +49,43 @@ TEST(LinuxUtils, ParseMaps) {
   EXPECT_EQ("/usr/bin/zsh", result[1].path);
 }
 
+TEST(LinuxUtils, ParsePtraceScope) {
+  EXPECT_EQ(ParsePtraceScope("1\n"), 1);
+  EXPECT_EQ(ParsePtraceScope("0"), 0);
+  EXPECT_EQ(ParsePtraceScope("3\n"), 3);
+  EXPECT_EQ(ParsePtraceScope(""), std::nullopt);
+  EXPECT_EQ(ParsePtraceScope("\n"), std::nullopt);
+  EXPECT_EQ(ParsePtraceScope("one\n"), std::nullopt);
+  EXPECT_EQ(ParsePtraceScope("1 2\n"), std::nullopt);
+}
+
+TEST(LinuxUtils, GetPtraceScopeNote) {
+  constexpr char kSysctlFix[] = "sudo sysctl -w kernel.yama.ptrace_scope=0";
+
+  // Scope 0 is the classic ptrace rule, so there's nothing to explain.
+  EXPECT_EQ(GetPtraceScopeNote(0), "");
+  EXPECT_EQ(GetPtraceScopeNote(4), "");
+
+  std::string note = GetPtraceScopeNote(1);
+  EXPECT_NE(note.find("ptrace_scope is 1"), std::string::npos) << note;
+  EXPECT_NE(note.find("only to its descendants"), std::string::npos) << note;
+  EXPECT_NE(note.find("PR_SET_PTRACER"), std::string::npos) << note;
+  EXPECT_NE(note.find("can be why the attach failed"), std::string::npos) << note;
+  EXPECT_NE(note.find(kSysctlFix), std::string::npos) << note;
+
+  note = GetPtraceScopeNote(2);
+  EXPECT_NE(note.find("ptrace_scope is 2"), std::string::npos) << note;
+  EXPECT_NE(note.find("CAP_SYS_PTRACE"), std::string::npos) << note;
+  EXPECT_NE(note.find("can be why the attach failed"), std::string::npos) << note;
+  EXPECT_NE(note.find(kSysctlFix), std::string::npos) << note;
+
+  // Scope 3 can't change without a restart, so the note doesn't suggest sysctl.
+  note = GetPtraceScopeNote(3);
+  EXPECT_NE(note.find("ptrace_scope is 3"), std::string::npos) << note;
+  EXPECT_NE(note.find("restarts"), std::string::npos) << note;
+  EXPECT_EQ(note.find("sysctl"), std::string::npos) << note;
+}
+
 TEST(LinuxUtils, ParseStatus) {
   // Empty input.
   std::map<std::string, std::string> result = ParseStatus("");

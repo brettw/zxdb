@@ -99,6 +99,11 @@ Callers and implementations must preserve these invariants:
   by the user before the frontend starts. Auxv ABI validation uses AT_PHENT and
   does not require read permission on the executable.
   Hardware breakpoint/watchpoint slot counts are zero until supported.
+- When the kernel denies a Linux attach with EPERM, the error names the
+  process that already traces the target, and a worker thread is named with its
+  process. If no process traces it, a Yama `ptrace_scope` of 1 to 3 adds a note,
+  as LLDB does. The note gives the setting as a possible cause, because
+  credentials or a non-dumpable target can also deny the attach.
 - Linux task suspend tokens express intent. Only a collected ptrace stop
   authorizes registers, memory writes, or detach. The agent keeps per-TID wait
   ownership through final reaping, and invalidates deferred events on observer

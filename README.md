@@ -44,7 +44,12 @@ quit
 
 Compile the program with debug information (`-g`) for source-level debugging.
 Use `--symbol-path=/path/to/binary` if its symbols cannot be found automatically.
-Linux ptrace permissions apply to local launches and attachments.
+Linux ptrace permissions apply to local launches and attachments. When the Yama
+`ptrace_scope` setting is 1, the default on Ubuntu, zxdb can usually attach
+only to programs that it launched. An exception is a debugger with
+`CAP_SYS_PTRACE`, or a program that allows the attach with `PR_SET_PTRACER`.
+When the kernel denies an attach, the error message names this setting as a
+possible cause and tells how to remove the restriction.
 
 To debug a program that is already running, use `attach <pid>` or
 `attach <name>`. A name matches part of the command name or the executable

@@ -15,6 +15,10 @@
 #include <zircon/errors.h>
 
 #include <chrono>
+#include <cstring>
+#include <map>
+#include <optional>
+#include <string>
 #include <thread>
 
 #include <linux/unistd.h>
@@ -25,6 +29,7 @@
 #include "src/developer/debug/debug_agent/linux_utils.h"
 #include "src/developer/debug/shared/logging/logging.h"
 #include "src/developer/debug/shared/message_loop_linux.h"
+#include "src/lib/fxl/strings/string_printf.h"
 
 namespace debug_agent {
 
@@ -69,6 +74,27 @@ std::string WaitpidStatusToString(int status) {
   return out.str();
 }
 
+// Returns the error for an attach to the task that the kernel denied with EPERM. The status is the
+// task's /proc status. The message names another tracer or a possible cause from the Yama ptrace
+// scope. The agent attaches to each thread separately, so a worker thread is named with its
+// process.
+debug::Status AttachPermissionError(int tid, std::map<std::string, std::string> status) {
+  const std::string& tgid = status["Tgid"];
+  std::string task = tgid.empty() || tgid == std::to_string(tid)
+                         ? fxl::StringPrintf("process %d", tid)
+                         : fxl::StringPrintf("thread %d of process %s", tid, tgid.c_str());
+  std::string message = fxl::StringPrintf("Can't attach to %s: %s.", task.c_str(), strerror(EPERM));
+
+  const std::string& tracer_pid = status["TracerPid"];
+  if (!tracer_pid.empty() && tracer_pid != "0") {
+    message += " Process " + tracer_pid + " already traces it.";
+  } else if (std::optional<int> ptrace_scope = linux::GetPtraceScope()) {
+    if (std::string note = linux::GetPtraceScopeNote(*ptrace_scope); !note.empty())
+      message += "\n" + note;
+  }
+  return debug::ErrnoStatus(EPERM, std::move(message));
+}
+
 }  // namespace
 
 LinuxTask::LinuxTask(uint64_t pid, bool is_attached)
@@ -87,10 +113,14 @@ debug::Status LinuxTask::Attach() {
   if (ptrace(PTRACE_SEIZE, pid_, nullptr, (void*)kPtraceOpts) == -1) {
     DEBUG_LOG(Process) << "PTRACE_SEIZE failed for PID " << pid_ << " errno = " << errno;
     int error = errno;
+    if (error != EPERM)
+      return debug::ErrnoStatus(error);
+
     // A worker created during attachment may already have been traced by a
     // parent's CLONE option. Adopt it only when this tracer owns it.
-    if (error != EPERM || linux::GetStatus(pid_)["TracerPid"] != std::to_string(getpid()))
-      return debug::ErrnoStatus(error);
+    std::map<std::string, std::string> status = linux::GetStatus(pid_);
+    if (status["TracerPid"] != std::to_string(getpid()))
+      return AttachPermissionError(pid_, std::move(status));
     initial_stop_pending_ = true;
   }
 

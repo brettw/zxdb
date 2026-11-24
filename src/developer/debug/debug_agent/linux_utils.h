@@ -65,6 +65,16 @@ struct ProcStat {
 std::map<std::string, std::string> ParseStatus(const std::string& contents);
 std::map<std::string, std::string> GetStatus(int pid);
 
+// Parses or reads the Yama ptrace scope from /proc/sys/kernel/yama/ptrace_scope. Returns nullopt
+// when the value isn't a number or Yama isn't enabled.
+std::optional<int> ParsePtraceScope(const std::string& contents);
+std::optional<int> GetPtraceScope();
+
+// Returns an explanation of how the given Yama ptrace scope can prevent an attach, with a way to
+// remove the restriction. The scope is a possible cause of a failed attach, not a certain one.
+// Returns an empty string for scopes that don't restrict an attach.
+std::string GetPtraceScopeNote(int ptrace_scope);
+
 // Returns the executable file name as defined in /proc/<pid>/exe. Empty on failure.
 std::string GetExe(int pid);
 

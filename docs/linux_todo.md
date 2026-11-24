@@ -42,11 +42,6 @@ IDs are stable references; do not renumber the remaining items after removal.
   Sources: [Zircon job events][zircon-job], [Linux job handle][linux-job],
   [Linux task events][linux-task].
 
-- [ ] **L28 · P1 · Attach fails under restricted ptrace scope.**
-  With Yama `ptrace_scope` set to 1, the default on many distributions, a user
-  without `CAP_SYS_PTRACE` can't trace a process that isn't a descendant of the
-  agent. PID and name attachment to existing processes fail for this user.
-
 ### Registers, breakpoints, and expression evaluation
 
 All four register categories have frontend/protocol support. Linux currently

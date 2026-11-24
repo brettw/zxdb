@@ -4,13 +4,18 @@
 
 #include "src/developer/debug/debug_agent/linux_task.h"
 
+#include <lib/fit/defer.h>
 #include <signal.h>
 #include <sys/mman.h>
 #include <sys/ptrace.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include <chrono>
+#include <cstring>
+#include <optional>
+#include <string>
 #include <thread>
 
 #include <gtest/gtest.h>
@@ -22,6 +27,7 @@
 #include "src/developer/debug/debug_agent/linux_utils.h"
 #include "src/developer/debug/debug_agent/process_handle_observer.h"
 #include "src/developer/debug/shared/message_loop_linux.h"
+#include "src/lib/fxl/strings/string_printf.h"
 
 namespace debug_agent {
 namespace {
@@ -350,6 +356,94 @@ TEST_F(LinuxTaskTest, AbandonedLaunchIsReaped) {
   EXPECT_EQ(-1, waitpid(pid, &status, WNOHANG));
   EXPECT_EQ(ECHILD, errno);
 }
+
+// The task that a tracer from RunOtherTracer traces.
+struct TracedTask {
+  pid_t process = 0;
+  pid_t tid = 0;
+};
+
+// Runs in a forked tracer process. The tracer forks a child that waits, seizes one task of the
+// child, and writes the child's PID and the task's TID to the file descriptor. The task is a worker
+// thread when trace_worker is set and the main thread otherwise. The tracer exits when a step
+// fails, so that the reader gets an end of file and doesn't wait.
+[[noreturn]] void RunOtherTracer(int fd, bool trace_worker) {
+  int tid_fds[2];
+  if (pipe(tid_fds) != 0)
+    _exit(1);
+  pid_t process = fork();
+  if (process == -1)
+    _exit(1);
+  if (process == 0) {
+    // The child reports the task to trace and then waits to be killed.
+    auto report_tid = [fd = tid_fds[1]] {
+      pid_t tid = static_cast<pid_t>(syscall(SYS_gettid));
+      if (write(fd, &tid, sizeof(tid)) != sizeof(tid))
+        _exit(1);
+      while (true)
+        pause();
+    };
+    if (trace_worker) {
+      std::thread(report_tid).detach();
+    } else {
+      report_tid();
+    }
+    while (true)
+      pause();
+  }
+  close(tid_fds[1]);
+
+  pid_t ids[2] = {process, 0};
+  if (read(tid_fds[0], &ids[1], sizeof(ids[1])) != sizeof(ids[1]) ||
+      ptrace(PTRACE_SEIZE, ids[1], nullptr, nullptr) != 0 ||
+      write(fd, ids, sizeof(ids)) != sizeof(ids)) {
+    kill(process, SIGKILL);
+    _exit(1);
+  }
+  while (true)
+    pause();
+}
+
+// Reads the IDs that RunOtherTracer writes. Returns nullopt when the tracer failed.
+std::optional<TracedTask> ReadTracedTask(int fd) {
+  pid_t ids[2] = {0, 0};
+  if (read(fd, ids, sizeof(ids)) != sizeof(ids) || ids[0] <= 0 || ids[1] <= 0)
+    return std::nullopt;
+  return TracedTask{.process = ids[0], .tid = ids[1]};
+}
+
+// Attaches to a task that another process traces and checks the error message.
+void ExpectOtherTracerError(bool trace_worker) {
+  int fds[2];
+  ASSERT_EQ(0, pipe(fds));
+  pid_t tracer = fork();
+  ASSERT_NE(-1, tracer);
+  if (tracer == 0) {
+    close(fds[0]);
+    RunOtherTracer(fds[1], trace_worker);
+  }
+  ChildGuard tracer_guard(tracer);
+  close(fds[1]);
+  std::optional<TracedTask> traced = ReadTracedTask(fds[0]);
+  close(fds[0]);
+  ASSERT_TRUE(traced) << "The tracer process couldn't trace its child.";
+  auto kill_traced = fit::defer([process = traced->process] { kill(process, SIGKILL); });
+
+  auto task = fxl::MakeRefCounted<LinuxTask>(traced->tid);
+  debug::Status status = task->Attach();
+  ASSERT_TRUE(status.has_error());
+
+  std::string expected_task =
+      trace_worker ? fxl::StringPrintf("thread %d of process %d", traced->tid, traced->process)
+                   : fxl::StringPrintf("process %d", traced->process);
+  EXPECT_EQ(fxl::StringPrintf("Can't attach to %s: %s. Process %d already traces it.",
+                              expected_task.c_str(), strerror(EPERM), tracer),
+            status.message());
+}
+
+TEST_F(LinuxTaskTest, AttachReportsOtherTracer) { ExpectOtherTracerError(false); }
+
+TEST_F(LinuxTaskTest, AttachReportsOtherTracerOfThread) { ExpectOtherTracerError(true); }
 
 }  // namespace
 }  // namespace debug_agent

@@ -18,9 +18,11 @@
 #include <unistd.h>
 #include <zircon/errors.h>
 
+#include <charconv>
 #include <cstring>
 #include <optional>
 #include <sstream>
+#include <string_view>
 
 #include <fbl/unique_fd.h>
 #include <linux/auxvec.h>
@@ -195,6 +197,62 @@ std::map<std::string, std::string> ParseStatus(const std::string& contents) {
 
 std::map<std::string, std::string> GetStatus(int pid) {
   return ParseStatus(ReadProcFile(pid, "status"));
+}
+
+std::optional<int> ParsePtraceScope(const std::string& contents) {
+  // The file contains one number and a newline.
+  int value = 0;
+  const char* begin = contents.data();
+  const char* end = begin + contents.size();
+  auto [ptr, error] = std::from_chars(begin, end, value);
+  if (error != std::errc() || ptr == begin ||
+      (ptr != end && std::string_view(ptr, end - ptr) != "\n"))
+    return std::nullopt;
+  return value;
+}
+
+std::optional<int> GetPtraceScope() {
+  std::string contents;
+  if (!files::ReadFileToString("/proc/sys/kernel/yama/ptrace_scope", &contents))
+    return std::nullopt;
+  return ParsePtraceScope(contents);
+}
+
+std::string GetPtraceScopeNote(int ptrace_scope) {
+  constexpr char kOtherCauses[] =
+      "This setting can be why the attach failed. Other causes are a target that belongs to "
+      "another user or that isn't dumpable, and a change to the setting doesn't remove them.\n";
+  constexpr char kSysctlFix[] =
+      "To remove the Yama restriction, run:\n"
+      "    sudo sysctl -w kernel.yama.ptrace_scope=0\n";
+  constexpr char kMoreInfo[] =
+      "For more information, see "
+      "https://www.kernel.org/doc/Documentation/security/Yama.txt.";
+
+  switch (ptrace_scope) {
+    case 1:
+      return std::string(
+                 "The value of /proc/sys/kernel/yama/ptrace_scope is 1. With this value, a "
+                 "process can attach only to its descendants, unless it has CAP_SYS_PTRACE or "
+                 "the target allows it with prctl(PR_SET_PTRACER).\n") +
+             kOtherCauses + kSysctlFix + kMoreInfo;
+    case 2:
+      return std::string(
+                 "The value of /proc/sys/kernel/yama/ptrace_scope is 2. With this value, only a "
+                 "process with CAP_SYS_PTRACE can attach.\n") +
+             kOtherCauses +
+             "To remove the Yama restriction, run the debugger with CAP_SYS_PTRACE, for "
+             "example as root, or run:\n"
+             "    sudo sysctl -w kernel.yama.ptrace_scope=0\n" +
+             kMoreInfo;
+    case 3:
+      return std::string(
+                 "The value of /proc/sys/kernel/yama/ptrace_scope is 3. With this value, no "
+                 "process can attach. The value can't change until the system restarts.\n") +
+             kMoreInfo;
+    default:
+      return std::string();
+  }
 }
 
 std::string GetExe(int pid) {
