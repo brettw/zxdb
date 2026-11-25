@@ -1,0 +1,22 @@
+[zxdb] set console-mode = shell
+[zxdb] status
+Connected to
+[zxdb] break x87_inferior.c:9
+Created Breakpoint
+[zxdb] run @CMAKE_CURRENT_BINARY_DIR@/x87_inferior
+on bp 1
+[zxdb] print y
+7.5
+[zxdb] print y * 2
+15
+[zxdb] print -x fcw
+0x37f
+[zxdb] regs -f
+st0  7.500000000000000000e+00
+[zxdb] print st0 = 10
+10
+[zxdb] print y
+10
+[zxdb] continue
+Process 1 exited with code 11.
+[zxdb] quit

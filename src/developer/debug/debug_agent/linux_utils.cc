@@ -261,6 +261,24 @@ debug::Status WriteDebugRegisters(int pid, const zx_thread_state_debug_regs_t& c
   return status;
 }
 
+std::optional<user_fpregs_struct> ReadFloatingPointRegisters(int pid) {
+  user_fpregs_struct regs{};
+  iovec vec{.iov_base = &regs, .iov_len = sizeof(regs)};
+  if (ptrace(PTRACE_GETREGSET, pid, NT_PRFPREG, &vec) == -1 || vec.iov_len != sizeof(regs))
+    return std::nullopt;
+  return regs;
+}
+
+debug::Status WriteFloatingPointRegisters(int pid, const user_fpregs_struct& regs) {
+  iovec vec{.iov_base = const_cast<user_fpregs_struct*>(&regs), .iov_len = sizeof(regs)};
+  if (ptrace(PTRACE_SETREGSET, pid, NT_PRFPREG, &vec) == -1) {
+    return debug::ErrnoStatus(
+        errno, fxl::StringPrintf("Can't write the floating-point registers of thread %d: %s.", pid,
+                                 strerror(errno)));
+  }
+  return debug::Status();
+}
+
 debug::Result<std::vector<MapEntry>, debug::Status> ParseMapsChecked(const std::string& contents) {
   std::vector<MapEntry> result;
 

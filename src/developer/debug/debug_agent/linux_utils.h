@@ -31,6 +31,11 @@ fbl::unique_fd OpenPidfd(int pid);
 std::optional<user_regs_struct> ReadGeneralRegisters(int pid);
 zx_status_t WriteGeneralRegisters(int pid, const user_regs_struct& regs);
 
+// Reads and writes the x87 and SSE state of a stopped, traced task. The kernel uses the FXSAVE
+// layout. A write replaces the whole state, so callers change a copy of the state that they read.
+std::optional<user_fpregs_struct> ReadFloatingPointRegisters(int pid);
+debug::Status WriteFloatingPointRegisters(int pid, const user_fpregs_struct& regs);
+
 // Reads the x86-64 debug registers DR0 to DR3, DR6, and DR7 of a stopped, traced task.
 std::optional<zx_thread_state_debug_regs_t> ReadDebugRegisters(int pid);
 

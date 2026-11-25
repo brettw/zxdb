@@ -44,8 +44,10 @@ void FillFormatNodeDescription(FormatNode* node, const FormatOptions& options,
                                const fxl::RefPtr<EvalContext>& context, fit::deferred_callback cb);
 
 // Formatter for numbers. This assumes the type of the value in the given node has already been
-// determined to be numeric. This may also be called as a fallback for things like enums.
-void FormatNumericNode(FormatNode* node, const FormatOptions& options);
+// determined to be numeric. This may also be called as a fallback for things like enums. The
+// architecture tells whether a 16-byte float uses the x87 extended format.
+void FormatNumericNode(FormatNode* node, const FormatOptions& options,
+                       debug::Arch arch = debug::Arch::kUnknown);
 
 // Formatters for strings. These are public so they can be shared by the pretty-printers.
 //

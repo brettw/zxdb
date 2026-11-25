@@ -7,6 +7,7 @@
 #include "src/developer/debug/zxdb/common/err.h"
 #include "src/developer/debug/zxdb/common/string_util.h"
 #include "src/developer/debug/zxdb/expr/eval_context.h"
+#include "src/developer/debug/zxdb/expr/x87_float.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
 #include "src/lib/fxl/strings/string_printf.h"
 
@@ -288,11 +289,16 @@ Err ExprValue::PromoteTo128(uint128_t* output) const {
   return Err();
 }
 
-Err ExprValue::PromoteToDouble(double* output) const {
+Err ExprValue::PromoteToDouble(double* output, debug::Arch arch) const {
   if (data_.empty())
     return Err("Value has no data.");
   if (!data_.all_valid())
     return Err::OptimizedOut();
+
+  if (IsX87ExtendedFloat(data_.size(), arch)) {
+    *output = X87ExtendedToDouble(data_.bytes());
+    return Err();
+  }
 
   switch (data_.size()) {
     case sizeof(float):

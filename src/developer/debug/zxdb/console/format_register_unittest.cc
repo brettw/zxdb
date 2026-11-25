@@ -234,6 +234,30 @@ TEST(FormatRegisters, VectorRegistersX64) {
 #if __x86_64__
 // This test involves formatting long doubles, which are not supported on ARM
 // where sizeof(long double) == sizeof(double)
+// The x87 control registers have their protocol widths, and FIP and FDP are above 4 GiB.
+TEST(FormatRegisters, FloatingPointControlRegisters) {
+  std::vector<debug::RegisterValue> registers;
+  registers.emplace_back(RegisterID::kX64_fcw, uint16_t{0x037f});
+  registers.emplace_back(RegisterID::kX64_fsw, uint16_t{0x3800});
+  registers.emplace_back(RegisterID::kX64_ftw, uint8_t{0x80});
+  registers.emplace_back(RegisterID::kX64_fop, uint16_t{0x07ff});
+  registers.emplace_back(RegisterID::kX64_fip, uint64_t{0x7ffd'1234'5678});
+  registers.emplace_back(RegisterID::kX64_fdp, uint64_t{0x1'0000'0000});
+
+  FormatRegisterOptions options;
+  options.arch = debug::Arch::kX64;
+  EXPECT_EQ(
+      "Floating Point Registers\n"
+      "  fcw  0000037f           \n"
+      "  fsw  00003800           \n"
+      "  ftw  00000080           \n"
+      "  fop  000007ff           \n"
+      "  fip  00007ffd 12345678  \n"
+      "  fdp  00000001 00000000  \n"
+      "\n",
+      FormatRegisters(options, registers).AsString());
+}
+
 TEST(FormatRegisters, AllRegisters) {
   std::vector<debug::RegisterValue> registers;
   FillGeneralRegisters(&registers);

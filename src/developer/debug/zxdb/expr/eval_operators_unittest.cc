@@ -12,6 +12,7 @@
 #include "src/developer/debug/zxdb/expr/local_expr_value.h"
 #include "src/developer/debug/zxdb/expr/mock_eval_context.h"
 #include "src/developer/debug/zxdb/expr/mock_expr_node.h"
+#include "src/developer/debug/zxdb/expr/x87_float.h"
 #include "src/developer/debug/zxdb/symbols/array_type.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
 #include "src/developer/debug/zxdb/symbols/type_test_support.h"
@@ -724,5 +725,21 @@ TEST_F(EvalOperators, ArrayResize) {
 }
 
 }  // namespace
+
+TEST_F(EvalOperators, X87Float) {
+  eval_context()->data_provider()->set_arch(debug::Arch::kX64);
+  auto long_double = fxl::MakeRefCounted<BaseType>(BaseType::kBaseTypeFloat, 16, "long double");
+  ExprValue x87(long_double, DoubleToX87Extended(7.5, 16));
+
+  // The result keeps the x87 type.
+  ErrOrValue out = SyncEvalBinaryOperator(x87, ExprTokenType::kStar, ExprValue(2));
+  ASSERT_TRUE(out.ok()) << out.err().msg();
+  EXPECT_EQ(long_double.get(), out.value().type());
+  EXPECT_EQ(DoubleToX87Extended(15.0, 16), out.value().data().bytes());
+
+  out = SyncEvalBinaryOperator(x87, ExprTokenType::kLess, ExprValue(8.0));
+  ASSERT_TRUE(out.ok()) << out.err().msg();
+  EXPECT_EQ(1u, out.value().GetAs<uint8_t>());
+}
 
 }  // namespace zxdb

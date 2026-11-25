@@ -50,6 +50,7 @@ add_library(zxdb_expr STATIC
   template_type_extractor.cc
   variable_decl.cc
   vector_register_format.cc
+  x87_float.cc
   vm_exec.cc
   vm_op.cc
   vm_op_type.cc

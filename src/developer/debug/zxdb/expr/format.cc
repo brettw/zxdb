@@ -18,6 +18,7 @@
 #include "src/developer/debug/zxdb/expr/resolve_collection.h"
 #include "src/developer/debug/zxdb/expr/resolve_ptr_ref.h"
 #include "src/developer/debug/zxdb/expr/resolve_variant.h"
+#include "src/developer/debug/zxdb/expr/x87_float.h"
 #include "src/developer/debug/zxdb/symbols/arch.h"
 #include "src/developer/debug/zxdb/symbols/array_type.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
@@ -65,8 +66,12 @@ void FormatBoolean(FormatNode* node) {
     node->set_description("false");
 }
 
-void FormatFloat(FormatNode* node) {
+void FormatFloat(FormatNode* node, debug::Arch arch) {
   const ExprValue& value = node->value();
+  if (IsX87ExtendedFloat(value.data().size(), arch)) {
+    node->set_description(fxl::StringPrintf("%g", X87ExtendedToDouble(value.data().bytes())));
+    return;
+  }
   switch (node->value().data().size()) {
     case sizeof(float):
       node->set_description(fxl::StringPrintf("%g", value.GetAs<float>()));
@@ -580,7 +585,7 @@ void FillFormatNodeDescriptionFromValue(FormatNode* node, const FormatOptions& o
   } else if (const BaseType* base_type = type->As<BaseType>()) {
     if (IsNumericBaseType(node->value().GetBaseType())) {
       // Numeric types.
-      FormatNumericNode(node, options);
+      FormatNumericNode(node, options, context->GetArch());
     } else if (base_type->base_type() == BaseType::kBaseTypeNone) {
       // Special encoding for "void".
       node->set_description("void");
@@ -671,7 +676,7 @@ void FillFormatNodeDescription(FormatNode* node, const FormatOptions& options,
   }
 }
 
-void FormatNumericNode(FormatNode* node, const FormatOptions& options) {
+void FormatNumericNode(FormatNode* node, const FormatOptions& options, debug::Arch arch) {
   if (!node->value().data().all_valid()) {
     node->set_err(Err::OptimizedOut());
     return;
@@ -679,7 +684,10 @@ void FormatNumericNode(FormatNode* node, const FormatOptions& options) {
 
   node->set_description_kind(FormatNode::kBaseType);
 
-  if (node->value().data().size() > sizeof(uint64_t)) {
+  // x87 extended floats are larger than 64 bits but have a decimal format.
+  bool x87_float = node->value().GetBaseType() == BaseType::kBaseTypeFloat &&
+                   IsX87ExtendedFloat(node->value().data().size(), arch);
+  if (node->value().data().size() > sizeof(uint64_t) && !x87_float) {
     // All >64-bit values get formatted as hex because we can't easily give these things to
     // printf.
     FormatUnsignedInt(node, options);
@@ -711,7 +719,7 @@ void FormatNumericNode(FormatNode* node, const FormatOptions& options) {
         FormatBoolean(node);
         break;
       case BaseType::kBaseTypeFloat:
-        FormatFloat(node);
+        FormatFloat(node, arch);
         break;
       case BaseType::kBaseTypeSigned:
         FormatSignedInt(node);

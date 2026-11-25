@@ -45,29 +45,19 @@ IDs are stable references; do not renumber the remaining items after removal.
 ### Registers, breakpoints, and expression evaluation
 
 All four register categories have frontend/protocol support. Linux currently
-returns values only for `kGeneral` and `kDebug`; unsupported categories return
-an empty list. Its write implementation accepts the general-register whitelist
-and DR0–DR3, DR6, and DR7.
+returns values for `kGeneral`, `kFloatingPoint`, and `kDebug`; `kVector` returns
+an empty list. Its write implementation accepts the general-register whitelist,
+the x87 registers, and DR0–DR3, DR6, and DR7.
 
 | Category | Fuchsia x86-64 implementation | Native Linux gap |
 | --- | --- | --- |
 | General | Integer registers, RIP, RFLAGS, FSBASE/GSBASE reads | Linux already reads and writes these 20 registers; no blanket general-register TODO |
-| Floating point | FCW, FSW, FTW, FOP, FIP, FDP, ST0–ST7 | All missing (L07) |
+| Floating point | FCW, FSW, FTW, FOP, FIP, FDP, ST0–ST7 | Linux already reads and writes these registers with the Fuchsia widths; no x87 TODO |
 | Vector | MXCSR and ZMM0–ZMM31 representation, with frontend XMM/YMM aliases | All missing (L08); actual availability must follow CPU/kernel support |
 | Debug | DR0–DR3, DR6, DR7 | Linux already reads and writes these registers and uses them for hardware breakpoints and watchpoints; no debug-register TODO |
 
 Sources: [Linux thread registers][linux-thread], [Linux general-register mapping][linux-x64],
 [Fuchsia x86-64 register reads/writes][zircon-x64].
-
-- [ ] **L07 · P1 · Read and write x87 floating-point state.**
-  Implement the floating-point category shown above, including the control/status
-  fields and stack-register format expected by the frontend. Fuchsia already
-  supplies this state; Linux returns none.
-  **Complete when:** known x87 values and control fields can be inspected and
-  changed, widths/padding are handled correctly, and unrelated register state is
-  preserved. Test round trips on multiple stopped threads.
-  Sources: [Linux ReadRegisters/WriteRegisters][linux-thread],
-  [Fuchsia floating-point conversion][zircon-x64].
 
 - [ ] **L08 · P1 · Read and write SIMD/vector state.**
   Add MXCSR and the vector state represented by the existing XMM/YMM/ZMM register
@@ -86,7 +76,7 @@ Sources: [Linux thread registers][linux-thread], [Linux general-register mapping
   categories, then restores the saved values. Empty Linux FP/vector responses
   leave that state unsaved. Calls can therefore change state that the debugger
   cannot restore; supported floating-point return decoding also needs L08.
-  **Complete when:** after L07–L08, real-inferior tests verify register preservation
+  **Complete when:** after L08, real-inferior tests verify register preservation
   across injected calls, error/cancel paths, and supported integer/floating-point
   return-value displays. Until then, reject operations that need unavailable
   state instead of presenting them as safe. Shared ABI limitations are not Linux
@@ -350,7 +340,7 @@ implementation exists; it is not a claim that every edge case was tested here.
 | `LoadInfoHandleTable` | No Linux implementation (L21) |
 | `UpdateGlobalSettings` | Shared handler exists; second-chance semantics differ (L18) |
 | `SaveMinidump` | Missing Linux writer (L11) |
-| `ReadRegisters`, `WriteRegisters` | General and debug only (L07–L09) |
+| `ReadRegisters`, `WriteRegisters` | General, x87 floating-point, and debug only (L08–L09) |
 | `RunBinary` | Native Linux launcher exists |
 | `RunComponent`, `RunTest` | Fuchsia services (L25) |
 

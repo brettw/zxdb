@@ -105,6 +105,11 @@ Callers and implementations must preserve these invariants:
   process. If no process traces it, a Yama `ptrace_scope` of 1 to 3 adds a note,
   as LLDB does. The note gives the setting as a possible cause, because
   credentials or a non-dumpable target can also deny the attach.
+- Linux x87 registers use the Fuchsia widths: FCW, FSW, and FOP have 2 bytes,
+  FTW has 1 byte (the abridged tag word), FIP and FDP have 8 bytes, and ST0 to
+  ST7 have 16 bytes. A write changes a copy of the whole FXSAVE state. It keeps
+  the reserved high byte of FTW, the reserved bytes of each ST slot, MXCSR, and
+  the XMM registers.
 - Linux debug register writes validate the DR7 slot settings first. They clear
   DR7 before they change an address, and set it last. A failed write restores
   the previous values. The kernel keeps debug registers after a detach, so

@@ -19,6 +19,7 @@
 #include "src/developer/debug/zxdb/expr/local_expr_value.h"
 #include "src/developer/debug/zxdb/expr/resolve_array.h"
 #include "src/developer/debug/zxdb/expr/resolve_ptr_ref.h"
+#include "src/developer/debug/zxdb/expr/x87_float.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
 #include "src/developer/debug/zxdb/symbols/modified_type.h"
 #include "src/developer/debug/zxdb/symbols/symbol_data_provider.h"
@@ -406,8 +407,9 @@ ErrOrValue DoIntBinaryOp(const OpValue& left, const OpValue& right, bool check_f
 
 // Converts the given value to a double if possible when
 Err OpValueToDouble(const fxl::RefPtr<EvalContext>& context, const OpValue& in, double* out) {
+  debug::Arch arch = context->GetArch();
   if (in.realm == MathRealm::kFloat)
-    return in.value->PromoteToDouble(out);  // Already floating-point.
+    return in.value->PromoteToDouble(out, arch);  // Already floating-point.
 
   // Needs casting to a float.
   auto double_type = fxl::MakeRefCounted<BaseType>(BaseType::kBaseTypeFloat, 8, "double");
@@ -415,7 +417,7 @@ Err OpValueToDouble(const fxl::RefPtr<EvalContext>& context, const OpValue& in, 
   if (casted.has_error())
     return casted.err();
 
-  return casted.value().PromoteToDouble(out);
+  return casted.value().PromoteToDouble(out, arch);
 }
 
 // Applies the given operator to two values that should be done in floating-point. The templated
@@ -445,6 +447,8 @@ ErrOrValue DoFloatBinaryOp(const fxl::RefPtr<EvalContext>& context, const OpValu
     return ExprValue(result_val, std::move(result_type));
   if (result_type->byte_size() == sizeof(float))  // Convert down to 32-bit float.
     return ExprValue(static_cast<float>(result_val), std::move(result_type));
+  if (size_t size = result_type->byte_size(); IsX87ExtendedFloat(size, context->GetArch()))
+    return ExprValue(std::move(result_type), DoubleToX87Extended(result_val, size));
 
   // No other floating-point sizes are supported.
   return Err("Invalid floating point operation.");

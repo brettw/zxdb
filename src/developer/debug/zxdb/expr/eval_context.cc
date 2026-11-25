@@ -20,4 +20,9 @@ FoundName EvalContext::FindName(const FindNameOptions& options,
   return FoundName();
 }
 
+debug::Arch EvalContext::GetArch() {
+  fxl::RefPtr<SymbolDataProvider> provider = GetDataProvider();
+  return provider ? provider->GetArch() : debug::Arch::kUnknown;
+}
+
 }  // namespace zxdb

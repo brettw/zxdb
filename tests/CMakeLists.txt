@@ -65,6 +65,18 @@ foreach(LIFECYCLE_MODE IN ITEMS threads leader-exit exec worker-exec output step
     FAIL_REGULAR_EXPRESSION "unexpected process")
 endforeach()
 
+add_executable(x87_inferior x87_inferior.c)
+target_compile_options(x87_inferior PRIVATE -O2 -g)
+
+configure_file(local_x87.script.in local_x87.script @ONLY)
+add_test(NAME local_x87
+  COMMAND zxdb --local --enable-debug-adapter --debug-adapter-port=0
+    --symbol-cache=${CMAKE_CURRENT_BINARY_DIR}/symbol-cache
+    --symbol-path=$<TARGET_FILE:x87_inferior>
+    --script-file=${CMAKE_CURRENT_BINARY_DIR}/local_x87.script)
+set_tests_properties(local_x87 PROPERTIES
+  ENVIRONMENT FUCHSIA_ANALYTICS_DISABLED=1 TIMEOUT 15 LABELS integration)
+
 foreach(SCENARIO IN ITEMS fault_step vfork_breakpoint exec_breakpoint hardware_breakpoints
                          hardware_slots)
   configure_file(local_${SCENARIO}.script.in local_${SCENARIO}.script @ONLY)

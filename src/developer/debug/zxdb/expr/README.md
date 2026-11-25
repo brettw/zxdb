@@ -97,6 +97,11 @@ Public headers expose these evaluation, parsing, VM, and formatting APIs:
 
 Callers and implementations must preserve these invariants:
 
+- A 10-byte float, and a 16-byte float on x86-64, uses the x87 extended format
+  (`IsX87ExtendedFloat`). Formatting, casts, and arithmetic convert it through a
+  double, so they need the target architecture from `EvalContext::GetArch()`.
+  On other architectures, a 16-byte float is shown as hex and can't be
+  converted.
 - Every `ExprNode::EmitBytecode()` method must pop any temporary values it
   pushes and leave one `ExprValue` on the VM stack (statements push an empty
   `ExprValue`).

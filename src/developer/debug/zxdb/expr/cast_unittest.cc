@@ -14,6 +14,7 @@
 #include "src/developer/debug/zxdb/expr/expr_value.h"
 #include "src/developer/debug/zxdb/expr/mock_eval_context.h"
 #include "src/developer/debug/zxdb/expr/virtual_inheritance_test_setup.h"
+#include "src/developer/debug/zxdb/expr/x87_float.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
 #include "src/developer/debug/zxdb/symbols/collection.h"
 #include "src/developer/debug/zxdb/symbols/enumeration.h"
@@ -435,6 +436,31 @@ TEST_F(Cast, StaticCastVirtualInheritance) {
   ASSERT_TRUE(result.ok()) << result.err().msg();
   EXPECT_EQ(base_ptr_type.get(), result.value().type());
   EXPECT_EQ(setup.kBaseAddress, result.value().GetAs<uint64_t>());
+}
+
+TEST_F(Cast, X87Float) {
+  auto eval_context = fxl::MakeRefCounted<MockEvalContext>();
+  eval_context->data_provider()->set_arch(debug::Arch::kX64);
+  auto long_double = fxl::MakeRefCounted<BaseType>(BaseType::kBaseTypeFloat, 16, "long double");
+  auto double_type = fxl::MakeRefCounted<BaseType>(BaseType::kBaseTypeFloat, 8, "double");
+  auto int_type = fxl::MakeRefCounted<BaseType>(BaseType::kBaseTypeSigned, 4, "int");
+
+  // Integers and doubles convert to the x87 format.
+  ExprValue out = SyncCastNumericExprValue(eval_context, ExprValue(int32_t{-10}), long_double);
+  EXPECT_EQ(DoubleToX87Extended(-10.0, 16), out.data().bytes());
+  out = SyncCastNumericExprValue(eval_context, ExprValue(0.75), long_double);
+  EXPECT_EQ(DoubleToX87Extended(0.75, 16), out.data().bytes());
+
+  // x87 values convert to doubles and integers.
+  ExprValue x87(long_double, DoubleToX87Extended(7.5, 16));
+  out = SyncCastNumericExprValue(eval_context, x87, double_type);
+  EXPECT_EQ(7.5, out.GetAs<double>());
+  out = SyncCastNumericExprValue(eval_context, x87, int_type);
+  EXPECT_EQ(7, out.GetAs<int32_t>());
+
+  // On other architectures, the format of a 16-byte float is unknown.
+  eval_context->data_provider()->set_arch(debug::Arch::kArm64);
+  EXPECT_TRUE(CastNumericExprValue(eval_context, x87, double_type).has_error());
 }
 
 }  // namespace zxdb

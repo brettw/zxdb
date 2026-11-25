@@ -11,6 +11,7 @@
 #include "src/developer/debug/zxdb/expr/format_options.h"
 #include "src/developer/debug/zxdb/expr/format_test_support.h"
 #include "src/developer/debug/zxdb/expr/mock_eval_context.h"
+#include "src/developer/debug/zxdb/expr/x87_float.h"
 #include "src/developer/debug/zxdb/symbols/array_type.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
 #include "src/developer/debug/zxdb/symbols/collection.h"
@@ -205,6 +206,26 @@ TEST_F(FormatTest, Float) {
   ExprValue val_double(fxl::MakeRefCounted<BaseType>(BaseType::kBaseTypeFloat, 8, "double"),
                        std::vector<uint8_t>(buffer, &buffer[8]));
   EXPECT_EQ(" = double, 9.875e+12\n", GetDebugTreeForValue(eval_context(), val_double, opts));
+}
+
+TEST_F(FormatTest, X87Float) {
+  FormatOptions opts;
+  auto long_double = fxl::MakeRefCounted<BaseType>(BaseType::kBaseTypeFloat, 16, "long double");
+  ExprValue value(long_double, DoubleToX87Extended(-7.5, 16));
+
+  // On x86-64, a 16-byte float is an x87 extended value.
+  eval_context()->data_provider()->set_arch(debug::Arch::kX64);
+  EXPECT_EQ(" = long double, -7.5\n", GetDebugTreeForValue(eval_context(), value, opts));
+
+  // On other architectures, the format of a 16-byte float is unknown, so it's shown in hex.
+  eval_context()->data_provider()->set_arch(debug::Arch::kArm64);
+  EXPECT_EQ(" = long double, 0x000000000000c001f000000000000000\n",
+            GetDebugTreeForValue(eval_context(), value, opts));
+
+  // A 10-byte float is always an x87 extended value.
+  ExprValue ten(fxl::MakeRefCounted<BaseType>(BaseType::kBaseTypeFloat, 10, "long double"),
+                DoubleToX87Extended(0.25, 10));
+  EXPECT_EQ(" = long double, 0.25\n", GetDebugTreeForValue(eval_context(), ten, opts));
 }
 
 TEST_F(FormatTest, Structs) {

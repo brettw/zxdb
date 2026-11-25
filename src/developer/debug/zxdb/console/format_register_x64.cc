@@ -32,12 +32,12 @@ void PushName(const debug::RegisterValue& reg, TextForegroundColor color,
   row->emplace_back(debug::RegisterIDToString(reg.id), color);
 }
 
-// A nonzero length will case that number of bytes to be printed.
-void PushHex(const debug::RegisterValue& reg, TextForegroundColor color, int length,
+// A nonzero length prints at most that number of bytes.
+void PushHex(const debug::RegisterValue& reg, TextForegroundColor color, size_t length,
              std::vector<OutputBuffer>* row) {
   std::span<const uint8_t> view = reg.data;
-  if (length > 0)
-    view = view.subspan(0, length);
+  if (length > 0 && length < view.size())
+    view = view.first(length);
   row->emplace_back(GetLittleEndianHexOutput(view), color);
 }
 
@@ -167,7 +167,7 @@ void FormatFPRegisters(const std::vector<debug::RegisterValue>& registers, Outpu
           // TODO: Placeholder. Remove when all control registers have their
           //       custom output implemented.
           PushName(reg, color, &row);
-          PushHex(reg, color, 4, &row);
+          PushHex(reg, color, 0, &row);  // Control registers have 1 to 8 bytes.
           row.emplace_back();
         }
       }

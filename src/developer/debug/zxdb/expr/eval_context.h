@@ -121,7 +121,11 @@ class EvalContext : public fxl::RefCountedThreadSafe<EvalContext> {
   // refcounted and can outlive it).
   virtual const ProcessSymbols* GetProcessSymbols() const = 0;
 
+  // May return null when the context has no target data.
   virtual fxl::RefPtr<SymbolDataProvider> GetDataProvider() = 0;
+
+  // Returns the architecture of the target, or kUnknown when there's no data provider.
+  debug::Arch GetArch();
 
   // Returns a symbolized (if possible) location for the given address.
   virtual Location GetLocationForAddress(uint64_t address) const = 0;

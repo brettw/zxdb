@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "lib/fit/function.h"
+#include "src/developer/debug/shared/arch.h"
 #include "src/developer/debug/zxdb/common/err_or.h"
 #include "src/developer/debug/zxdb/common/int128_t.h"
 #include "src/developer/debug/zxdb/common/tagged_data.h"
@@ -105,8 +106,9 @@ class ExprValue {
   Err PromoteTo128(uint128_t* output) const;
 
   // Gets the result as a double. This will convert floats and doubles to doubles. It will not
-  // convert ints to floating point.
-  Err PromoteToDouble(double* output) const;
+  // convert ints to floating point. The architecture tells whether a 16-byte value uses the x87
+  // extended format (see IsX87ExtendedFloat()).
+  Err PromoteToDouble(double* output, debug::Arch arch = debug::Arch::kUnknown) const;
 
  private:
   // Internal constructor for the primitive types. It uses the given |type| if given, otherwise they

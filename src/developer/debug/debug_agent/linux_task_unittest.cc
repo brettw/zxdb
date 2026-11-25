@@ -223,10 +223,10 @@ TEST_F(LinuxTaskTest, AttachExistingWorkersAndRegisters) {
                       ->WriteRegisters(
                           {debug::RegisterValue(debug::RegisterID::kX64_r15, uint64_t{original})})
                       .ok());
-      auto unsupported =
-          thread->WriteRegisters({debug::RegisterValue(debug::RegisterID::kX64_fcw, uint64_t{0})});
+      auto unsupported = thread->WriteRegisters(
+          {debug::RegisterValue(debug::RegisterID::kX64_mxcsr, uint64_t{0})});
       ASSERT_TRUE(unsupported.has_error());
-      EXPECT_EQ("Linux can't write the fcw register.", unsupported.err().message());
+      EXPECT_EQ("Linux can't write the mxcsr register.", unsupported.err().message());
     }
     observer.process->Detach();
     for (const auto& thread : threads)
@@ -344,6 +344,137 @@ TEST_F(LinuxTaskTest, DebugRegisters) {
   int status;
   ASSERT_EQ(pid, waitpid(pid, &status, 0));
   ASSERT_TRUE(WIFEXITED(status)) << "The child stopped with signal " << WTERMSIG(status);
+  EXPECT_EQ(7, WEXITSTATUS(status));
+}
+
+TEST_F(LinuxTaskTest, FloatingPointRegisters) {
+  // The child has three threads that wait for the test.
+  int ready[2], release[2];
+  ASSERT_EQ(0, pipe(ready));
+  ASSERT_EQ(0, pipe(release));
+  pid_t pid = fork();
+  ASSERT_GE(pid, 0);
+  if (pid == 0) {
+    close(ready[0]);
+    close(release[1]);
+    auto worker = [&] {
+      char byte = 0;
+      write(ready[1], &byte, 1);
+      read(release[0], &byte, 1);
+    };
+    std::thread first(worker), second(worker);
+    first.join();
+    second.join();
+    _exit(7);
+  }
+  ChildGuard cleanup(pid);
+  close(ready[1]);
+  close(release[0]);
+  char bytes[2];
+  ASSERT_EQ(1, read(ready[0], bytes, 1));
+  ASSERT_EQ(1, read(ready[0], bytes, 1));
+  close(ready[0]);
+
+  // 7.5 in the x87 format, in a 16-byte slot.
+  const uint8_t kSevenPointFive[16] = {0, 0, 0, 0, 0, 0, 0, 0xf0, 0x01, 0x40};
+  {
+    ProcessObserver observer(loop);
+    observer.process = std::make_unique<LinuxProcessHandle>(fxl::MakeRefCounted<LinuxTask>(pid));
+    ASSERT_TRUE(observer.process->Attach(&observer, {}).ok());
+    auto threads = observer.process->GetChildThreads();
+    ASSERT_EQ(3u, threads.size());
+    std::vector<std::unique_ptr<SuspendHandle>> tokens;
+    std::vector<user_fpregs_struct> originals;
+    for (const auto& thread : threads) {
+      tokens.push_back(thread->Suspend());
+      ASSERT_TRUE(thread->WaitForSuspension(TickTimePoint::max()));
+      std::optional<user_fpregs_struct> original =
+          linux::ReadFloatingPointRegisters(thread->GetKoid());
+      ASSERT_TRUE(original);
+      originals.push_back(*original);
+    }
+
+    for (size_t i = 0; i < threads.size(); i++) {
+      ThreadHandle& thread = *threads[i];
+      const user_fpregs_struct* original = &originals[i];
+
+      // The registers have the widths that Fuchsia reports.
+      std::map<debug::RegisterID, size_t> sizes;
+      for (const auto& value : thread.ReadRegisters({debug::RegisterCategory::kFloatingPoint}))
+        sizes[value.id] = value.data.size();
+      EXPECT_EQ(14u, sizes.size());
+      EXPECT_EQ(2u, sizes[debug::RegisterID::kX64_fcw]);
+      EXPECT_EQ(1u, sizes[debug::RegisterID::kX64_ftw]);
+      EXPECT_EQ(8u, sizes[debug::RegisterID::kX64_fip]);
+      EXPECT_EQ(16u, sizes[debug::RegisterID::kX64_st7]);
+
+      // Each thread gets different values.
+      uint16_t fcw = static_cast<uint16_t>(0x27f + i);
+      uint8_t ftw = static_cast<uint8_t>(0x80 >> i);
+      std::vector<uint8_t> st_slot(std::begin(kSevenPointFive), std::end(kSevenPointFive));
+      st_slot[10] = 0xff;  // Bytes after the first 10 are reserved and aren't written.
+      auto written =
+          thread.WriteRegisters({debug::RegisterValue(debug::RegisterID::kX64_fcw, fcw),
+                                 debug::RegisterValue(debug::RegisterID::kX64_ftw, ftw),
+                                 debug::RegisterValue(debug::RegisterID::kX64_st1, st_slot)});
+      ASSERT_TRUE(written.ok()) << written.err().message();
+      EXPECT_EQ(14u, written.value().size());
+
+      std::optional<user_fpregs_struct> changed =
+          linux::ReadFloatingPointRegisters(thread.GetKoid());
+      ASSERT_TRUE(changed);
+      EXPECT_EQ(fcw, changed->cwd);
+      EXPECT_EQ(ftw, changed->ftw & 0xff);
+      EXPECT_EQ(original->ftw & 0xff00, changed->ftw & 0xff00);
+      EXPECT_EQ(0, memcmp(kSevenPointFive, &changed->st_space[4], 10));
+      EXPECT_EQ(0, memcmp(reinterpret_cast<const uint8_t*>(&original->st_space[4]) + 10,
+                          reinterpret_cast<const uint8_t*>(&changed->st_space[4]) + 10, 6));
+
+      // Other state doesn't change.
+      EXPECT_EQ(original->swd, changed->swd);
+      EXPECT_EQ(original->mxcsr, changed->mxcsr);
+      EXPECT_EQ(0, memcmp(original->st_space, changed->st_space, 16));
+      EXPECT_EQ(0, memcmp(original->xmm_space, changed->xmm_space, sizeof(original->xmm_space)));
+
+      // Invalid writes fail and change nothing.
+      auto failed =
+          thread.WriteRegisters({debug::RegisterValue(debug::RegisterID::kX64_fcw, uint8_t{0}),
+                                 debug::RegisterValue(debug::RegisterID::kX64_fsw, uint16_t{0})});
+      ASSERT_TRUE(failed.has_error());
+      EXPECT_EQ("The fcw register needs a 2-byte value.", failed.err().message());
+      failed = thread.WriteRegisters(
+          {debug::RegisterValue(debug::RegisterID::kX64_st0, std::vector<uint8_t>(10))});
+      ASSERT_TRUE(failed.has_error());
+      EXPECT_EQ("The st0 register needs a 16-byte value.", failed.err().message());
+      EXPECT_EQ(fcw, linux::ReadFloatingPointRegisters(thread.GetKoid())->cwd);
+
+      // An invalid debug register in the same request leaves the valid FCW change unwritten.
+      constexpr uint64_t kIoAccessDr7 = 0x1 | (0b10 << 16);
+      failed = thread.WriteRegisters(
+          {debug::RegisterValue(debug::RegisterID::kX64_fcw, uint16_t{0x037f}),
+           debug::RegisterValue(debug::RegisterID::kX64_dr7, kIoAccessDr7)});
+      ASSERT_TRUE(failed.has_error());
+      EXPECT_EQ("DR7 enables slot 0 for I/O access, which isn't supported.",
+                failed.err().message());
+      EXPECT_EQ(fcw, linux::ReadFloatingPointRegisters(thread.GetKoid())->cwd);
+      EXPECT_EQ(0u, ReadDebugRegisterValues(thread)[debug::RegisterID::kX64_dr7]);
+    }
+
+    // Each thread kept its own values. Then restore the original state.
+    for (size_t i = 0; i < threads.size(); i++) {
+      std::optional<user_fpregs_struct> regs =
+          linux::ReadFloatingPointRegisters(threads[i]->GetKoid());
+      ASSERT_TRUE(regs);
+      EXPECT_EQ(0x27f + i, regs->cwd);
+      ASSERT_TRUE(linux::WriteFloatingPointRegisters(threads[i]->GetKoid(), originals[i]).ok());
+    }
+    tokens.clear();
+    observer.process->Detach();
+  }
+  close(release[1]);
+  int status;
+  ASSERT_EQ(pid, waitpid(pid, &status, 0));
+  EXPECT_TRUE(WIFEXITED(status));
   EXPECT_EQ(7, WEXITSTATUS(status));
 }
 

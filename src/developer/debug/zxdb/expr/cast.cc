@@ -11,6 +11,7 @@
 #include "src/developer/debug/zxdb/expr/expr_value.h"
 #include "src/developer/debug/zxdb/expr/resolve_collection.h"
 #include "src/developer/debug/zxdb/expr/resolve_ptr_ref.h"
+#include "src/developer/debug/zxdb/expr/x87_float.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
 #include "src/developer/debug/zxdb/symbols/collection.h"
 #include "src/developer/debug/zxdb/symbols/enumeration.h"
@@ -112,9 +113,10 @@ ExprValue CastFloatToIntT(double double_value, const fxl::RefPtr<Type>& dest_typ
 }
 
 ErrOrValue CastFloatToInt(const ExprValue& source, const fxl::RefPtr<Type>& dest_type,
-                          const Type* concrete_dest_type, const ExprValueSource& dest_source) {
+                          const Type* concrete_dest_type, const ExprValueSource& dest_source,
+                          debug::Arch arch) {
   double source_value;
-  if (Err err = source.PromoteToDouble(&source_value); err.has_error())
+  if (Err err = source.PromoteToDouble(&source_value, arch); err.has_error())
     return err;
 
   if (IsSignedBaseType(concrete_dest_type))
@@ -141,7 +143,25 @@ ErrOrValue CastIntToFloatT(const ExprValue& source, const fxl::RefPtr<Type>& des
 }
 
 ErrOrValue CastIntToFloat(const ExprValue& source, bool source_is_signed,
-                          const fxl::RefPtr<Type>& dest_type, const ExprValueSource& dest_source) {
+                          const fxl::RefPtr<Type>& dest_type, const ExprValueSource& dest_source,
+                          debug::Arch arch) {
+  if (IsX87ExtendedFloat(dest_type->byte_size(), arch)) {
+    // The x87 format holds all 64-bit integers exactly, but this goes through a double.
+    double value = 0.0;
+    if (source_is_signed) {
+      int64_t source_int = 0;
+      if (Err err = source.PromoteTo64(&source_int); err.has_error())
+        return err;
+      value = static_cast<double>(source_int);
+    } else {
+      uint64_t source_int = 0;
+      if (Err err = source.PromoteTo64(&source_int); err.has_error())
+        return err;
+      value = static_cast<double>(source_int);
+    }
+    return ExprValue(dest_type, DoubleToX87Extended(value, dest_type->byte_size()), dest_source);
+  }
+
   if (source_is_signed) {
     if (dest_type->byte_size() == 4)
       return CastIntToFloatT<int64_t, float>(source, dest_type, dest_source);
@@ -158,7 +178,22 @@ ErrOrValue CastIntToFloat(const ExprValue& source, bool source_is_signed,
 }
 
 ErrOrValue CastFloatToFloat(const ExprValue& source, const fxl::RefPtr<Type>& dest_type,
-                            const ExprValueSource& dest_source) {
+                            const ExprValueSource& dest_source, debug::Arch arch) {
+  // Conversions that involve the x87 format go through a double.
+  bool source_x87 = IsX87ExtendedFloat(source.data().size(), arch);
+  bool dest_x87 = IsX87ExtendedFloat(dest_type->byte_size(), arch);
+  if (source_x87 || dest_x87) {
+    double value = 0.0;
+    if (Err err = source.PromoteToDouble(&value, arch); err.has_error())
+      return err;
+    if (dest_x87)
+      return ExprValue(dest_type, DoubleToX87Extended(value, dest_type->byte_size()), dest_source);
+    if (dest_type->byte_size() == 4)
+      return ExprValue(static_cast<float>(value), dest_type, dest_source);
+    if (dest_type->byte_size() == 8)
+      return ExprValue(value, dest_type, dest_source);
+  }
+
   if (source.data().size() == 4) {
     float f = source.GetAs<float>();
     if (dest_type->byte_size() == 4)
@@ -178,8 +213,8 @@ ErrOrValue CastFloatToFloat(const ExprValue& source, const fxl::RefPtr<Type>& de
 }
 
 ErrOrValue CastNumberToBool(const ExprValue& source, const Type* concrete_from,
-                            const fxl::RefPtr<Type>& dest_type,
-                            const ExprValueSource& dest_source) {
+                            const fxl::RefPtr<Type>& dest_type, const ExprValueSource& dest_source,
+                            debug::Arch arch) {
   if (!source.data().all_valid())
     return Err::OptimizedOut();
 
@@ -196,7 +231,7 @@ ErrOrValue CastNumberToBool(const ExprValue& source, const Type* concrete_from,
   } else if (IsFloatingPointBaseType(concrete_from)) {
     // Floating-point-like sources which can't do a byte-by-byte comparison.
     double double_value;
-    if (Err err = source.PromoteToDouble(&double_value); err.has_error())
+    if (Err err = source.PromoteToDouble(&double_value, arch); err.has_error())
       return err;
 
     // Use C++ casting rules to convert to bool.
@@ -408,7 +443,7 @@ bool CastShouldFollowReferences(const fxl::RefPtr<EvalContext>& eval_context, Ca
 // etc.). The concrete_to/from must be the concrete versions that we'll work off of.
 ErrOrValue NumericImplicitCast(const ExprValue& source, const fxl::RefPtr<Type>& dest_type,
                                const Type* concrete_to, const Type* concrete_from,
-                               const ExprValueSource& dest_source) {
+                               const ExprValueSource& dest_source, debug::Arch arch) {
   // Handles identical type conversions. This includes all aggregate types.
   if (TypesAreBinaryCoercable(concrete_from, concrete_to))
     return ExprValue(dest_type, source.data(), dest_source);
@@ -416,7 +451,7 @@ ErrOrValue NumericImplicitCast(const ExprValue& source, const fxl::RefPtr<Type>&
   // Conversions to bool. Conversions from bool will follow the standard "number to X" path where we
   // assume the bool is like a number.
   if (IsBooleanBaseType(concrete_to) && IsNumberLike(concrete_from))
-    return CastNumberToBool(source, concrete_from, dest_type, dest_source);
+    return CastNumberToBool(source, concrete_from, dest_type, dest_source, arch);
 
   // Conversions between different types of ints, including pointers (truncate or extend). This lets
   // us evaluate things like "ptr = 0x2a3512635" without elaborate casts. Pointer-to-pointer
@@ -428,13 +463,13 @@ ErrOrValue NumericImplicitCast(const ExprValue& source, const fxl::RefPtr<Type>&
 
   // Conversions between different types of floats.
   if (IsFloatingPointBaseType(concrete_from) && IsFloatingPointBaseType(concrete_to))
-    return CastFloatToFloat(source, dest_type, dest_source);
+    return CastFloatToFloat(source, dest_type, dest_source, arch);
 
   // Conversions between ints and floats.
   if (IsIntegerLike(concrete_to) && IsFloatingPointBaseType(concrete_from))
-    return CastFloatToInt(source, dest_type, concrete_to, dest_source);
+    return CastFloatToInt(source, dest_type, concrete_to, dest_source, arch);
   if (IsFloatingPointBaseType(concrete_to) && IsIntegerLike(concrete_from))
-    return CastIntToFloat(source, IsSignedBaseType(concrete_from), dest_type, dest_source);
+    return CastIntToFloat(source, IsSignedBaseType(concrete_from), dest_type, dest_source, arch);
 
   return Err("Can't cast from '%s' to '%s'.", source.type()->GetFullName().c_str(),
              dest_type->GetFullName().c_str());
@@ -455,8 +490,8 @@ void ImplicitCast(const fxl::RefPtr<EvalContext>& eval_context, const ExprValue&
   fxl::RefPtr<Type> concrete_from = eval_context->GetConcreteType(source.type());
   fxl::RefPtr<Type> concrete_to = eval_context->GetConcreteType(dest_type.get());
 
-  ErrOrValue result =
-      NumericImplicitCast(source, dest_type, concrete_to.get(), concrete_from.get(), dest_source);
+  ErrOrValue result = NumericImplicitCast(source, dest_type, concrete_to.get(), concrete_from.get(),
+                                          dest_source, eval_context->GetArch());
   if (result.ok())
     return cb(result);
 
@@ -633,8 +668,8 @@ ErrOrValue CastNumericExprValue(const fxl::RefPtr<EvalContext>& eval_context,
   fxl::RefPtr<Type> concrete_from = eval_context->GetConcreteType(source.type());
   fxl::RefPtr<Type> concrete_to = eval_context->GetConcreteType(dest_type.get());
 
-  return NumericImplicitCast(source, dest_type, concrete_to.get(), concrete_from.get(),
-                             dest_source);
+  return NumericImplicitCast(source, dest_type, concrete_to.get(), concrete_from.get(), dest_source,
+                             eval_context->GetArch());
 }
 
 ErrOr<bool> CastNumericExprValueToBool(const fxl::RefPtr<EvalContext>& eval_context,
@@ -643,7 +678,8 @@ ErrOr<bool> CastNumericExprValueToBool(const fxl::RefPtr<EvalContext>& eval_cont
       fxl::MakeRefCounted<BaseType>(BaseType::kBaseTypeBoolean, 1, "bool");
   auto concrete_from = eval_context->GetConcreteType(source.type());
 
-  ErrOrValue result = CastNumberToBool(source, concrete_from.get(), bool_type, ExprValueSource());
+  ErrOrValue result = CastNumberToBool(source, concrete_from.get(), bool_type, ExprValueSource(),
+                                       eval_context->GetArch());
   if (result.has_error())
     return result.err();
 

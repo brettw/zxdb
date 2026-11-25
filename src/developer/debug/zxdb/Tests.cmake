@@ -191,6 +191,7 @@ add_executable(zxdb_tests
   expr/template_type_extractor_unittest.cc
   expr/variable_decl_unittest.cc
   expr/vector_register_format_unittest.cc
+  expr/x87_float_unittest.cc
   expr/virtual_base_test_setup.cc
   expr/virtual_inheritance_test_setup.cc
   expr/vm_exec_unittest.cc
