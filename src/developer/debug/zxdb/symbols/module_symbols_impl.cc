@@ -41,7 +41,6 @@
 #include "src/developer/debug/zxdb/symbols/symbol_data_provider.h"
 #include "src/developer/debug/zxdb/symbols/unit_symbol_factory.h"
 #include "src/developer/debug/zxdb/symbols/variable.h"
-#include "src/lib/elflib/elflib.h"
 
 namespace zxdb {
 
@@ -1149,32 +1148,29 @@ void ModuleSymbolsImpl::FillElfSymbols() {
   FX_DCHECK(mangled_elf_symbols_.empty());
   FX_DCHECK(elf_addresses_.empty());
 
-  const std::map<std::string, llvm::ELF::Elf64_Sym>& elf_syms = binary_->GetELFSymbols();
+  const std::map<std::string, DwarfBinary::ElfTableSymbol>& elf_syms = binary_->GetELFSymbols();
   const std::map<std::string, uint64_t>& plt_syms = binary_->GetPLTSymbols();
   elf_addresses_.reserve(elf_syms.size() + plt_syms.size());
 
   // Insert the regular symbols.
   //
-  // The |st_value| is the relative virtual address we want to index. Potentially we might want to
+  // The value is the relative virtual address we want to index. Potentially we might want to
   // save more flags and expose them in the ElfSymbol class.
+  using SymbolType = DwarfBinary::ElfTableSymbol::Type;
   for (const auto& [name, sym] : elf_syms) {
-    // The symbol type is the low 4 bits. The higher bits encode the visibility which we don't
-    // care about. We only need to index objects and code, and a couple of special symbols left
-    // specifically for Zxdb's usage.
-    int symbol_type = sym.st_info & 0xf;
-    if (symbol_type != elflib::STT_OBJECT && symbol_type != elflib::STT_FUNC &&
-        symbol_type != elflib::STT_TLS && name.substr(0, 5) != "zxdb.")
+    // We only need to index objects and code, and a couple of special symbols left specifically
+    // for Zxdb's usage.
+    if (sym.type == SymbolType::kOther && name.substr(0, 5) != "zxdb.")
       continue;
 
-    if (sym.st_value == 0)
+    if (sym.value == 0)
       continue;  // No address for this symbol. Probably imported.
 
-    bool is_function = symbol_type == elflib::STT_FUNC && sym.st_shndx != llvm::ELF::SHN_UNDEF;
+    bool is_function = sym.type == SymbolType::kFunction && sym.is_defined;
     // The source map is sorted, so each normal symbol belongs at the end.
     auto inserted = mangled_elf_symbols_.emplace_hint(
         mangled_elf_symbols_.end(), std::piecewise_construct, std::forward_as_tuple(name),
-        std::forward_as_tuple(ElfSymbolType::kNormal, sym.st_value, sym.st_size, name,
-                              is_function));
+        std::forward_as_tuple(ElfSymbolType::kNormal, sym.value, sym.size, name, is_function));
 
     // Append all addresses for now, this will be sorted at the bottom.
     elf_addresses_.push_back(&inserted->second);

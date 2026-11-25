@@ -717,7 +717,7 @@ TEST(DwarfSymbolFactory, AddrxOffsetLowPc) {
   TestSymbolModule setup(path, "");
   ASSERT_TRUE(setup.Init().ok());
   llvm::DWARFContext* context = setup.symbols()->binary()->GetLLVMContext();
-  const std::map<std::string, llvm::ELF::Elf64_Sym>& elf_symbols =
+  const std::map<std::string, DwarfBinary::ElfTableSymbol>& elf_symbols =
       setup.symbols()->binary()->GetELFSymbols();
 
   int addrx_offset_count = 0;
@@ -742,7 +742,7 @@ TEST(DwarfSymbolFactory, AddrxOffsetLowPc) {
     auto elf_symbol = elf_symbols.find(function->linkage_name());
     ASSERT_NE(elf_symbols.end(), elf_symbol);
     ASSERT_FALSE(function->code_ranges().empty());
-    EXPECT_EQ(elf_symbol->second.st_value, function->code_ranges()[0].begin());
+    EXPECT_EQ(elf_symbol->second.value, function->code_ranges()[0].begin());
   }
   EXPECT_EQ(2, addrx_offset_count);
 }

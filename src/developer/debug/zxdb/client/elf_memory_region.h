@@ -34,7 +34,7 @@ class ElfMemoryRegion : public unwinder::Memory {
 
   // Decompresses the section data corresponding to the given header and index and stores the
   // decompressed data in |decompressed_sections_|.
-  Err DecompressSection(const elflib::Elf64_Shdr& hdr);
+  Err DecompressSection(const Elf64_Shdr& hdr);
 
   uint64_t load_address_;
 

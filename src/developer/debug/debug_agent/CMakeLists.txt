@@ -37,3 +37,5 @@ add_library(debug_agent STATIC
   linux_arch_x64.cc
 )
 target_link_libraries(debug_agent PUBLIC debug_ipc elflib unwinder containers gtest_headers)
+# The debugger code doesn't use RTTI. See the root AGENTS.md.
+target_compile_options(debug_agent PUBLIC -fno-rtti)

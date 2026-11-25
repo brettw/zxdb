@@ -12,7 +12,6 @@
 #include <vector>
 
 #include <gtest/gtest.h>
-#include <llvm/BinaryFormat/ELF.h>
 
 #include "src/developer/debug/zxdb/common/host_util.h"
 #include "src/lib/elflib/elflib.h"
@@ -36,11 +35,11 @@ std::optional<CompressedSectionInfo> GetCompressedSectionInfo(elflib::ElfLib* el
   for (const auto& shdr : elflib->GetSectionHeaders()) {
     const char* section_name = reinterpret_cast<const char*>(&data.ptr[shdr.sh_name]);
     if (strcmp(section_name, target_section_name) == 0) {
-      if ((shdr.sh_flags & elflib::SHF_COMPRESSED) == 0) {
+      if ((shdr.sh_flags & SHF_COMPRESSED) == 0) {
         return std::nullopt;
       }
       auto section_data = elflib->GetSectionData(target_section_name);
-      elflib::Elf64_Chdr chdr;
+      Elf64_Chdr chdr;
       memcpy(&chdr, section_data.ptr, sizeof(chdr));
       return CompressedSectionInfo{
           .file_offset = shdr.sh_offset,
@@ -59,9 +58,9 @@ TEST(ElfMemoryRegion, RandomAccess) {
   ElfMemoryRegion elf_memory_region(kLoadAddress, GetTestElfFile());
 
   // We should be able to transparently read the ELF header.
-  elflib::Elf64_Ehdr ehdr_read;
+  Elf64_Ehdr ehdr_read;
   elf_memory_region.ReadBytes(kLoadAddress, sizeof(ehdr_read), &ehdr_read);
-  ASSERT_TRUE(ehdr_read.checkMagic());
+  ASSERT_EQ(0, memcmp(ehdr_read.e_ident, ELFMAG, SELFMAG));
 
   auto ehdr = elflib->GetEhdr();
 
@@ -77,7 +76,7 @@ TEST(ElfMemoryRegion, CompressedAccess) {
   auto elflib = elflib::ElfLib::Create(GetTestElfFile());
   ElfMemoryRegion elf_memory_region(kLoadAddress, GetTestElfFile());
 
-  std::optional<elflib::Elf64_Shdr> debug_info_section_header = std::nullopt;
+  std::optional<Elf64_Shdr> debug_info_section_header = std::nullopt;
   auto data = elflib->GetSectionData(".shstrtab");
   for (const auto& shdr : elflib->GetSectionHeaders()) {
     constexpr char kDebugInfoSectionName[] = ".debug_info";
@@ -92,7 +91,7 @@ TEST(ElfMemoryRegion, CompressedAccess) {
   ASSERT_NE(debug_info_section_header, std::nullopt);
 
   // The debug_info section should be compressed.
-  ASSERT_NE(debug_info_section_header->sh_flags & elflib::SHF_COMPRESSED, 0u);
+  ASSERT_NE(debug_info_section_header->sh_flags & SHF_COMPRESSED, 0u);
 
   auto debug_info_offset = debug_info_section_header->sh_offset;
 
@@ -113,7 +112,7 @@ TEST(ElfMemoryRegion, CompressedAccess) {
             debug_info_section_header->sh_size);
 
   // The compressed section header will report the exact decompressed size.
-  elflib::Elf64_Chdr compressed_header;
+  Elf64_Chdr compressed_header;
   auto debug_info_memory = elflib->GetSectionData(".debug_info");
   memcpy(&compressed_header, debug_info_memory.ptr, sizeof(compressed_header));
 
@@ -123,9 +122,8 @@ TEST(ElfMemoryRegion, CompressedAccess) {
   // The purpose of this test isn't to validate the debug_info, that can be evaluated elsewhere, but
   // we should at least make sure that the first few bytes of the decompressed data is not the same
   // as the compressed header.
-  EXPECT_NE(memcmp(reinterpret_cast<elflib::Elf64_Chdr*>(buf), &compressed_header,
-                   sizeof(compressed_header)),
-            0);
+  EXPECT_NE(
+      memcmp(reinterpret_cast<Elf64_Chdr*>(buf), &compressed_header, sizeof(compressed_header)), 0);
 
   // Because the decompressed section is larger than the section size reported by the section
   // header, we need to make sure that we can read from the end of the decompressed section, which

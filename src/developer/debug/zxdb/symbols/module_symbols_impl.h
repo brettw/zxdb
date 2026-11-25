@@ -10,7 +10,6 @@
 #include <unordered_map>
 
 #include "gtest/gtest_prod.h"
-#include "llvm/BinaryFormat/ELF.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/common/err.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_symbol_factory.h"

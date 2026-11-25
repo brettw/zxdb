@@ -35,14 +35,35 @@ namespace {
 
 uint64_t ComputeMappedLength(elflib::ElfLib& elf) {
   uint64_t max = 0;
-  for (const elflib::Elf64_Phdr& header : elf.GetSegmentHeaders()) {
+  for (const Elf64_Phdr& header : elf.GetSegmentHeaders()) {
     // Only check segments that are loaded. Some segments contain things like DWARF symbols that
     // won't be loaded. Here we only want the size in-memory to resolve addresses in the program's
     // address space.
-    if (header.p_type == elflib::PT_LOAD)
+    if (header.p_type == PT_LOAD)
       max = std::max(max, header.p_vaddr + header.p_memsz);
   }
   return max;
+}
+
+DwarfBinary::ElfTableSymbol MakeElfTableSymbol(const Elf64_Sym& sym) {
+  DwarfBinary::ElfTableSymbol result;
+  switch (ELF64_ST_TYPE(sym.st_info)) {
+    case STT_OBJECT:
+      result.type = DwarfBinary::ElfTableSymbol::Type::kObject;
+      break;
+    case STT_FUNC:
+      result.type = DwarfBinary::ElfTableSymbol::Type::kFunction;
+      break;
+    case STT_TLS:
+      result.type = DwarfBinary::ElfTableSymbol::Type::kTls;
+      break;
+    default:
+      break;
+  }
+  result.is_defined = sym.st_shndx != SHN_UNDEF;
+  result.value = sym.st_value;
+  result.size = sym.st_size;
+  return result;
 }
 
 // Merges the "symbols" and "dynamic symbols" into a single map. Returns an empty map if the symbols
@@ -52,16 +73,16 @@ uint64_t ComputeMappedLength(elflib::ElfLib& elf) {
 // global symbols) in the ".symtab" section. But in a stripped binary, there will be only a
 // ".dynsym" section. To handle all the cases, this merges both tables. If a name is the same, this
 // assumes the symbols are the same. The dynamic one will be used in the case of duplicates.
-std::map<std::string, elflib::Elf64_Sym> GetMergedElfSymbols(elflib::ElfLib& elf) {
-  std::map<std::string, elflib::Elf64_Sym> result;
+std::map<std::string, DwarfBinary::ElfTableSymbol> GetMergedElfSymbols(elflib::ElfLib& elf) {
+  std::map<std::string, DwarfBinary::ElfTableSymbol> result;
 
-  // Keep the larger symbol table's tree intact. Only the dynamic symbols need another lookup.
-  if (auto sym = elf.GetAllSymbols())
-    result = std::move(*sym);
-  if (auto dyn = elf.GetAllDynamicSymbols()) {
-    for (const auto& [name, symbol] : *dyn)
-      result.insert_or_assign(name, symbol);
-  }
+  // A later symbol replaces an earlier symbol with the same name, in a table and between the
+  // tables. Thus the dynamic symbols, which are visited last, take precedence.
+  auto add_symbol = [&result](std::string name, const Elf64_Sym& symbol) {
+    result.insert_or_assign(std::move(name), MakeElfTableSymbol(symbol));
+  };
+  elf.VisitAllSymbols(add_symbol);
+  elf.VisitAllDynamicSymbols(add_symbol);
 
   return result;
 }
@@ -248,7 +269,7 @@ llvm::DWARFContext* DwarfBinaryImpl::GetLLVMContext() const { return context_.ge
 
 uint64_t DwarfBinaryImpl::GetMappedLength() const { return mapped_length_; }
 
-const std::map<std::string, llvm::ELF::Elf64_Sym>& DwarfBinaryImpl::GetELFSymbols() const {
+const std::map<std::string, DwarfBinary::ElfTableSymbol>& DwarfBinaryImpl::GetELFSymbols() const {
   return elf_symbols_;
 }
 

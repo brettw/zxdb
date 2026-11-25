@@ -5,7 +5,13 @@
 #ifndef SRC_LIB_ELFLIB_ELFLIB_H_
 #define SRC_LIB_ELFLIB_ELFLIB_H_
 
+#include <elf.h>
 #include <stdio.h>
+
+// glibc 2.36 and earlier don't define the zstd compression type for ELF sections.
+#ifndef ELFCOMPRESS_ZSTD
+#define ELFCOMPRESS_ZSTD 2
+#endif
 
 #include <functional>
 #include <map>
@@ -18,11 +24,7 @@
 
 #include <fbl/macros.h>
 
-#include "llvm/BinaryFormat/ELF.h"
-
 namespace elflib {
-
-using namespace llvm::ELF;
 
 class ElfLib {
  public:
@@ -99,6 +101,15 @@ class ElfLib {
   // binaries, see also GetAllDynamicSymbols().
   std::optional<std::map<std::string, Elf64_Sym>> GetAllSymbols();
 
+  // Receives each symbol of a symbol table with its name, in table order. The name is empty if
+  // the string table doesn't have it.
+  using SymbolVisitor = std::function<void(std::string name, const Elf64_Sym& sym)>;
+
+  // Calls the visitor for each symbol in the ".symtab" section. Returns false if the symbols could
+  // not be loaded. Unlike GetAllSymbols(), this doesn't make a map, so a caller can collect the
+  // symbols in its own form.
+  bool VisitAllSymbols(const SymbolVisitor& visitor);
+
   // Get a symbol from the symbol table. Return nullptr if there is no such
   // symbol. Pointer should live as long as the memory accessor.
   std::optional<Elf64_Sym> GetDynamicSymbol(const std::string& name);
@@ -110,6 +121,10 @@ class ElfLib {
   // global symbols) in the ".symtab" section. But in a stripped binary, there might be only a
   // ".dynsym" section.
   std::optional<std::map<std::string, Elf64_Sym>> GetAllDynamicSymbols();
+
+  // Calls the visitor for each dynamic symbol. Returns false if the symbols could not be loaded.
+  // See VisitAllSymbols().
+  bool VisitAllDynamicSymbols(const SymbolVisitor& visitor);
 
   std::optional<std::vector<std::string>> GetSharedObjectDependencies();
 
@@ -241,7 +256,7 @@ class ElfLib {
   // links, e.g., musl, don't.
   uint64_t MappedAddressToOffset(uint64_t mapped_address);
 
-  bool Is64Bit() { return header_.getFileClass() == ELFCLASS64; }
+  bool Is64Bit() { return header_.e_ident[EI_CLASS] == ELFCLASS64; }
 
   const AddressMode address_mode_;
   const uint64_t load_address_;

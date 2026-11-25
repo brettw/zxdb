@@ -5,9 +5,12 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_BINARY_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_BINARY_H_
 
+#include <cstdint>
+#include <ctime>
+#include <map>
 #include <memory>
+#include <string>
 
-#include "llvm/BinaryFormat/ELF.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/symbol_context.h"
@@ -48,6 +51,21 @@ class SymbolContext;
 // can use the mockable wrappers.
 class DwarfBinary {
  public:
+  // A symbol from the ELF symbol tables. It has the fields that the symbol index uses. It doesn't
+  // use the ELF structure because this header must not include the system ELF header while LLVM
+  // object headers are also in use. The macros in the system header break the LLVM header.
+  struct ElfTableSymbol {
+    enum class Type { kOther, kObject, kFunction, kTls };
+
+    Type type = Type::kOther;
+
+    // False for a symbol that this file references but doesn't define.
+    bool is_defined = false;
+
+    uint64_t value = 0;
+    uint64_t size = 0;
+  };
+
   virtual ~DwarfBinary() = default;
 
   // Getters for basic binary information.
@@ -70,7 +88,7 @@ class DwarfBinary {
   virtual uint64_t GetMappedLength() const = 0;
 
   // Returns symbols from the ELF File.
-  virtual const std::map<std::string, llvm::ELF::Elf64_Sym>& GetELFSymbols() const = 0;
+  virtual const std::map<std::string, ElfTableSymbol>& GetELFSymbols() const = 0;
   virtual const std::map<std::string, uint64_t> GetPLTSymbols() const = 0;
 
   // Allows access to compile units in this binary. There are two categories, the "normal" units in

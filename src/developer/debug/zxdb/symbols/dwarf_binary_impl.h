@@ -58,7 +58,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
   llvm::object::ObjectFile* GetLLVMObjectFile() override;
   llvm::DWARFContext* GetLLVMContext() const override;
   uint64_t GetMappedLength() const override;
-  const std::map<std::string, llvm::ELF::Elf64_Sym>& GetELFSymbols() const override;
+  const std::map<std::string, ElfTableSymbol>& GetELFSymbols() const override;
   const std::map<std::string, uint64_t> GetPLTSymbols() const override;
   uint32_t GetNormalUnitCount() const override;
   uint32_t GetDWOUnitCount() const override;
@@ -97,7 +97,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
 
   std::time_t modification_time_ = 0;  // Set when the file is loaded.
 
-  std::map<std::string, llvm::ELF::Elf64_Sym> elf_symbols_;
+  std::map<std::string, ElfTableSymbol> elf_symbols_;
   std::map<std::string, uint64_t> plt_symbols_;
 
   fxl::RefPtr<DwarfSymbolFactory> symbol_factory_;

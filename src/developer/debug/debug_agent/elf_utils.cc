@@ -4,11 +4,6 @@
 
 #include "src/developer/debug/debug_agent/elf_utils.h"
 
-// clang-format off
-// link.h contains ELF.h, which causes llvm/BinaryFormat/ELF.h fail to compile.
-#include "src/lib/elflib/elflib.h"
-// clang-format on
-
 #include <link.h>
 #include <unistd.h>
 

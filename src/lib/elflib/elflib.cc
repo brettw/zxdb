@@ -7,12 +7,11 @@
 #include <zircon/assert.h>
 
 #include <algorithm>
+#include <cstring>
 #include <iterator>
 #include <limits>
 #include <span>
 #include <type_traits>
-
-#include <llvm/BinaryFormat/ELF.h>
 
 namespace elflib {
 namespace {
@@ -113,34 +112,37 @@ std::optional<Elf64_Sym> GetSymbolFromTable(
   return FindElfSymbolInTable<Elf64_Sym>(name, symtab, std::move(get_string));
 }
 
-std::optional<std::map<std::string, Elf64_Sym>> SymtabToMap(const Elf64_Ehdr& ehdr,
-                                                            const ElfLib::MemoryRegion& symtab,
-                                                            const ElfLib::MemoryRegion& strtab) {
+bool VisitSymtab(const Elf64_Ehdr& ehdr, const ElfLib::MemoryRegion& symtab,
+                 const ElfLib::MemoryRegion& strtab, const ElfLib::SymbolVisitor& visitor) {
   if (!symtab.ptr)
-    return std::nullopt;
-
-  std::map<std::string, Elf64_Sym> out;
+    return false;
 
   if (ehdr.e_ident[EI_CLASS] == ELFCLASS32) {
     const Elf32_Sym* symbols = reinterpret_cast<const Elf32_Sym*>(symtab.ptr);
     const Elf32_Sym* end = symbols + (symtab.size / sizeof(Elf32_Sym));
     for (auto symbol = symbols; symbol != end; symbol++) {
       Elf32_Sym s = safe_copy<Elf32_Sym>(symbol);
-      auto sym_name = GetNullTerminatedStringAt(strtab.ptr, strtab.size, s.st_name);
-      out[std::move(sym_name)] = UpcastSym(s);
+      visitor(GetNullTerminatedStringAt(strtab.ptr, strtab.size, s.st_name), UpcastSym(s));
     }
-
-    return out;
+    return true;
   }
 
   const Elf64_Sym* symbols = reinterpret_cast<const Elf64_Sym*>(symtab.ptr);
   const Elf64_Sym* end = symbols + (symtab.size / sizeof(Elf64_Sym));
   for (auto symbol = symbols; symbol != end; symbol++) {
     Elf64_Sym s = safe_copy<Elf64_Sym>(symbol);
-    auto sym_name = GetNullTerminatedStringAt(strtab.ptr, strtab.size, s.st_name);
-    out[std::move(sym_name)] = s;
+    visitor(GetNullTerminatedStringAt(strtab.ptr, strtab.size, s.st_name), s);
   }
+  return true;
+}
 
+// Collects the symbols that a visit function gives into a map. A later symbol replaces an earlier
+// symbol with the same name.
+std::optional<std::map<std::string, Elf64_Sym>> SymbolsToMap(
+    const std::function<bool(const ElfLib::SymbolVisitor&)>& visit) {
+  std::map<std::string, Elf64_Sym> out;
+  if (!visit([&out](std::string name, const Elf64_Sym& sym) { out[std::move(name)] = sym; }))
+    return std::nullopt;
   return out;
 }
 
@@ -170,7 +172,7 @@ std::unique_ptr<ElfLib> ElfLib::Create(std::unique_ptr<MemoryAccessor>&& memory,
   }
 
   // Header magic should be correct.
-  if (!std::equal(ElfMagic, ElfMagic + 4, ident)) {
+  if (memcmp(ident, ELFMAG, SELFMAG) != 0) {
     return std::unique_ptr<ElfLib>();
   }
 
@@ -1107,7 +1109,7 @@ std::map<std::string, uint64_t> ElfLib::GetPLTOffsetsCommon(PltEntryBuffer& buff
       continue;
     }
 
-    auto sym_idx = reloc_rela ? reloc_rela[index].getSymbol() : reloc_rel[index].getSymbol();
+    auto sym_idx = ELF64_R_SYM(reloc_rela ? reloc_rela[index].r_info : reloc_rel[index].r_info);
 
     if (sym_idx >= sym_count) {
       Warn("PLT reloc referenced symbol outside symbol table.");
@@ -1183,18 +1185,28 @@ std::optional<Elf64_Sym> ElfLib::GetDynamicSymbol(const std::string& name) {
                             [this](uint64_t idx) { return GetDynamicString(idx); });
 }
 
+bool ElfLib::VisitAllSymbols(const SymbolVisitor& visitor) {
+  return VisitSymtab(header_, GetSymtab(), GetSectionData(".strtab"), visitor);
+}
+
 std::optional<std::map<std::string, Elf64_Sym>> ElfLib::GetAllSymbols() {
-  return SymtabToMap(header_, GetSymtab(), GetSectionData(".strtab"));
+  return SymbolsToMap([this](const SymbolVisitor& visitor) { return VisitAllSymbols(visitor); });
+}
+
+bool ElfLib::VisitAllDynamicSymbols(const SymbolVisitor& visitor) {
+  if (!LoadDynamicSymbols() || !dynstr_.IsValid()) {
+    return false;
+  }
+
+  return VisitSymtab(header_, GetDynamicSymtab(),
+                     ElfLib::MemoryRegion{.ptr = memory_->GetMemory(*dynstr_.offset, *dynstr_.size),
+                                          .size = *dynstr_.size},
+                     visitor);
 }
 
 std::optional<std::map<std::string, Elf64_Sym>> ElfLib::GetAllDynamicSymbols() {
-  if (!LoadDynamicSymbols() || !dynstr_.IsValid()) {
-    return std::nullopt;
-  }
-
-  return SymtabToMap(header_, GetDynamicSymtab(),
-                     ElfLib::MemoryRegion{.ptr = memory_->GetMemory(*dynstr_.offset, *dynstr_.size),
-                                          .size = *dynstr_.size});
+  return SymbolsToMap(
+      [this](const SymbolVisitor& visitor) { return VisitAllDynamicSymbols(visitor); });
 }
 
 std::optional<std::vector<std::string>> ElfLib::GetSharedObjectDependencies() {

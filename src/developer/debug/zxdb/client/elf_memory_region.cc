@@ -46,19 +46,19 @@ unwinder::Error ElfMemoryRegion::ReadFromOffset(uint64_t offset, uint64_t size, 
   return unwinder::Success();
 }
 
-Err ElfMemoryRegion::DecompressSection(const elflib::Elf64_Shdr& hdr) {
+Err ElfMemoryRegion::DecompressSection(const Elf64_Shdr& hdr) {
   auto section_data = elflib_->GetSectionData(&hdr);
 
   if (section_data.size == 0 || section_data.ptr == nullptr) {
     return Err("Section data not found");
   }
 
-  bool is_32bit = elflib_->GetEhdr()->e_ident[elflib::EI_CLASS] == elflib::ELFCLASS32;
+  bool is_32bit = elflib_->GetEhdr()->e_ident[EI_CLASS] == ELFCLASS32;
 
-  elflib::Elf64_Chdr compressed_section_header;
+  Elf64_Chdr compressed_section_header;
   if (is_32bit) {
     // Upcast from a 32 bit header to a 64 bit.
-    elflib::Elf32_Chdr compressed_header32;
+    Elf32_Chdr compressed_header32;
     memcpy(&compressed_header32, section_data.ptr, sizeof(compressed_header32));
 
     compressed_section_header.ch_type = compressed_header32.ch_type;
@@ -68,7 +68,7 @@ Err ElfMemoryRegion::DecompressSection(const elflib::Elf64_Shdr& hdr) {
     memcpy(&compressed_section_header, section_data.ptr, sizeof(compressed_section_header));
   }
 
-  if (compressed_section_header.ch_type != elflib::ELFCOMPRESS_ZSTD) {
+  if (compressed_section_header.ch_type != ELFCOMPRESS_ZSTD) {
     return Err("Only zstd compression is supported for this file. Got %d.",
                compressed_section_header.ch_type);
   }
@@ -96,7 +96,7 @@ unwinder::Error ElfMemoryRegion::ReadBytes(uint64_t addr, uint64_t size, void* d
   size_t offset = addr - load_address_;
 
   // Reading anything from the ELF header or any of the section headers is never compressed.
-  if (offset < sizeof(elflib::Elf64_Ehdr) || offset >= elflib_->GetEhdr()->e_shoff) {
+  if (offset < sizeof(Elf64_Ehdr) || offset >= elflib_->GetEhdr()->e_shoff) {
     // Just reading from the non-compressed headers.
     return ReadFromOffset(offset, size, dst);
   }
@@ -162,17 +162,17 @@ unwinder::Error ElfMemoryRegion::ReadBytes(uint64_t addr, uint64_t size, void* d
         return v.first == a;
       });
 
-  const elflib::Elf64_Shdr* section_header = nullptr;
+  const Elf64_Shdr* section_header = nullptr;
   auto headers = elflib_->GetSectionHeaders();
 
   for (const auto& shdr : headers) {
-    if (shdr.sh_type & elflib::SHT_NOBITS) {
+    if (shdr.sh_type & SHT_NOBITS) {
       // Skip NOBITS sections.
       continue;
     }
 
     if (shdr.sh_offset <= offset && shdr.sh_offset + shdr.sh_size > offset) {
-      if ((shdr.sh_flags & elflib::SHF_COMPRESSED) != 0) {
+      if ((shdr.sh_flags & SHF_COMPRESSED) != 0) {
         // The data we need is in a compressed section.
         section_header = &shdr;
         break;

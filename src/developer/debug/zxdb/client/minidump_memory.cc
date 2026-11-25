@@ -72,10 +72,10 @@ MinidumpMemory::MinidumpMemory(const crashpad::ProcessSnapshotMinidump& minidump
     auto module = std::make_shared<FileMemoryRegion>(base, entry.binary);
     for (const auto& segment : elf->GetSegmentHeaders()) {
       // Only PT_LOAD segments are actually mapped. The rest are informational.
-      if (segment.p_type != elflib::PT_LOAD) {
+      if (segment.p_type != PT_LOAD) {
         continue;
       }
-      if (segment.p_flags & elflib::PF_W) {
+      if (segment.p_flags & PF_W) {
         // Writable segment. Data in the ELF file might not match what was present at the time of
         // the crash.
         continue;

@@ -34,7 +34,7 @@ std::vector<debug_ipc::Module> GetElfModulesForProcess(const ProcessHandle& proc
 namespace internal {
 
 struct ElfSegInfo {
-  std::vector<elflib::Elf64_Phdr> segment_headers;
+  std::vector<Elf64_Phdr> segment_headers;
   std::optional<std::string> so_name;
   std::string build_id;
 };

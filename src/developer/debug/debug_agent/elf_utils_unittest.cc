@@ -7,7 +7,7 @@
 #include <link.h>
 
 #include <gtest/gtest.h>
-#undef PT_LOAD  // The fixtures use elflib::PT_LOAD.
+
 #include "src/developer/debug/debug_agent/mock_process_handle.h"
 
 #if defined(__Fuchsia__)
@@ -78,9 +78,8 @@ TEST(ElfUtils, MergeMmapedModules) {
   maps.push_back(debug_ipc::AddressRegion{
       .name = kBinaryName, .base = kBase1 + 0x1000, .size = 0x1000, .read = true});
 
-  std::vector<elflib::Elf64_Phdr> a_segs{
-      {.p_type = elflib::PT_LOAD, .p_vaddr = 0, .p_memsz = 0x1000},
-      {.p_type = elflib::PT_LOAD, .p_vaddr = 0x1000, .p_memsz = 0x1000}};
+  std::vector<Elf64_Phdr> a_segs{{.p_type = PT_LOAD, .p_vaddr = 0, .p_memsz = 0x1000},
+                                 {.p_type = PT_LOAD, .p_vaddr = 0x1000, .p_memsz = 0x1000}};
 
   // Non-readable and writable sections shouldn't be probed for ELF headers.
   maps.push_back(debug_ipc::AddressRegion{.name = "/unreadable", .base = kBase2, .size = 0x1000});
@@ -93,9 +92,8 @@ TEST(ElfUtils, MergeMmapedModules) {
   maps.push_back(debug_ipc::AddressRegion{
       .name = kLibFooName, .base = kBase3 + 0x1000, .size = 0x1000, .read = true});
 
-  std::vector<elflib::Elf64_Phdr> foo_segs{
-      {.p_type = elflib::PT_LOAD, .p_vaddr = 0, .p_memsz = 0x1000},
-      {.p_type = elflib::PT_LOAD, .p_vaddr = 0x1000, .p_memsz = 0x1000}};
+  std::vector<Elf64_Phdr> foo_segs{{.p_type = PT_LOAD, .p_vaddr = 0, .p_memsz = 0x1000},
+                                   {.p_type = PT_LOAD, .p_vaddr = 0x1000, .p_memsz = 0x1000}};
 
   auto get_elf_info = [&](uint64_t base) -> std::optional<internal::ElfSegInfo> {
     switch (base) {
@@ -136,7 +134,7 @@ TEST(ElfUtils, DifferentLoadBiases) {
     probes.push_back(base);
     uint64_t vaddr = base == 0x400000 ? 0x400000 : 0;
     return std::optional<internal::ElfSegInfo>(
-        {.segment_headers = {{.p_type = elflib::PT_LOAD, .p_vaddr = vaddr, .p_memsz = 0x2000}}});
+        {.segment_headers = {{.p_type = PT_LOAD, .p_vaddr = vaddr, .p_memsz = 0x2000}}});
   });
   EXPECT_EQ((std::vector<uint64_t>{0x400000, 0x800000}), probes);
   ASSERT_EQ(2u, modules.size());
@@ -170,9 +168,8 @@ TEST(ElfUtils, MergeMmapedModulesWithHole) {
   maps.push_back(debug_ipc::AddressRegion{
       .name = kBinaryName, .base = kBase1 + 0x1000, .size = 0x1000, .read = true});
 
-  std::vector<elflib::Elf64_Phdr> a_segs{
-      {.p_type = elflib::PT_LOAD, .p_vaddr = 0, .p_memsz = 0x1000},
-      {.p_type = elflib::PT_LOAD, .p_vaddr = 0x1000, .p_memsz = 0x1000}};
+  std::vector<Elf64_Phdr> a_segs{{.p_type = PT_LOAD, .p_vaddr = 0, .p_memsz = 0x1000},
+                                 {.p_type = PT_LOAD, .p_vaddr = 0x1000, .p_memsz = 0x1000}};
 
   // Non-readable and writable sections shouldn't be probed for ELF headers.
   maps.push_back(debug_ipc::AddressRegion{.name = "/unreadable", .base = kBase2, .size = 0x1000});
@@ -189,8 +186,7 @@ TEST(ElfUtils, MergeMmapedModulesWithHole) {
   maps.push_back(debug_ipc::AddressRegion{
       .name = kLibFillsHoleName, .base = kBase4, .size = 0x1000, .read = true});
 
-  std::vector<elflib::Elf64_Phdr> hole_segs{
-      {.p_type = elflib::PT_LOAD, .p_vaddr = 0, .p_memsz = 0x1000}};
+  std::vector<Elf64_Phdr> hole_segs{{.p_type = PT_LOAD, .p_vaddr = 0, .p_memsz = 0x1000}};
 
   // This mapping represents the second header that has a large offset from the base address of this
   // module. In between this header and the one above will be the entirety of another module that we
@@ -198,9 +194,8 @@ TEST(ElfUtils, MergeMmapedModulesWithHole) {
   maps.push_back(debug_ipc::AddressRegion{
       .name = kLibFooName, .base = kBase3 + 0x10000, .size = 0x1000, .read = true});
 
-  std::vector<elflib::Elf64_Phdr> foo_segs{
-      {.p_type = elflib::PT_LOAD, .p_vaddr = 0, .p_memsz = 0x1000},
-      {.p_type = elflib::PT_LOAD, .p_vaddr = 0x10000, .p_memsz = 0x1000}};
+  std::vector<Elf64_Phdr> foo_segs{{.p_type = PT_LOAD, .p_vaddr = 0, .p_memsz = 0x1000},
+                                   {.p_type = PT_LOAD, .p_vaddr = 0x10000, .p_memsz = 0x1000}};
 
   auto get_elf_info = [&](uint64_t base) -> std::optional<internal::ElfSegInfo> {
     switch (base) {
