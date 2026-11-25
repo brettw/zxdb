@@ -57,6 +57,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
   bool HasBinary() const override;
   llvm::object::ObjectFile* GetLLVMObjectFile() override;
   llvm::DWARFContext* GetLLVMContext() const override;
+  const DwarfSections& GetSections() const override;
   uint64_t GetMappedLength() const override;
   const std::map<std::string, ElfTableSymbol>& GetELFSymbols() const override;
   const std::map<std::string, uint64_t> GetPLTSymbols() const override;
@@ -91,6 +92,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
   std::unique_ptr<llvm::MemoryBuffer> binary_buffer_;  // Backing for binary_.
   std::unique_ptr<llvm::object::Binary> binary_;
   std::unique_ptr<llvm::DWARFContext> context_;  // binary_ must outlive this.
+  DwarfSections sections_;                       // Views into the sections of context_.
 
   class DebugAranges;
   std::unique_ptr<DebugAranges> debug_aranges_;  // Replaces context_->Aranges.

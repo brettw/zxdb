@@ -10,6 +10,7 @@
 #include <cinttypes>
 #include <limits>
 
+#include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/line_sequence.h"
 
@@ -30,6 +31,10 @@
 namespace zxdb {
 
 namespace {
+
+std::span<const uint8_t> AsBytes(std::string_view data) {
+  return {reinterpret_cast<const uint8_t*>(data.data()), data.size()};
+}
 
 // Standard opcodes (DWARF 5 section 7.22).
 enum : uint8_t {
@@ -54,83 +59,6 @@ enum : uint8_t {
   kLneDefineFile = 3,
 };
 
-// The LEB128 readers fail for truncated values and for values that don't fit in 64 bits, like
-// LLVM's decodeULEB128() and decodeSLEB128(). Bytes past 64 bits are valid if they only extend the
-// value.
-bool ReadUleb(const uint8_t*& p, const uint8_t* end, uint64_t* out) {
-  if (p < end && !(*p & 0x80)) {
-    *out = *p++;
-    return true;
-  }
-
-  uint64_t result = 0;
-  unsigned shift = 0;
-  while (p < end) {
-    uint8_t byte = *p++;
-    uint64_t slice = byte & 0x7f;
-    if (shift >= 63 && (shift == 63 ? slice > 1 : slice != 0))
-      return false;
-    if (shift < 64) {
-      result |= slice << shift;
-      shift += 7;
-    }
-    if (!(byte & 0x80)) {
-      *out = result;
-      return true;
-    }
-  }
-  return false;
-}
-
-bool ReadSleb(const uint8_t*& p, const uint8_t* end, int64_t* out) {
-  uint64_t result = 0;
-  unsigned shift = 0;
-  while (p < end) {
-    uint8_t byte = *p++;
-    uint64_t slice = byte & 0x7f;
-    if (shift >= 63) {
-      bool negative = static_cast<int64_t>(result) < 0;
-      if (shift == 63 ? slice != 0 && slice != 0x7f : slice != (negative ? 0x7f : 0))
-        return false;
-    }
-    if (shift < 64) {
-      result |= slice << shift;
-      shift += 7;
-    }
-    if (!(byte & 0x80)) {
-      if (shift < 64 && (byte & 0x40))
-        result |= ~uint64_t{0} << shift;
-      *out = static_cast<int64_t>(result);
-      return true;
-    }
-  }
-  return false;
-}
-
-// Skip a value with the same checks as the readers. Most values are one byte.
-bool SkipUleb(const uint8_t*& p, const uint8_t* end) {
-  uint64_t value;
-  return ReadUleb(p, end, &value);
-}
-
-bool SkipSleb(const uint8_t*& p, const uint8_t* end) {
-  if (p < end && !(*p & 0x80)) {
-    p++;
-    return true;
-  }
-  int64_t value;
-  return ReadSleb(p, end, &value);
-}
-
-uint64_t ReadFixed(const uint8_t* p, size_t size, bool little_endian) {
-  uint64_t result = 0;
-  for (size_t i = 0; i < size; i++) {
-    size_t shift = little_endian ? i : size - 1 - i;
-    result |= static_cast<uint64_t>(p[i]) << (8 * shift);
-  }
-  return result;
-}
-
 uint64_t TombstoneForSize(size_t size) {
   return size >= 8 ? ~uint64_t{0} : (uint64_t{1} << (8 * size)) - 1;
 }
@@ -146,8 +74,7 @@ LineFileEntry ReadDefinedFile(const uint8_t* p, const uint8_t* end) {
   }
   entry.name = std::string_view(reinterpret_cast<const char*>(p), nul - p);
   p = nul + 1;
-  if (!ReadUleb(p, end, &entry.dir_index))
-    entry.dir_index = 0;
+  entry.dir_index = ReadUleb(p, end).value_or(0);
   return entry;
 }
 
@@ -200,9 +127,10 @@ LineProgramStatus DecodeProgram(const LineProgramHeader& header, Sink& sink) {
     }
 
     if (opcode == 0) {
-      uint64_t length;
-      if (!ReadUleb(p, end, &length))
+      auto operand = ReadUleb(p, end);
+      if (!operand)
         return LineProgramStatus::kCorrupt;
+      uint64_t length = *operand;
       if (length == 0)
         continue;
       if (length > static_cast<uint64_t>(end - p))
@@ -247,36 +175,36 @@ LineProgramStatus DecodeProgram(const LineProgramHeader& header, Sink& sink) {
         emit(0);
         break;
       case kLnsAdvancePc: {
-        uint64_t advance;
-        if (!ReadUleb(p, end, &advance))
+        auto advance = ReadUleb(p, end);
+        if (!advance)
           return LineProgramStatus::kCorrupt;
-        address += advance * min_inst_length;
+        address += *advance * min_inst_length;
         break;
       }
       case kLnsAdvanceLine:
         if constexpr (Sink::kNeedsDetails) {
-          int64_t delta;
-          if (!ReadSleb(p, end, &delta))
+          auto delta = ReadSleb(p, end);
+          if (!delta)
             return LineProgramStatus::kCorrupt;
-          line += static_cast<uint32_t>(delta);
+          line += static_cast<uint32_t>(*delta);
         } else {
           if (!SkipSleb(p, end))
             return LineProgramStatus::kCorrupt;
         }
         break;
       case kLnsSetFile: {
-        uint64_t value;
-        if (!ReadUleb(p, end, &value))
+        auto value = ReadUleb(p, end);
+        if (!value)
           return LineProgramStatus::kCorrupt;
-        file = static_cast<uint32_t>(std::min<uint64_t>(value, UINT32_MAX));
+        file = static_cast<uint32_t>(std::min<uint64_t>(*value, UINT32_MAX));
         break;
       }
       case kLnsSetColumn:
         if constexpr (Sink::kNeedsDetails) {
-          uint64_t value;
-          if (!ReadUleb(p, end, &value))
+          auto value = ReadUleb(p, end);
+          if (!value)
             return LineProgramStatus::kCorrupt;
-          column = static_cast<uint16_t>(value);  // LLVM also truncates to 16 bits.
+          column = static_cast<uint16_t>(*value);  // LLVM also truncates to 16 bits.
         } else {
           if (!SkipUleb(p, end))
             return LineProgramStatus::kCorrupt;
@@ -429,88 +357,6 @@ class FileScanSink {
   std::vector<uint32_t> late_files_;  // Live references outside the table when they were seen.
   LineSequenceValidator sequence_;
   uint32_t last_file_ = kNoFile;
-};
-
-// Reads fixed-size and variable-size values from section data, inside a limit. Every read past the
-// limit fails the reader, and later reads return 0.
-class DataReader {
- public:
-  DataReader(std::string_view data, uint64_t offset, uint64_t limit, bool little_endian)
-      : data_(reinterpret_cast<const uint8_t*>(data.data())),
-        offset_(offset),
-        limit_(std::min<uint64_t>(limit, data.size())),
-        little_endian_(little_endian) {}
-
-  bool ok() const { return ok_; }
-  uint64_t offset() const { return offset_; }
-  void set_limit(uint64_t limit) { limit_ = std::min(limit, limit_); }
-
-  uint64_t Fixed(size_t size) {
-    if (!Check(size))
-      return 0;
-    uint64_t result = ReadFixed(data_ + offset_, size, little_endian_);
-    offset_ += size;
-    return result;
-  }
-
-  uint64_t Uleb() {
-    const uint8_t* p = data_ + offset_;
-    uint64_t result = 0;
-    if (!ok_ || offset_ > limit_ || !ReadUleb(p, data_ + limit_, &result)) {
-      ok_ = false;
-      return 0;
-    }
-    offset_ = p - data_;
-    return result;
-  }
-
-  void SkipUleb() { Uleb(); }
-
-  void SkipSleb() {
-    const uint8_t* p = data_ + offset_;
-    if (!ok_ || offset_ > limit_ || !zxdb::SkipSleb(p, data_ + limit_)) {
-      ok_ = false;
-      return;
-    }
-    offset_ = p - data_;
-  }
-
-  void Skip(uint64_t size) {
-    if (Check(size))
-      offset_ += size;
-  }
-
-  // Reads a null-terminated string.
-  std::string_view CString() {
-    if (!ok_ || offset_ >= limit_) {
-      ok_ = false;
-      return std::string_view();
-    }
-    const void* nul = memchr(data_ + offset_, 0, limit_ - offset_);
-    if (!nul) {
-      ok_ = false;
-      return std::string_view();
-    }
-    size_t length = static_cast<const uint8_t*>(nul) - (data_ + offset_);
-    std::string_view result(reinterpret_cast<const char*>(data_ + offset_), length);
-    offset_ += length + 1;
-    return result;
-  }
-
- private:
-  bool Check(uint64_t size) {
-    if (!ok_ || offset_ > limit_ || limit_ - offset_ < size) {
-      ok_ = false;
-      return false;
-    }
-    return true;
-  }
-
-  const uint8_t* data_;
-  uint64_t offset_;
-  uint64_t limit_;
-  bool little_endian_;
-  bool ok_ = true;
 };
 
 // Returns the null-terminated string at the offset of the section, or nullopt if there is none.
@@ -839,7 +685,9 @@ ErrOr<LineProgramHeader> ParseLineProgramHeader(std::string_view line_section, u
 
   LineProgramHeader header;
   header.little_endian = little_endian;
-  DataReader reader(line_section, extent.value().begin, unit_end, little_endian);
+  DataReader reader(AsBytes(line_section), little_endian);
+  reader.set_limit(unit_end);
+  reader.Seek(extent.value().begin);
 
   header.version = static_cast<uint16_t>(reader.Fixed(2));
   if (reader.ok() && (header.version < 2 || header.version > 5))
@@ -925,7 +773,8 @@ ErrOr<LineTableExtent> ReadLineTableExtent(std::string_view line_section, uint64
     return Err("Line table offset 0x%" PRIx64 " is outside the section.", offset);
 
   LineTableExtent extent;
-  DataReader reader(line_section, offset, line_section.size(), little_endian);
+  DataReader reader(AsBytes(line_section), little_endian);
+  reader.Seek(offset);
   uint64_t unit_length = reader.Fixed(4);
   if (unit_length == 0xffffffff) {
     unit_length = reader.Fixed(8);

@@ -18,6 +18,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
@@ -27,20 +28,12 @@ namespace zxdb {
 
 class LineTableTestSections;
 
-// Appends an unsigned LEB128 value to raw test data.
 // The unit type of a DWARF 5 compile unit header (DW_UT_compile).
 constexpr uint8_t kUnitTypeCompile = 0x01;
-
-void AppendUleb(std::vector<uint8_t>& out, uint64_t value);
-void AppendUleb(std::vector<uint8_t>& out, DwarfForm form);
 
 // Returns the form as one byte, for raw test data in braced lists. The form must fit in a one-byte
 // unsigned LEB128 value.
 uint8_t FormByte(DwarfForm form);
-
-// Appends a fixed-size integer in the requested byte order.
-void AppendInteger(std::vector<uint8_t>& out, uint64_t value, size_t size,
-                   bool little_endian = true);
 
 // For test failure messages.
 std::ostream& operator<<(std::ostream& out, const LineRow& row);
@@ -220,17 +213,13 @@ class LineTableTestSections {
  private:
   friend class LineTableBuilder;
 
-  uint64_t AddString(std::vector<uint8_t>& section, std::map<std::string, uint64_t>& offsets,
-                     const std::string& str);
   uint8_t AddStrOffset(const std::string& str);
 
   std::vector<uint8_t> line_;
-  std::vector<uint8_t> line_str_;
-  std::vector<uint8_t> str_;
+  DwarfStringSectionBuilder line_str_;
+  DwarfStringSectionBuilder str_;
   std::vector<uint8_t> info_;
   std::vector<std::string> str_offsets_;  // Strings for kStrx1, by index.
-  std::map<std::string, uint64_t> line_str_offsets_;
-  std::map<std::string, uint64_t> str_offsets_map_;
   bool little_endian_ = true;
 
   // The context references these buffers, so they must outlive it.

@@ -1,3 +1,4 @@
+add_subdirectory(dwarf)
 # Source selection follows the upstream host build.
 add_library(zxdb_symbols STATIC
   address_range_map_builder.cc
@@ -75,7 +76,7 @@ add_library(zxdb_symbols STATIC
   variant_part.cc
   visit_scopes.cc
 )
-target_link_libraries(zxdb_symbols PUBLIC zxdb_common debug_ipc elflib llvm_host rapidjson)
+target_link_libraries(zxdb_symbols PUBLIC zxdb_common zxdb_dwarf debug_ipc elflib llvm_host rapidjson)
 # LLVM 19's ScopedPrinter header destroys an incomplete unique_ptr in a
 # default argument under C++23. This translation unit needs only C++20.
 if(LLVM_VERSION_MAJOR EQUAL 19)

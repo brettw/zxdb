@@ -17,6 +17,7 @@
 #include <llvm/DebugInfo/DWARF/DWARFCompileUnit.h>
 #include <llvm/DebugInfo/DWARF/DWARFContext.h>
 #include <llvm/DebugInfo/DWARF/DWARFDebugArangeSet.h>
+#include <llvm/DebugInfo/DWARF/DWARFObject.h>
 #include <llvm/DebugInfo/DWARF/DWARFTypeUnit.h>
 #include <llvm/DebugInfo/DWARF/DWARFUnit.h>
 #include <llvm/Object/Binary.h>
@@ -26,12 +27,60 @@
 
 #include "src/developer/debug/shared/logging/logging.h"
 #include "src/developer/debug/zxdb/common/file_util.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit_impl.h"
 #include "src/lib/elflib/elflib.h"
 
 namespace zxdb {
 
 namespace {
+
+std::span<const uint8_t> AsBytes(llvm::StringRef data) { return {data.bytes_begin(), data.size()}; }
+
+using SectionVisitor = llvm::function_ref<void(const llvm::DWARFSection&)>;
+using VisitSections = void (llvm::DWARFObject::*)(SectionVisitor) const;
+
+std::span<const uint8_t> GetSingleSection(const llvm::DWARFObject& object,
+                                          VisitSections visit_sections) {
+  std::span<const uint8_t> result;
+  size_t count = 0;
+  (object.*visit_sections)([&](const llvm::DWARFSection& section) {
+    if (++count == 1)
+      result = AsBytes(section.Data);
+  });
+  // Relocatable objects can have multiple COMDAT sections of the same type. The byte reader
+  // doesn't support these objects.
+  return count == 1 ? result : std::span<const uint8_t>();
+}
+
+DwarfSections GetSectionViews(const llvm::DWARFObject& object) {
+  return {
+      .info = GetSingleSection(object, &llvm::DWARFObject::forEachInfoSections),
+      .abbrev = AsBytes(object.getAbbrevSection()),
+      .str = AsBytes(object.getStrSection()),
+      .str_offsets = AsBytes(object.getStrOffsetsSection().Data),
+      .line = AsBytes(object.getLineSection().Data),
+      .line_str = AsBytes(object.getLineStrSection()),
+      .addr = AsBytes(object.getAddrSection().Data),
+      .ranges = AsBytes(object.getRangesSection().Data),
+      .rnglists = AsBytes(object.getRnglistsSection().Data),
+      .loc = AsBytes(object.getLocSection().Data),
+      .loclists = AsBytes(object.getLoclistsSection().Data),
+      .aranges = AsBytes(object.getArangesSection()),
+      .names = AsBytes(object.getNamesSection().Data),
+      .types = GetSingleSection(object, &llvm::DWARFObject::forEachTypesSections),
+      .info_dwo = GetSingleSection(object, &llvm::DWARFObject::forEachInfoDWOSections),
+      .abbrev_dwo = AsBytes(object.getAbbrevDWOSection()),
+      .str_dwo = AsBytes(object.getStrDWOSection()),
+      .str_offsets_dwo = AsBytes(object.getStrOffsetsDWOSection().Data),
+      .line_dwo = AsBytes(object.getLineDWOSection().Data),
+      .loc_dwo = AsBytes(object.getLocDWOSection().Data),
+      .loclists_dwo = AsBytes(object.getLoclistsDWOSection().Data),
+      .rnglists_dwo = AsBytes(object.getRnglistsDWOSection().Data),
+      .types_dwo = GetSingleSection(object, &llvm::DWARFObject::forEachTypesDWOSections),
+      .little_endian = object.isLittleEndian(),
+  };
+}
 
 uint64_t ComputeMappedLength(elflib::ElfLib& elf) {
   uint64_t max = 0;
@@ -257,6 +306,7 @@ Err DwarfBinaryImpl::Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
   context_ = llvm::DWARFContext::create(*GetLLVMObjectFile(),
                                         llvm::DWARFContext::ProcessDebugRelocations::Process,
                                         nullptr, "", &LLVMErrorHandler);
+  sections_ = GetSectionViews(context_->getDWARFObj());
 
   return Err();
 }
@@ -266,6 +316,8 @@ llvm::object::ObjectFile* DwarfBinaryImpl::GetLLVMObjectFile() {
 }
 
 llvm::DWARFContext* DwarfBinaryImpl::GetLLVMContext() const { return context_.get(); }
+
+const DwarfSections& DwarfBinaryImpl::GetSections() const { return sections_; }
 
 uint64_t DwarfBinaryImpl::GetMappedLength() const { return mapped_length_; }
 
@@ -324,23 +376,22 @@ fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::FromLLVMUnit(llvm::DWARFUnit* llvm_unit)
 
 std::optional<uint64_t> DwarfBinaryImpl::GetDebugAddrEntry(uint64_t addr_base,
                                                            uint64_t index) const {
-  const llvm::DWARFObject& object = context_->getDWARFObj();
-  llvm::StringRef string_ref = object.getAddrSection().Data;
+  // DW_AT_addr_base gives the byte offset of the first entry after the header. The index counts
+  // entries from that offset. This lookup assumes 8-byte addresses.
+  constexpr uint64_t kEntrySize = 8;
+  constexpr uint64_t kMaxOffset = std::numeric_limits<uint64_t>::max();
+  if (index > kMaxOffset / kEntrySize)
+    return std::nullopt;
+  uint64_t entry_offset = index * kEntrySize;
+  if (addr_base > kMaxOffset - entry_offset)
+    return std::nullopt;
 
-  // From the DWARF 5 spec: "The DW_AT_addr_base attribute points to the first entry following the
-  // header. The entries are indexed sequentially from this base entry, starting from 0. So the
-  // addr_base is a byte offset, but the index is an index into the address table from there.
-  //
-  // Here we assume the addresses are always 64 bits. The address table header that precedes the
-  // array has this size as a field which we need to consult if we support non-64 bit platforms.
-  uint64_t offset = addr_base + (index * kTargetPointerSize);
-
-  if (offset > std::numeric_limits<uint64_t>::max() - kTargetPointerSize ||
-      string_ref.size() < offset + kTargetPointerSize)
-    return std::nullopt;  // No room in table data.
-
-  uint64_t result;
-  memcpy(&result, string_ref.bytes_begin() + offset, kTargetPointerSize);
+  const DwarfSections& sections = GetSections();
+  DataReader reader(sections.addr, sections.little_endian);
+  reader.Seek(addr_base + entry_offset);
+  uint64_t result = reader.Address(kEntrySize);
+  if (!reader.ok())
+    return std::nullopt;
   return result;
 }
 

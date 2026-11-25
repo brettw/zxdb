@@ -67,6 +67,23 @@ bool SetDynamicSymbolSize(std::string& elf, std::string_view name, uint64_t size
   return false;
 }
 
+TEST(DwarfBinaryImpl, DebugAddr) {
+  std::string path = TestSymbolModule::GetTestDataDir() + "addrx_offset/clang_addrx_offset.so";
+  TestSymbolModule setup(path, "");
+  ASSERT_TRUE(setup.Init().ok());
+  const DwarfBinary& binary = *setup.symbols()->binary();
+
+  // The fixture's address table starts with the address of AddrxOffsetFirst(int).
+  constexpr uint64_t kAddrBase = 8;
+  const auto* function = GetSymbol(binary.GetELFSymbols(), "_Z16AddrxOffsetFirsti");
+  ASSERT_TRUE(function);
+  EXPECT_EQ(function->value, binary.GetDebugAddrEntry(kAddrBase, 0));
+
+  EXPECT_EQ(std::nullopt, binary.GetDebugAddrEntry(binary.GetSections().addr.size(), 0));
+  EXPECT_EQ(std::nullopt, binary.GetDebugAddrEntry(kAddrBase, UINT64_MAX / 8 + 1));
+  EXPECT_EQ(std::nullopt, binary.GetDebugAddrEntry(UINT64_MAX - 7, 2));
+}
+
 // The checked-in test binary has a ".symtab" and a ".dynsym" section. The symbols of both are in
 // the result.
 TEST(DwarfBinaryImpl, ElfSymbols) {

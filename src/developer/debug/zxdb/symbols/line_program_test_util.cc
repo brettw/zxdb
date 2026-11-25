@@ -23,52 +23,13 @@ constexpr uint32_t kStrOffsetsBase = 8;
 // Operand counts of the standard opcodes 1 to 12.
 constexpr uint8_t kStandardLengths[12] = {0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1};
 
-void AppendSleb(std::vector<uint8_t>& out, int64_t value) {
-  bool more = true;
-  while (more) {
-    uint8_t byte = value & 0x7f;
-    value >>= 7;
-    if ((value == 0 && !(byte & 0x40)) || (value == -1 && (byte & 0x40)))
-      more = false;
-    else
-      byte |= 0x80;
-    out.push_back(byte);
-  }
-}
-
-void AppendCString(std::vector<uint8_t>& out, const std::string& str) {
-  out.insert(out.end(), str.begin(), str.end());
-  out.push_back(0);
-}
-
 void IgnoreError(llvm::Error err) { llvm::consumeError(std::move(err)); }
 
 }  // namespace
 
-void AppendUleb(std::vector<uint8_t>& out, uint64_t value) {
-  do {
-    uint8_t byte = value & 0x7f;
-    value >>= 7;
-    if (value)
-      byte |= 0x80;
-    out.push_back(byte);
-  } while (value);
-}
-
-void AppendUleb(std::vector<uint8_t>& out, DwarfForm form) {
-  AppendUleb(out, static_cast<uint64_t>(form));
-}
-
 uint8_t FormByte(DwarfForm form) {
   FX_CHECK(static_cast<int>(form) >= 0 && static_cast<int>(form) < 0x80);
   return static_cast<uint8_t>(form);
-}
-
-void AppendInteger(std::vector<uint8_t>& out, uint64_t value, size_t size, bool little_endian) {
-  for (size_t i = 0; i < size; i++) {
-    size_t shift = little_endian ? i : size - 1 - i;
-    out.push_back(static_cast<uint8_t>(value >> (8 * shift)));
-  }
 }
 
 std::ostream& operator<<(std::ostream& out, const LineRow& row) {
@@ -227,11 +188,10 @@ void LineTableBuilder::WriteString(std::vector<uint8_t>& out, StringForm form,
       AppendCString(out, str);
       break;
     case StringForm::kLineStrp:
-      Put(out, sections.AddString(sections.line_str_, sections.line_str_offsets_, str),
-          offset_size);
+      Put(out, sections.line_str_.AddString(str), offset_size);
       break;
     case StringForm::kStrp:
-      Put(out, sections.AddString(sections.str_, sections.str_offsets_map_, str), offset_size);
+      Put(out, sections.str_.AddString(str), offset_size);
       break;
     case StringForm::kStrx1:
       out.push_back(sections.AddStrOffset(str));
@@ -377,17 +337,6 @@ uint64_t LineTableTestSections::AddRaw(const std::vector<uint8_t>& bytes) {
   return offset;
 }
 
-uint64_t LineTableTestSections::AddString(std::vector<uint8_t>& section,
-                                          std::map<std::string, uint64_t>& offsets,
-                                          const std::string& str) {
-  if (auto found = offsets.find(str); found != offsets.end())
-    return found->second;
-  uint64_t offset = section.size();
-  AppendCString(section, str);
-  offsets[str] = offset;
-  return offset;
-}
-
 uint8_t LineTableTestSections::AddStrOffset(const std::string& str) {
   FX_CHECK(str_offsets_.size() < 256);
   str_offsets_.push_back(str);
@@ -397,38 +346,37 @@ uint8_t LineTableTestSections::AddStrOffset(const std::string& str) {
 void LineTableTestSections::AddCompileUnit(uint16_t version, std::optional<uint64_t> line_offset,
                                            const std::vector<uint64_t>& decl_files) {
   FX_CHECK(!context_);
-  std::vector<uint8_t> body;
-  AppendInteger(body, version, 2);
+  DwarfSectionBuilder writer(info_);
+  auto length = writer.BeginInitialLength(4);
+  writer.Fixed(version, 2);
   if (version >= 5) {
-    body.push_back(kUnitTypeCompile);
-    body.push_back(8);          // Address size.
-    AppendInteger(body, 0, 4);  // Abbreviation offset.
+    writer.Fixed(kUnitTypeCompile, 1);
+    writer.Fixed(8, 1);   // Address size.
+    writer.Offset(0, 4);  // Abbreviation offset.
   } else {
-    AppendInteger(body, 0, 4);
-    body.push_back(8);
+    writer.Offset(0, 4);
+    writer.Fixed(8, 1);
   }
   if (line_offset) {
-    AppendUleb(body, 1);  // The compile unit abbreviation.
-    AppendInteger(body, *line_offset, 4);
+    writer.Uleb(1);  // The compile unit abbreviation.
+    writer.Offset(*line_offset, 4);
   } else {
-    AppendUleb(body, 3);  // The compile unit abbreviation without DW_AT_stmt_list.
+    writer.Uleb(3);  // The compile unit abbreviation without DW_AT_stmt_list.
   }
-  AppendInteger(body, kStrOffsetsBase, 4);
+  writer.Offset(kStrOffsetsBase, 4);
   for (uint64_t decl_file : decl_files) {
-    AppendUleb(body, 2);  // The subprogram abbreviation.
-    AppendUleb(body, decl_file);
+    writer.Uleb(2);  // The subprogram abbreviation.
+    writer.Uleb(decl_file);
   }
-  body.push_back(0);  // End of the children.
-
-  AppendInteger(info_, body.size(), 4);
-  info_.insert(info_.end(), body.begin(), body.end());
+  writer.Uleb(0);  // End of the children.
+  writer.EndInitialLength(length);
 }
 
 void LineTableTestSections::Finish(uint8_t address_size, bool little_endian) {
   FX_CHECK(!context_);
   little_endian_ = little_endian;
 
-  auto make_buffer = [](const std::vector<uint8_t>& data, const char* name) {
+  auto make_buffer = [](std::span<const uint8_t> data, const char* name) {
     return llvm::MemoryBuffer::getMemBufferCopy(
         llvm::StringRef(reinterpret_cast<const char*>(data.data()), data.size()), name);
   };
@@ -456,14 +404,14 @@ void LineTableTestSections::Finish(uint8_t address_size, bool little_endian) {
   AppendInteger(str_offsets, 5, 2);  // Version.
   AppendInteger(str_offsets, 0, 2);  // Padding.
   for (const std::string& str : str_offsets_)
-    AppendInteger(str_offsets, AddString(str_, str_offsets_map_, str), 4);
+    AppendInteger(str_offsets, str_.AddString(str), 4);
 
   buffers_["debug_line"] = make_buffer(line_, "debug_line");
   buffers_["debug_info"] = make_buffer(info_, "debug_info");
   buffers_["debug_abbrev"] = make_buffer(abbrev, "debug_abbrev");
   buffers_["debug_str_offsets"] = make_buffer(str_offsets, "debug_str_offsets");
-  buffers_["debug_line_str"] = make_buffer(line_str_, "debug_line_str");
-  buffers_["debug_str"] = make_buffer(str_, "debug_str");
+  buffers_["debug_line_str"] = make_buffer(line_str_.bytes(), "debug_line_str");
+  buffers_["debug_str"] = make_buffer(str_.bytes(), "debug_str");
   context_ =
       llvm::DWARFContext::create(buffers_, address_size, little_endian, IgnoreError, IgnoreError);
 }

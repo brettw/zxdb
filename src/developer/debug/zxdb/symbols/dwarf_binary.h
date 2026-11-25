@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 
+#include "src/developer/debug/zxdb/symbols/dwarf/dwarf_sections.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/symbol_context.h"
@@ -83,6 +84,10 @@ class DwarfBinary {
   // class comment above.
   virtual llvm::object::ObjectFile* GetLLVMObjectFile() = 0;
   virtual llvm::DWARFContext* GetLLVMContext() const = 0;
+
+  // Returns views of this binary's DWARF sections. The views stay valid while this DwarfBinary
+  // exists. A view is empty when its section is absent.
+  virtual const DwarfSections& GetSections() const = 0;
 
   // Returns the extent of the mapped segments in memory.
   virtual uint64_t GetMappedLength() const = 0;

@@ -208,6 +208,9 @@ add_executable(zxdb_tests
   symbols/code_block_unittest.cc
   symbols/collection_unittest.cc
   symbols/const_value_unittest.cc
+  symbols/dwarf/data_reader_unittest.cc
+  symbols/dwarf/dwarf_section_builder.cc
+  symbols/dwarf/dwarf_section_builder_unittest.cc
   symbols/dwarf_abstract_child_iterator_unittest.cc
   symbols/dwarf_binary_impl_unittest.cc
   symbols/dwarf_debug_names_unittest.cc
