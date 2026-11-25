@@ -49,6 +49,65 @@ TEST(LinuxUtils, ParseMaps) {
   EXPECT_EQ("/usr/bin/zsh", result[1].path);
 }
 
+TEST(LinuxUtils, ValidateDebugRegisters) {
+  // Slot 0 is enabled for writes. The length code 0b11 is 4 bytes.
+  zx_thread_state_debug_regs_t regs{};
+  regs.dr[0] = 0x1004;
+  regs.dr7 = 0x1 | (0b01 << 16) | (0b11 << 18);
+  EXPECT_TRUE(ValidateDebugRegisters(regs).ok());
+
+  regs.dr[0] = 0x1002;
+  EXPECT_EQ("DR0 = 0x1002 isn't aligned to the 4-byte length that DR7 sets for slot 0.",
+            ValidateDebugRegisters(regs).message());
+
+  // A disabled slot can hold any address.
+  regs.dr7 = 0;
+  regs.dr[1] = 0x1001;
+  EXPECT_TRUE(ValidateDebugRegisters(regs).ok());
+
+  // The global enable bit also enables a slot. The length code 0b10 is 8 bytes.
+  regs.dr[1] = 0x1004;
+  regs.dr7 = 0x8 | (0b11 << 20) | (0b10 << 22);
+  EXPECT_EQ("DR1 = 0x1004 isn't aligned to the 8-byte length that DR7 sets for slot 1.",
+            ValidateDebugRegisters(regs).message());
+
+  regs = {};
+  regs.dr7 = 0x10 | (0b10 << 24);
+  EXPECT_EQ("DR7 enables slot 2 for I/O access, which isn't supported.",
+            ValidateDebugRegisters(regs).message());
+
+  regs.dr7 = 0x40 | (0b00 << 28) | (0b01 << 30);
+  EXPECT_EQ(
+      "DR7 enables slot 3 for execution with a length of 2 bytes. An execution slot needs a "
+      "length of 1 byte.",
+      ValidateDebugRegisters(regs).message());
+
+  // An execution slot with a length of 1 byte can use any address.
+  regs.dr[3] = 0x1003;
+  regs.dr7 = 0x40;
+  EXPECT_TRUE(ValidateDebugRegisters(regs).ok());
+}
+
+TEST(LinuxUtils, DecodeHardwareTrap) {
+  // Slot 1 is a write watchpoint, and slot 2 is an execution breakpoint.
+  zx_thread_state_debug_regs_t regs{};
+  regs.dr7 = 0x4 | 0x10 | (0b01 << 20) | (0b10 << 22);
+
+  regs.dr6 = 0xffff0ff0 | 0b0010;
+  EXPECT_EQ(debug_ipc::ExceptionType::kWatchpoint, DecodeHardwareTrap(regs));
+  regs.dr6 = 0xffff0ff0 | 0b0100;
+  EXPECT_EQ(debug_ipc::ExceptionType::kHardwareBreakpoint, DecodeHardwareTrap(regs));
+
+  // A read-write watchpoint is also a watchpoint.
+  regs.dr7 = 0x1 | (0b11 << 16);
+  regs.dr6 = 0xffff0ff0 | 0b0001;
+  EXPECT_EQ(debug_ipc::ExceptionType::kWatchpoint, DecodeHardwareTrap(regs));
+
+  // Without a slot in DR6, the trap stays a hardware breakpoint.
+  regs.dr6 = 0xffff0ff0;
+  EXPECT_EQ(debug_ipc::ExceptionType::kHardwareBreakpoint, DecodeHardwareTrap(regs));
+}
+
 TEST(LinuxUtils, ParsePtraceScope) {
   EXPECT_EQ(ParsePtraceScope("1\n"), 1);
   EXPECT_EQ(ParsePtraceScope("0"), 0);
@@ -282,9 +341,10 @@ TEST(LinuxMemory, PartialReadAndInvalidRanges) {
   }
 }
 
-TEST(LinuxCapabilities, NoHardwareSlotsUntilImplemented) {
-  EXPECT_EQ(0u, arch::GetHardwareBreakpointCount());
-  EXPECT_EQ(0u, arch::GetHardwareWatchpointCount());
+TEST(LinuxCapabilities, HardwareSlots) {
+  // x86-64 has four debug address registers.
+  EXPECT_EQ(4u, arch::GetHardwareBreakpointCount());
+  EXPECT_EQ(4u, arch::GetHardwareWatchpointCount());
 }
 }  // namespace debug_agent
 

@@ -38,7 +38,7 @@ class LinuxThreadHandle final : public ThreadHandle {
   debug::Status ResumeIfReady() override { return task_->ResumeIfReady(); }
   std::vector<debug::RegisterValue> ReadRegisters(
       const std::vector<debug::RegisterCategory>& cats_to_get) const override;
-  std::vector<debug::RegisterValue> WriteRegisters(
+  debug::Result<std::vector<debug::RegisterValue>, debug::Status> WriteRegisters(
       const std::vector<debug::RegisterValue>& regs) override;
   bool InstallHWBreakpoint(uint64_t address) override;
   bool UninstallHWBreakpoint(uint64_t address) override;
@@ -47,6 +47,9 @@ class LinuxThreadHandle final : public ThreadHandle {
   bool UninstallWatchpoint(const debug::AddressRange& range) override;
 
  private:
+  // Returns true when the thread has exited or no longer exists.
+  bool IsDead() const;
+
   fxl::RefPtr<LinuxTask> task_;
 };
 

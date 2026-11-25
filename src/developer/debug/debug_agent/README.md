@@ -98,12 +98,27 @@ Callers and implementations must preserve these invariants:
   Linux launches restore the pre-loop signal mask and preserve SIGPIPE ignored
   by the user before the frontend starts. Auxv ABI validation uses AT_PHENT and
   does not require read permission on the executable.
-  Hardware breakpoint/watchpoint slot counts are zero until supported.
+  Linux x86-64 reports four hardware slots. Execution breakpoints and
+  watchpoints share them.
 - When the kernel denies a Linux attach with EPERM, the error names the
   process that already traces the target, and a worker thread is named with its
   process. If no process traces it, a Yama `ptrace_scope` of 1 to 3 adds a note,
   as LLDB does. The note gives the setting as a possible cause, because
   credentials or a non-dumpable target can also deny the attach.
+- Linux debug register writes validate the DR7 slot settings first. They clear
+  DR7 before they change an address, and set it last. A failed write restores
+  the previous values. The kernel keeps debug registers after a detach, so
+  `LinuxTask` saves the values from before its first write and restores them
+  in `Detach()`. If the restoration fails, the task stays attached. An exec
+  clears the registers and the saved values.
+- A new Linux task reports the DR7 value of its parent, but the kernel doesn't
+  copy the breakpoints. `LinuxTask` clears that DR7 when it collects the new
+  task. Then `DebuggedProcess` installs the hardware breakpoints and
+  watchpoints that apply to all threads.
+- A Linux `TRAP_HWBKPT` is a watchpoint when the DR7 access type of the slot
+  that DR6 reports is a read or write, and an execution breakpoint otherwise.
+- When a resume leaves no thread suspended by the client, new threads aren't
+  suspended. The client continues a process one thread at a time.
 - Linux task suspend tokens express intent. Only a collected ptrace stop
   authorizes registers, memory writes, or detach. The agent keeps per-TID wait
   ownership through final reaping, and invalidates deferred events on observer

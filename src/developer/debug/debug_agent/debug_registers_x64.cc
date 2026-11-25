@@ -183,7 +183,7 @@ std::string DR6ToString(uint64_t dr6) {
 
 std::string DR7ToString(uint64_t dr7) {
   return fxl::StringPrintf(
-      "0x%lx: L0=%d, G0=%d, L1=%d, G1=%d, L2=%d, G2=%d, L3=%d, G4=%d, LE=%d, "
+      "0x%lx: L0=%d, G0=%d, L1=%d, G1=%d, L2=%d, G2=%d, L3=%d, G3=%d, LE=%d, "
       "GE=%d, GD=%d, R/W0=%d, LEN0=%d, R/W1=%d, LEN1=%d, R/W2=%d, LEN2=%d, "
       "R/W3=%d, LEN3=%d",
       dr7, X86_FLAG_VALUE(dr7, DR7L0), X86_FLAG_VALUE(dr7, DR7G0), X86_FLAG_VALUE(dr7, DR7L1),

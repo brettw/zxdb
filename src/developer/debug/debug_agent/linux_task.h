@@ -6,6 +6,7 @@
 #define SRC_DEVELOPER_DEBUG_DEBUG_AGENT_LINUX_TASK_H_
 
 #include <sys/wait.h>
+#include <zircon/syscalls/debug.h>
 
 #include <map>
 #include <optional>
@@ -59,6 +60,12 @@ class LinuxTask final : public fxl::RefCountedThreadSafe<LinuxTask> {
   void SetObserver(LinuxTaskObserver* observer);
 
   void set_single_step(bool ss) { single_step_ = ss; }
+
+  // Reads and writes the debug registers of the stopped task. The kernel keeps the debug registers
+  // of a task after a detach, so the first write saves the previous values and Detach() restores
+  // them. An exec clears the registers and the saved values.
+  std::optional<zx_thread_state_debug_regs_t> ReadDebugRegisters() const;
+  debug::Status WriteDebugRegisters(const zx_thread_state_debug_regs_t& regs);
 
   bool is_suspended() const { return stopped_ && !terminated_; }
   // Invalidate an identity that disappeared during exec without ptrace side effects.
@@ -116,6 +123,10 @@ class LinuxTask final : public fxl::RefCountedThreadSafe<LinuxTask> {
   void CompleteVfork(bool exec);
   void OnChild(const SignalRecord& record);
   void CollectChild(int pid, int status);
+
+  // Clears the DR7 value that a new task reports from its parent. The kernel doesn't copy the
+  // breakpoints of the parent, so the value doesn't match the real state. The task must be stopped.
+  void ClearInheritedDebugRegisters();
   debug::Status Resume();
 
   // Constucts a SignalRecord with the given information and any relevant side-channel information
@@ -156,6 +167,9 @@ class LinuxTask final : public fxl::RefCountedThreadSafe<LinuxTask> {
   std::map<int, fxl::RefPtr<LinuxTask>> pending_children_;
   fxl::WeakPtr<LinuxTask> vfork_parent_;
   bool single_step_ = false;
+
+  // The debug registers from before the first write. See WriteDebugRegisters().
+  std::optional<zx_thread_state_debug_regs_t> original_debug_regs_;
 
   bool exiting_ = false;
   int exit_code_ = -1;

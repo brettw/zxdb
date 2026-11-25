@@ -10,6 +10,7 @@
 #include <zircon/syscalls/debug.h>
 #include <zircon/syscalls/exception.h>
 
+#include <algorithm>
 #include <memory>
 
 #include "src/developer/debug/debug_agent/arch.h"
@@ -476,7 +477,7 @@ std::vector<debug::RegisterValue> DebuggedThread::ReadRegisters(
   return thread_handle_->ReadRegisters(cats_to_get);
 }
 
-std::vector<debug::RegisterValue> DebuggedThread::WriteRegisters(
+debug::Result<std::vector<debug::RegisterValue>, debug::Status> DebuggedThread::WriteRegisters(
     const std::vector<debug::RegisterValue>& regs) {
   // If we're updating the instruction pointer to a new value directly, current state is no longer
   // valid. Specifically, if we're currently on a breakpoint, we have to now know the fact that
@@ -498,8 +499,11 @@ std::vector<debug::RegisterValue> DebuggedThread::WriteRegisters(
     }
   }
 
-  std::vector<debug::RegisterValue> written = thread_handle_->WriteRegisters(regs);
-  if (rip_change && std::any_of(written.begin(), written.end(), [rip_id, &ip](const auto& value) {
+  debug::Result<std::vector<debug::RegisterValue>, debug::Status> written =
+      thread_handle_->WriteRegisters(regs);
+  if (written.has_error())
+    return written;
+  if (rip_change && std::ranges::any_of(written.value(), [rip_id, &ip](const auto& value) {
         return value.id == rip_id && value.GetValue() == ip->GetValue();
       }))
     current_breakpoint_ = nullptr;

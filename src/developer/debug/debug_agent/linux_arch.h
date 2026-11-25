@@ -5,6 +5,15 @@
 #ifndef SRC_DEVELOPER_DEBUG_DEBUG_AGENT_ARCH_LINUX_H_
 #define SRC_DEVELOPER_DEBUG_DEBUG_AGENT_ARCH_LINUX_H_
 
+#include <signal.h>
+
+#include "src/developer/debug/ipc/records.h"
+
+// Older C libraries don't define this SIGTRAP code.
+#ifndef TRAP_HWBKPT
+#define TRAP_HWBKPT 4
+#endif
+
 namespace debug_agent {
 namespace arch {
 

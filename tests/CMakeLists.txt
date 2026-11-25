@@ -65,7 +65,8 @@ foreach(LIFECYCLE_MODE IN ITEMS threads leader-exit exec worker-exec output step
     FAIL_REGULAR_EXPRESSION "unexpected process")
 endforeach()
 
-foreach(SCENARIO IN ITEMS fault_step vfork_breakpoint exec_breakpoint)
+foreach(SCENARIO IN ITEMS fault_step vfork_breakpoint exec_breakpoint hardware_breakpoints
+                         hardware_slots)
   configure_file(local_${SCENARIO}.script.in local_${SCENARIO}.script @ONLY)
   add_test(NAME local_${SCENARIO}
     COMMAND zxdb --local --enable-debug-adapter --debug-adapter-port=0

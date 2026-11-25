@@ -45,7 +45,7 @@ enum class WarningType {
 void Warn(const debug::FileLineFunction& origin, WarningType type, zx_koid_t thread_koid,
           uint64_t address) {
   const char* verb = type == WarningType::kInstall ? "install" : "uninstall";
-  DEBUG_LOG_WITH_LOCATION(Breakpoint, origin) << fxl::StringPrintf(
+  debug::LogStatement(::debug::LogSeverity::kWarn, origin).stream() << fxl::StringPrintf(
       "Could not %s HW breakpoint for thread %u at "
       "%" PRIX64,
       verb, static_cast<uint32_t>(thread_koid), address);

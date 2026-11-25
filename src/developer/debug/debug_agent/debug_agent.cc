@@ -435,10 +435,16 @@ void DebugAgent::OnWriteRegisters(const debug_ipc::WriteRegistersRequest& reques
                                   debug_ipc::WriteRegistersReply* reply) {
   DebuggedThread* thread = GetDebuggedThread(request.id);
   if (thread) {
-    reply->status = debug::Status();
-    reply->registers = thread->WriteRegisters(request.registers);
-    if (!request.registers.empty() && reply->registers.empty())
-      reply->status = debug::Status("Register write failed or requested register is unsupported.");
+    auto written = thread->WriteRegisters(request.registers);
+    if (written.has_error()) {
+      reply->status = written.err();
+    } else {
+      reply->status = debug::Status();
+      reply->registers = written.take_value();
+      if (!request.registers.empty() && reply->registers.empty())
+        reply->status =
+            debug::Status("Register write failed or requested register is unsupported.");
+    }
   } else {
     reply->status = debug::Status("Can not find thread " + std::to_string(request.id.thread) +
                                   " to write registers.");

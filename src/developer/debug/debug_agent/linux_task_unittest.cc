@@ -4,6 +4,7 @@
 
 #include "src/developer/debug/debug_agent/linux_task.h"
 
+#include <inttypes.h>
 #include <lib/fit/defer.h>
 #include <signal.h>
 #include <sys/mman.h>
@@ -14,6 +15,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <map>
 #include <optional>
 #include <string>
 #include <thread>
@@ -214,15 +216,17 @@ TEST_F(LinuxTaskTest, AttachExistingWorkersAndRegisters) {
       auto original = regs->GetNativeRegisters().r15;
       auto written = thread->WriteRegisters(
           {debug::RegisterValue(debug::RegisterID::kX64_r15, uint64_t{12345})});
-      EXPECT_FALSE(written.empty());
+      ASSERT_TRUE(written.ok()) << written.err().message();
+      EXPECT_FALSE(written.value().empty());
       EXPECT_EQ(12345u, thread->GetGeneralRegisters()->GetNativeRegisters().r15);
-      EXPECT_FALSE(thread
-                       ->WriteRegisters(
-                           {debug::RegisterValue(debug::RegisterID::kX64_r15, uint64_t{original})})
-                       .empty());
-      EXPECT_TRUE(
-          thread->WriteRegisters({debug::RegisterValue(debug::RegisterID::kX64_dr0, uint64_t{1})})
-              .empty());
+      EXPECT_TRUE(thread
+                      ->WriteRegisters(
+                          {debug::RegisterValue(debug::RegisterID::kX64_r15, uint64_t{original})})
+                      .ok());
+      auto unsupported =
+          thread->WriteRegisters({debug::RegisterValue(debug::RegisterID::kX64_fcw, uint64_t{0})});
+      ASSERT_TRUE(unsupported.has_error());
+      EXPECT_EQ("Linux can't write the fcw register.", unsupported.err().message());
     }
     observer.process->Detach();
     for (const auto& thread : threads)
@@ -232,6 +236,114 @@ TEST_F(LinuxTaskTest, AttachExistingWorkersAndRegisters) {
   int status;
   ASSERT_EQ(pid, waitpid(pid, &status, 0));
   EXPECT_TRUE(WIFEXITED(status));
+  EXPECT_EQ(7, WEXITSTATUS(status));
+}
+
+// A forked child has this variable at the same address as the test.
+volatile uint64_t g_watched_variable = 0;
+
+// Returns the debug registers of the thread by ID.
+std::map<debug::RegisterID, uint64_t> ReadDebugRegisterValues(const ThreadHandle& thread) {
+  std::map<debug::RegisterID, uint64_t> result;
+  for (const auto& value : thread.ReadRegisters({debug::RegisterCategory::kDebug}))
+    result[value.id] = value.GetValue();
+  return result;
+}
+
+TEST_F(LinuxTaskTest, DebugRegisters) {
+  // The child writes the watched variable after the test detaches and releases it.
+  int ready[2], release[2];
+  ASSERT_EQ(0, pipe(ready));
+  ASSERT_EQ(0, pipe(release));
+  pid_t pid = fork();
+  ASSERT_GE(pid, 0);
+  if (pid == 0) {
+    close(ready[0]);
+    close(release[1]);
+    // The test releases the child by closing the pipe.
+    char byte = 0;
+    if (write(ready[1], &byte, 1) != 1 || read(release[0], &byte, 1) != 0)
+      _exit(1);
+    g_watched_variable = 1;
+    _exit(7);
+  }
+  ChildGuard cleanup(pid);
+  close(ready[1]);
+  close(release[0]);
+  char byte;
+  ASSERT_EQ(1, read(ready[0], &byte, 1));
+  close(ready[0]);
+
+  const uint64_t address = reinterpret_cast<uint64_t>(&g_watched_variable);
+  // Slot 0 is enabled for writes of 8 bytes.
+  constexpr uint64_t kWriteWatch8 = 0x1 | (0b01 << 16) | (0b10 << 18);
+  {
+    ProcessObserver observer(loop);
+    observer.process = std::make_unique<LinuxProcessHandle>(fxl::MakeRefCounted<LinuxTask>(pid));
+    ASSERT_TRUE(observer.process->Attach(&observer, {}).ok());
+    auto threads = observer.process->GetChildThreads();
+    ASSERT_EQ(1u, threads.size());
+    ThreadHandle& thread = *threads[0];
+    {
+      auto token = thread.Suspend();
+      ASSERT_TRUE(thread.WaitForSuspension(TickTimePoint::max()));
+
+      std::map<debug::RegisterID, uint64_t> regs = ReadDebugRegisterValues(thread);
+      EXPECT_EQ(6u, regs.size());
+      EXPECT_EQ(0u, regs[debug::RegisterID::kX64_dr0]);
+      EXPECT_EQ(0u, regs[debug::RegisterID::kX64_dr7]);
+
+      auto written =
+          thread.WriteRegisters({debug::RegisterValue(debug::RegisterID::kX64_dr0, address),
+                                 debug::RegisterValue(debug::RegisterID::kX64_dr7, kWriteWatch8)});
+      ASSERT_TRUE(written.ok()) << written.err().message();
+      EXPECT_EQ(6u, written.value().size());
+      regs = ReadDebugRegisterValues(thread);
+      EXPECT_EQ(address, regs[debug::RegisterID::kX64_dr0]);
+      EXPECT_EQ(kWriteWatch8, regs[debug::RegisterID::kX64_dr7]);
+
+      // An enabled slot can move to another aligned address.
+      written =
+          thread.WriteRegisters({debug::RegisterValue(debug::RegisterID::kX64_dr0, address + 8)});
+      ASSERT_TRUE(written.ok()) << written.err().message();
+      EXPECT_EQ(address + 8, ReadDebugRegisterValues(thread)[debug::RegisterID::kX64_dr0]);
+      ASSERT_TRUE(
+          thread.WriteRegisters({debug::RegisterValue(debug::RegisterID::kX64_dr0, address)}).ok());
+
+      // Invalid writes fail and don't change the registers.
+      auto failed =
+          thread.WriteRegisters({debug::RegisterValue(debug::RegisterID::kX64_dr0, address + 1)});
+      ASSERT_TRUE(failed.has_error());
+      EXPECT_EQ(fxl::StringPrintf("DR0 = 0x%" PRIx64
+                                  " isn't aligned to the 8-byte length that DR7 sets for slot 0.",
+                                  address + 1),
+                failed.err().message());
+
+      constexpr uint64_t kKernelAddress = 0xffff800000000000;
+      failed = thread.WriteRegisters(
+          {debug::RegisterValue(debug::RegisterID::kX64_dr1, kKernelAddress)});
+      ASSERT_TRUE(failed.has_error());
+      EXPECT_EQ("DR1 = 0xffff800000000000 isn't a user-space address.", failed.err().message());
+
+      failed =
+          thread.WriteRegisters({debug::RegisterValue(debug::RegisterID::kX64_dr2, uint32_t{0})});
+      ASSERT_TRUE(failed.has_error());
+      EXPECT_EQ("The dr2 register needs an 8-byte value.", failed.err().message());
+
+      regs = ReadDebugRegisterValues(thread);
+      EXPECT_EQ(address, regs[debug::RegisterID::kX64_dr0]);
+      EXPECT_EQ(0u, regs[debug::RegisterID::kX64_dr1]);
+      EXPECT_EQ(kWriteWatch8, regs[debug::RegisterID::kX64_dr7]);
+    }
+
+    // The detach restores the debug registers. Otherwise, the write of the child stops it with
+    // SIGTRAP and no tracer.
+    ASSERT_TRUE(observer.process->Detach().ok());
+  }
+  close(release[1]);
+  int status;
+  ASSERT_EQ(pid, waitpid(pid, &status, 0));
+  ASSERT_TRUE(WIFEXITED(status)) << "The child stopped with signal " << WTERMSIG(status);
   EXPECT_EQ(7, WEXITSTATUS(status));
 }
 

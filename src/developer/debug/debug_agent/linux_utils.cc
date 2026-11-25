@@ -10,19 +10,25 @@
 #include "src/developer/debug/debug_agent/linux_utils.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <signal.h>
+#include <sys/ptrace.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/uio.h>
+#include <sys/user.h>
 #include <unistd.h>
 #include <zircon/errors.h>
 
 #include <charconv>
+#include <cstddef>
 #include <cstring>
 #include <optional>
 #include <sstream>
 #include <string_view>
+#include <utility>
 
 #include <fbl/unique_fd.h>
 #include <linux/auxvec.h>
@@ -97,6 +103,162 @@ zx_status_t WriteGeneralRegisters(int pid, const user_regs_struct& regs) {
   if (ptrace(PTRACE_SETREGSET, pid, NT_PRSTATUS, &vec) == -1)
     return ZX_ERR_INTERNAL;
   return ZX_OK;
+}
+
+namespace {
+
+constexpr int kDebugStatusIndex = 6;
+constexpr int kDebugControlIndex = 7;
+
+// Returns the offset of the debug register with the given index in the ptrace user area.
+uintptr_t DebugRegisterOffset(int index) {
+  return offsetof(struct user, u_debugreg) + index * sizeof(unsigned long);
+}
+
+// Returns the length in bytes for a DR7 length code.
+int DebugLengthFromCode(uint64_t code) {
+  switch (code) {
+    case 0:
+      return 1;
+    case 1:
+      return 2;
+    case 2:
+      return 8;
+    default:
+      return 4;
+  }
+}
+
+// Writes one debug register. The error explains what the kernel didn't accept.
+debug::Status WriteDebugRegister(int pid, int index, uint64_t value) {
+  if (ptrace(PTRACE_POKEUSER, pid, DebugRegisterOffset(index), value) != -1)
+    return debug::Status();
+
+  int error = errno;
+  if (index == kDebugControlIndex && error == ENOSPC) {
+    return debug::ErrnoStatus(
+        error, fxl::StringPrintf("No hardware debug slot is free for DR7 = 0x%" PRIx64
+                                 ". Another tool, such as perf, can use the slots.",
+                                 value));
+  }
+  if (index == kDebugControlIndex) {
+    return debug::ErrnoStatus(
+        error, fxl::StringPrintf("The kernel didn't accept DR7 = 0x%" PRIx64 ": %s.", value,
+                                 strerror(error)));
+  }
+  if (index < 4 && error == EINVAL) {
+    return debug::ErrnoStatus(
+        error, fxl::StringPrintf("DR%d = 0x%" PRIx64 " isn't a user-space address.", index, value));
+  }
+  return debug::ErrnoStatus(error,
+                            fxl::StringPrintf("Can't write DR%d: %s.", index, strerror(error)));
+}
+
+// Writes the registers that differ between |from| and |to|. DR7 is cleared before the addresses
+// change and set last, so the kernel doesn't check a new address against an old slot setting.
+debug::Status ApplyDebugRegisters(int pid, const zx_thread_state_debug_regs_t& from,
+                                  const zx_thread_state_debug_regs_t& to) {
+  bool addresses_change = false;
+  for (int i = 0; i < 4; i++)
+    addresses_change |= from.dr[i] != to.dr[i];
+
+  uint64_t dr7 = from.dr7;
+  if (dr7 != 0 && (addresses_change || to.dr7 != dr7)) {
+    if (debug::Status status = WriteDebugRegister(pid, kDebugControlIndex, 0); status.has_error())
+      return status;
+    dr7 = 0;
+  }
+  for (int i = 0; i < 4; i++) {
+    if (from.dr[i] != to.dr[i]) {
+      if (debug::Status status = WriteDebugRegister(pid, i, to.dr[i]); status.has_error())
+        return status;
+    }
+  }
+  if (from.dr6 != to.dr6) {
+    if (debug::Status status = WriteDebugRegister(pid, kDebugStatusIndex, to.dr6);
+        status.has_error())
+      return status;
+  }
+  if (to.dr7 != dr7)
+    return WriteDebugRegister(pid, kDebugControlIndex, to.dr7);
+  return debug::Status();
+}
+
+}  // namespace
+
+std::optional<zx_thread_state_debug_regs_t> ReadDebugRegisters(int pid) {
+  zx_thread_state_debug_regs_t regs{};
+  const std::pair<int, uint64_t*> fields[] = {{0, &regs.dr[0]},
+                                              {1, &regs.dr[1]},
+                                              {2, &regs.dr[2]},
+                                              {3, &regs.dr[3]},
+                                              {kDebugStatusIndex, &regs.dr6},
+                                              {kDebugControlIndex, &regs.dr7}};
+  for (auto [index, field] : fields) {
+    // PTRACE_PEEKUSER returns the value, so only errno shows a failure.
+    errno = 0;
+    long value = ptrace(PTRACE_PEEKUSER, pid, DebugRegisterOffset(index), nullptr);
+    if (errno != 0)
+      return std::nullopt;
+    *field = static_cast<uint64_t>(value);
+  }
+  return regs;
+}
+
+debug::Status ValidateDebugRegisters(const zx_thread_state_debug_regs_t& regs) {
+  for (int slot = 0; slot < 4; slot++) {
+    bool enabled = (regs.dr7 >> (slot * 2)) & 0b11;
+    if (!enabled)
+      continue;
+
+    uint64_t access = (regs.dr7 >> (16 + slot * 4)) & 0b11;
+    int length = DebugLengthFromCode((regs.dr7 >> (18 + slot * 4)) & 0b11);
+    if (access == 0b10) {
+      return debug::Status(
+          fxl::StringPrintf("DR7 enables slot %d for I/O access, which isn't supported.", slot));
+    }
+    if (access == 0b00 && length != 1) {
+      return debug::Status(fxl::StringPrintf(
+          "DR7 enables slot %d for execution with a length of %d bytes. An execution slot needs a "
+          "length of 1 byte.",
+          slot, length));
+    }
+    if (regs.dr[slot] % length != 0) {
+      return debug::Status(fxl::StringPrintf(
+          "DR%d = 0x%" PRIx64 " isn't aligned to the %d-byte length that DR7 sets for slot %d.",
+          slot, regs.dr[slot], length, slot));
+    }
+  }
+  return debug::Status();
+}
+
+debug_ipc::ExceptionType DecodeHardwareTrap(const zx_thread_state_debug_regs_t& regs) {
+  for (int slot = 0; slot < 4; slot++) {
+    if ((regs.dr6 >> slot) & 1) {
+      uint64_t access = (regs.dr7 >> (16 + slot * 4)) & 0b11;
+      return access == 0 ? debug_ipc::ExceptionType::kHardwareBreakpoint
+                         : debug_ipc::ExceptionType::kWatchpoint;
+    }
+  }
+  // The kernel reports TRAP_HWBKPT only for a slot hit, so this is unexpected.
+  return debug_ipc::ExceptionType::kHardwareBreakpoint;
+}
+
+debug::Status WriteDebugRegisters(int pid, const zx_thread_state_debug_regs_t& current,
+                                  const zx_thread_state_debug_regs_t& updated) {
+  if (debug::Status status = ValidateDebugRegisters(updated); status.has_error())
+    return status;
+
+  debug::Status status = ApplyDebugRegisters(pid, current, updated);
+  if (status.ok())
+    return status;
+
+  // A failed write can leave some registers changed, so restore the previous values.
+  if (std::optional<zx_thread_state_debug_regs_t> partial = ReadDebugRegisters(pid)) {
+    if (ApplyDebugRegisters(pid, *partial, current).has_error())
+      LOGS(Warn) << "Could not restore the debug registers of task " << pid << ".";
+  }
+  return status;
 }
 
 debug::Result<std::vector<MapEntry>, debug::Status> ParseMapsChecked(const std::string& contents) {

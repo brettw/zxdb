@@ -9,6 +9,7 @@
 #include <lib/syslog/cpp/macros.h>
 #include <zircon/syscalls/exception.h>
 
+#include <algorithm>
 #include <utility>
 
 #include "src/developer/debug/debug_agent/align.h"
@@ -252,6 +253,12 @@ void DebuggedProcess::OnResume(const debug_ipc::ResumeRequest& request) {
         thread->ClientResume(request);
       }
     }
+
+    // The client continues a process by resuming each thread separately. When no thread is still
+    // suspended, new threads must run too.
+    if (std::ranges::none_of(threads_,
+                             [](const auto& pair) { return pair.second->is_client_suspended(); }))
+      suspend_new_threads_ = false;
   }
 }
 
@@ -650,6 +657,15 @@ void DebuggedProcess::OnThreadStarting(std::unique_ptr<ExceptionHandle> exceptio
   new_thread->SendThreadNotification();
 
   threads_.emplace(thread_id, std::move(new_thread));
+
+#if defined(__linux__)
+  // A new Linux thread starts without debug registers. Update() installs the hardware breakpoints
+  // and watchpoints that apply to all threads.
+  for (auto& [address, breakpoint] : hardware_breakpoints_)
+    breakpoint->Update();
+  for (auto& [range, watchpoint] : watchpoints_)
+    watchpoint->Update();
+#endif
 }
 
 void DebuggedProcess::OnThreadExiting(std::unique_ptr<ExceptionHandle> exception) {

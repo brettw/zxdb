@@ -1,0 +1,30 @@
+[zxdb] set console-mode = shell
+[zxdb] status
+Connected to
+[zxdb] break WatchStart
+Created Breakpoint
+[zxdb] run @CMAKE_CURRENT_BINARY_DIR@/linux_lifecycle_inferior hardware
+on bp 1
+[zxdb] watch watched
+Created Breakpoint 2
+[zxdb] break --type execute HardwareTarget
+Created Breakpoint 3
+[zxdb] continue
+on bp 2
+[zxdb] print watched
+1
+[zxdb] continue
+on bp 3
+[zxdb] continue
+on bp 3
+[zxdb] continue
+thread 2 on bp 2
+[zxdb] print watched
+2
+[zxdb] print -x dr7
+0x900005
+[zxdb] continue
+on bp 3
+[zxdb] continue
+Process 1 exited with code 7.
+[zxdb] quit

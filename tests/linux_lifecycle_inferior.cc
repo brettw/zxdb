@@ -20,6 +20,12 @@ extern "C" __attribute__((naked, noinline)) void StepFirst() { asm volatile("nop
 
 unsigned long step_first_address = reinterpret_cast<unsigned long>(&StepFirst);
 
+// Hardware breakpoint and watchpoint targets.
+volatile unsigned long watched = 0;
+volatile unsigned long watched_slots[5] = {};
+extern "C" __attribute__((noinline)) void WatchStart() { asm volatile(""); }
+extern "C" __attribute__((noinline)) void HardwareTarget() { asm volatile(""); }
+
 extern "C" __attribute__((naked, noinline)) void FaultFirst() { asm volatile("ud2\nret"); }
 
 int main(int argc, char** argv) {
@@ -139,6 +145,20 @@ int main(int argc, char** argv) {
       execl(argv[0], argv[0], "threads", nullptr);
       _exit(6);
     }).join();
+  } else if (!strcmp(argv[1], "hardware")) {
+    WatchStart();
+    watched = 1;
+    HardwareTarget();
+    HardwareTarget();
+    std::thread([] { watched = 2; }).join();
+    execl(argv[0], argv[0], "hardware-exec", nullptr);
+    return 6;
+  } else if (!strcmp(argv[1], "hardware-exec")) {
+    HardwareTarget();
+  } else if (!strcmp(argv[1], "hardware-slots")) {
+    WatchStart();
+    for (auto& slot : watched_slots)
+      slot = 1;
   } else if (!strcmp(argv[1], "output")) {
     write(STDOUT_FILENO, "final stdout sentinel\n", 22);
     write(STDERR_FILENO, "final stderr sentinel\n", 22);

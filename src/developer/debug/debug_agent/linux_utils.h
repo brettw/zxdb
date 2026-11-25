@@ -8,6 +8,7 @@
 #include <elf.h>
 #include <sys/ptrace.h>
 #include <sys/user.h>
+#include <zircon/syscalls/debug.h>
 #include <zircon/types.h>
 
 #include <filesystem>
@@ -29,6 +30,24 @@ fbl::unique_fd OpenPidfd(int pid);
 
 std::optional<user_regs_struct> ReadGeneralRegisters(int pid);
 zx_status_t WriteGeneralRegisters(int pid, const user_regs_struct& regs);
+
+// Reads the x86-64 debug registers DR0 to DR3, DR6, and DR7 of a stopped, traced task.
+std::optional<zx_thread_state_debug_regs_t> ReadDebugRegisters(int pid);
+
+// Checks the slots that DR7 enables. Each one must use a supported access type and length, and its
+// address must be aligned to the length. The error names the first invalid slot.
+debug::Status ValidateDebugRegisters(const zx_thread_state_debug_regs_t& regs);
+
+// Returns the type of a hardware trap (TRAP_HWBKPT) from the debug registers after the trap. DR6
+// gives the slot that triggered, and its DR7 access type tells a watchpoint from an execution
+// breakpoint.
+debug_ipc::ExceptionType DecodeHardwareTrap(const zx_thread_state_debug_regs_t& regs);
+
+// Changes the debug registers of a stopped, traced task from |current| to |updated|. The kernel
+// checks an address against the DR7 settings of its slot, so the function writes the registers in
+// an order that the kernel accepts. On failure, it restores |current| and returns the error.
+debug::Status WriteDebugRegisters(int pid, const zx_thread_state_debug_regs_t& current,
+                                  const zx_thread_state_debug_regs_t& updated);
 
 // Represents one line in the Linux /proc/.../maps file.
 struct MapEntry {

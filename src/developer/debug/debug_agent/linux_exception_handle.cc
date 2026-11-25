@@ -24,6 +24,11 @@ LinuxExceptionHandle::LinuxExceptionHandle(fxl::RefPtr<LinuxTask> task, const si
   if (info.si_signo == SIGTRAP && (info.si_code == TRAP_BRKPT || info.si_code == TRAP_TRACE) &&
       !task_->single_step())
     type_ = debug_ipc::ExceptionType::kGeneral;
+  // A hardware trap can be an execution breakpoint or a watchpoint.
+  if (info.si_signo == SIGTRAP && info.si_code == TRAP_HWBKPT) {
+    if (std::optional<zx_thread_state_debug_regs_t> regs = task_->ReadDebugRegisters())
+      type_ = linux::DecodeHardwareTrap(*regs);
+  }
   if (info.si_signo == SIGTRAP && info.si_code == TRAP_BRKPT) {
     if (auto regs = linux::ReadGeneralRegisters(task_->pid()); regs && regs->rip) {
       errno = 0;

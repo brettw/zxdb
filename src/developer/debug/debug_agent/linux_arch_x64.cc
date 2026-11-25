@@ -6,25 +6,16 @@
 #include <zircon/status.h>
 
 #include "src/developer/debug/debug_agent/arch.h"
+#include "src/developer/debug/debug_agent/linux_arch.h"
 #include "src/developer/debug/shared/arch_x86.h"
-
-// Our sysroot does not define this constant.
-#ifndef TRAP_HWBKPT
-#define TRAP_HWBKPT 4
-#endif
 
 namespace debug_agent {
 namespace arch {
 
-uint32_t GetHardwareBreakpointCount() {
-  // Hardware register installation is not implemented on Linux.
-  return 0;
-}
+// x86-64 has four debug address registers. Execution breakpoints and watchpoints share them.
+uint32_t GetHardwareBreakpointCount() { return 4; }
 
-uint32_t GetHardwareWatchpointCount() {
-  // Hardware register installation is not implemented on Linux.
-  return 0;
-}
+uint32_t GetHardwareWatchpointCount() { return 4; }
 
 void SaveGeneralRegs(const PlatformGeneralRegisters& input,
                      std::vector<debug::RegisterValue>& out) {

@@ -181,7 +181,7 @@ std::vector<debug::RegisterValue> ZirconThreadHandle::ReadRegisters(
   return regs;
 }
 
-std::vector<debug::RegisterValue> ZirconThreadHandle::WriteRegisters(
+debug::Result<std::vector<debug::RegisterValue>, debug::Status> ZirconThreadHandle::WriteRegisters(
     const std::vector<debug::RegisterValue>& regs) {
   std::vector<debug::RegisterValue> written;
 

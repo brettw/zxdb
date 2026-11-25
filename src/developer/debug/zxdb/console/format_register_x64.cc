@@ -297,7 +297,7 @@ void FormatDr7(const debug::RegisterValue& dr7, TextForegroundColor color,
   // First row decoded values.
   first_row.emplace_back(
       fxl::StringPrintf(
-          "L0=%d, G0=%d, L1=%d, G1=%d, L2=%d, G2=%d, L3=%d, G4=%d, LE=%d, "
+          "L0=%d, G0=%d, L1=%d, G1=%d, L2=%d, G2=%d, L3=%d, G3=%d, LE=%d, "
           "GE=%d, "
           "GD=%d",
           X86_FLAG_VALUE(value, DR7L0), X86_FLAG_VALUE(value, DR7G0), X86_FLAG_VALUE(value, DR7L1),

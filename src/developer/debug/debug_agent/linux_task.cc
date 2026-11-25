@@ -130,6 +130,22 @@ debug::Status LinuxTask::Attach() {
   return debug::Status();
 }
 
+std::optional<zx_thread_state_debug_regs_t> LinuxTask::ReadDebugRegisters() const {
+  return linux::ReadDebugRegisters(pid_);
+}
+
+debug::Status LinuxTask::WriteDebugRegisters(const zx_thread_state_debug_regs_t& regs) {
+  std::optional<zx_thread_state_debug_regs_t> current = linux::ReadDebugRegisters(pid_);
+  if (!current) {
+    return debug::ErrnoStatus(
+        errno, fxl::StringPrintf("Can't read the debug registers of thread %d: %s.", pid_,
+                                 strerror(errno)));
+  }
+  if (!original_debug_regs_)
+    original_debug_regs_ = *current;
+  return linux::WriteDebugRegisters(pid_, *current, regs);
+}
+
 debug::Status LinuxTask::Detach() {
   if (!is_attached_)
     return debug::Status();
@@ -138,6 +154,22 @@ debug::Status LinuxTask::Detach() {
   if (!is_suspended()) {
     DecrementSuspendCount();
     return last_error_;
+  }
+
+  // An enabled debug register would stop the task with SIGTRAP after the detach, so the task stays
+  // attached when the restoration fails.
+  if (original_debug_regs_) {
+    if (std::optional<zx_thread_state_debug_regs_t> current = linux::ReadDebugRegisters(pid_)) {
+      debug::Status status = linux::WriteDebugRegisters(pid_, *current, *original_debug_regs_);
+      if (status.has_error()) {
+        last_error_ = debug::Status(
+            fxl::StringPrintf("Could not restore the debug registers of thread %d: %s", pid_,
+                              status.message().c_str()));
+        DecrementSuspendCount();
+        return last_error_;
+      }
+    }
+    original_debug_regs_.reset();
   }
   if (ptrace(PTRACE_DETACH, pid_, nullptr,
              reinterpret_cast<void*>(static_cast<intptr_t>(resume_signal_))) == -1) {
@@ -230,6 +262,7 @@ void LinuxTask::OnExec(const SignalRecord& record) {
         << "Exec did not provide native x86-64 registers; detach to release the unsupported image.";
   exiting_ = false;
   single_step_ = false;
+  original_debug_regs_.reset();  // The exec cleared the debug registers.
   stop_pending_ = false;
   group_stopped_ = false;
   resume_signal_ = 0;
@@ -301,6 +334,7 @@ void LinuxTask::CollectChild(int pid, int status) {
   if (WIFSTOPPED(status)) {
     child->stopped_ = true;
     ++child->suspend_count_;
+    child->ClearInheritedDebugRegisters();
     auto exception =
         std::make_unique<LinuxExceptionHandle>(debug_ipc::ExceptionType::kThreadStarting, child);
     auto child_status = linux::GetStatus(pid);
@@ -326,6 +360,19 @@ void LinuxTask::CollectChild(int pid, int status) {
     child->terminated_ = true;
   }
   DecrementSuspendCount();
+}
+
+void LinuxTask::ClearInheritedDebugRegisters() {
+  std::optional<zx_thread_state_debug_regs_t> current = linux::ReadDebugRegisters(pid_);
+  if (!current || current->dr7 == 0)
+    return;
+  zx_thread_state_debug_regs_t cleared = *current;
+  cleared.dr7 = 0;
+  if (debug::Status status = linux::WriteDebugRegisters(pid_, *current, cleared);
+      status.has_error()) {
+    LOGS(Warn) << "Could not clear the inherited debug registers of task " << pid_ << ": "
+               << status.message();
+  }
 }
 
 void LinuxTask::OnVFork(const SignalRecord& record) { OnChild(record); }

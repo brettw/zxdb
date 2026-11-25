@@ -388,7 +388,7 @@ TEST(FormatRegisters, DebugRegisters_x86) {
       "  dr2      0x123456789ab \n"
       "  dr3  0x123456789abcdef \n"
       "  dr6         0x0000affa B0=0, B1=1, B2=0, B3=1, BD=1, BS=0, BT=1\n"
-      "  dr7         0xaaaa26aa L0=0, G0=1, L1=0, G1=1, L2=0, G2=1, L3=0, G4=1, LE=0, GE=1, GD=1\n"
+      "  dr7         0xaaaa26aa L0=0, G0=1, L1=0, G1=1, L2=0, G2=1, L3=0, G3=1, LE=0, GE=1, GD=1\n"
       "                         R/W0=2, LEN0=2, R/W1=2, LEN1=2, R/W2=2, LEN2=2, R/W3=2, LEN3=2\n"
       "\n",
       FormatRegisters(options, registers).AsString());

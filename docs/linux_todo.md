@@ -45,51 +45,19 @@ IDs are stable references; do not renumber the remaining items after removal.
 ### Registers, breakpoints, and expression evaluation
 
 All four register categories have frontend/protocol support. Linux currently
-returns values only for `kGeneral`; unsupported categories return an empty list.
-Its write implementation accepts only the general-register whitelist.
+returns values only for `kGeneral` and `kDebug`; unsupported categories return
+an empty list. Its write implementation accepts the general-register whitelist
+and DR0–DR3, DR6, and DR7.
 
 | Category | Fuchsia x86-64 implementation | Native Linux gap |
 | --- | --- | --- |
 | General | Integer registers, RIP, RFLAGS, FSBASE/GSBASE reads | Linux already reads and writes these 20 registers; no blanket general-register TODO |
 | Floating point | FCW, FSW, FTW, FOP, FIP, FDP, ST0–ST7 | All missing (L07) |
 | Vector | MXCSR and ZMM0–ZMM31 representation, with frontend XMM/YMM aliases | All missing (L08); actual availability must follow CPU/kernel support |
-| Debug | DR0–DR3, DR6, DR7 | Read/write and backend access missing (L04) |
+| Debug | DR0–DR3, DR6, DR7 | Linux already reads and writes these registers and uses them for hardware breakpoints and watchpoints; no debug-register TODO |
 
 Sources: [Linux thread registers][linux-thread], [Linux general-register mapping][linux-x64],
 [Fuchsia x86-64 register reads/writes][zircon-x64].
-
-- [ ] **L04 · P1 · Implement debug-register access.**
-  Linux `GetDebugRegisters()` returns `nullopt`, `SetDebugRegisters()` returns
-  false, and register requests do not expose the debug category. Fuchsia supports
-  both backend access and user-visible reads/writes. This blocks `regs --debug`
-  and the register substrate needed by L05–L06.
-  **Complete when:** DR0–DR3/DR6/DR7 can be read and valid changes written on a
-  stopped thread; invalid writes fail clearly; thread-local state and debugger
-  breakpoint ownership remain consistent. Test reads, writes, and cleanup.
-  Sources: [Linux thread handle][linux-thread], [Zircon thread handle][zircon-thread],
-  [Fuchsia register conversion][zircon-x64].
-
-- [ ] **L05 · P1 · Implement hardware execution breakpoints.**
-  Linux installation/removal return false and the advertised hardware breakpoint
-  count is zero. Fuchsia installs execution addresses in hardware debug slots.
-  **Complete when:** hardware execution breakpoints hit on the intended threads,
-  step over correctly, survive supported thread/process lifecycle changes, and
-  are removed on deletion/detach. Test new threads, slot exhaustion, coexistence
-  with watchpoints, and exec. Report usable capacity only after implementation.
-  Depends on L04. Sources: [Linux thread handle][linux-thread],
-  [Linux slot counts][linux-x64], [Zircon thread handle][zircon-thread].
-
-- [ ] **L06 · P1 · Implement hardware data watchpoints.**
-  Linux `InstallWatchpoint()`/`UninstallWatchpoint()` are stubs and the reported
-  watchpoint count is zero. Fuchsia supports write and read/write watchpoints.
-  Linux also maps every `TRAP_HWBKPT` to an execution breakpoint; a complete port
-  must identify the triggering slot and distinguish data hits. Console watches,
-  data-triggered tracepoints, and DAP data breakpoints depend on this support.
-  **Complete when:** supported sizes, alignments, access modes, and thread scopes
-  work; invalid ranges and exhausted shared slots report errors; hit attribution,
-  stepping, new threads, exec, deletion, and detach are tested. Depends on L04.
-  Sources: [Linux watchpoint stubs][linux-thread], [trap decoding][linux-x64],
-  [Fuchsia installation][zircon-thread].
 
 - [ ] **L07 · P1 · Read and write x87 floating-point state.**
   Implement the floating-point category shown above, including the control/status
@@ -189,6 +157,29 @@ Sources: [Linux thread registers][linux-thread], [Linux general-register mapping
   Existing frontend remote-connect code need not be replaced.
   Sources: [agent CMake target][agent-cmake], [local agent startup][local-agent],
   [session lifecycle][session], [Fuchsia agent entry point][agent-main].
+
+- [ ] **L29 · P2 · Remove the stray breakpoint after a local startup action.**
+  `zxdb --local -e "break main"` creates Breakpoint 1, but a later `bp` also
+  lists a pending Breakpoint 2 with `<no location>`. Later breakpoints get
+  higher numbers. The likely cause is the asynchronous agent-status sync of the
+  local session. Its reply can arrive after the startup action has given the
+  breakpoint to the agent, and `Session::SyncAgentStatus()` then creates a
+  second client breakpoint from the reply.
+  **Complete when:** breakpoints from startup actions, config files, and
+  scripts appear once, with consecutive numbers, in local and remote sessions.
+  Sources: [session lifecycle][session], [local agent startup][local-agent].
+
+- [ ] **L30 · P2 · Make local debugging the default.**
+  The standalone debugger debugs programs on this machine only with `--local`.
+  Without it, zxdb starts disconnected, as the Fuchsia frontend does. A local
+  session also can't change to a remote agent, because
+  `Session::Disconnect()` rejects the local connection (see L14).
+  **Complete when:** zxdb without connection options starts the local agent.
+  `--connect`, `--unix-connect`, and `--core` start without it. From a local
+  session, `connect`, `disconnect`, and `opendump` work and leave a clear
+  state. Help, README, and DAP documentation give the new default. Test the
+  startup modes and the change from local to remote.
+  Sources: [local agent startup][local-agent], [session lifecycle][session].
 
 - [ ] **L15 · P2 · Support native Linux AArch64.**
   Fuchsia has an ARM64 backend. Standalone CMake rejects non-x86-64 hosts, and
@@ -348,18 +339,18 @@ implementation exists; it is not a claim that every edge case was tested here.
 
 | IPC requests | Audit result |
 | --- | --- |
-| `Hello`, `Status` | Implemented; hardware capabilities and limbo differ (L05–L06, L20) |
+| `Hello`, `Status` | Implemented; limbo differs (L20) |
 | `Kill`, `Attach`, `Detach`, `Pause`, `Resume` | Direct PID/task control implemented; minimal attach and exception strategy differ (L17–L18) |
 | `ProcessTree`, `UpdateFilter` | Flat process listing exists; filters miss unrelated new processes (L03, L19) |
 | `Threads`, `ThreadStatus` | Implemented thread/stack paths; wait detail differs (L24) |
 | `ReadMemory`, `WriteMemory` | Implemented, including software-breakpoint-aware handling |
-| `AddOrChangeBreakpoint`, `RemoveBreakpoint` | Software implementation exists; hardware execution/data gaps (L04–L06) |
-| `SysInfo` | Version placeholder and zero hardware slot counts (L05–L06, L16) |
+| `AddOrChangeBreakpoint`, `RemoveBreakpoint` | Software, hardware execution, and watchpoint implementations exist |
+| `SysInfo` | Version placeholder (L16) |
 | `AddressSpace`, `Modules` | Implemented mappings and ELF module discovery; extra accounting/shared-space gaps (L22–L23) |
 | `LoadInfoHandleTable` | No Linux implementation (L21) |
 | `UpdateGlobalSettings` | Shared handler exists; second-chance semantics differ (L18) |
 | `SaveMinidump` | Missing Linux writer (L11) |
-| `ReadRegisters`, `WriteRegisters` | General only (L04, L07–L09) |
+| `ReadRegisters`, `WriteRegisters` | General and debug only (L07–L09) |
 | `RunBinary` | Native Linux launcher exists |
 | `RunComponent`, `RunTest` | Fuchsia services (L25) |
 

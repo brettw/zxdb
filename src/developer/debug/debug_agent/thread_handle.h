@@ -15,6 +15,8 @@
 #include "src/developer/debug/debug_agent/watchpoint_info.h"
 #include "src/developer/debug/ipc/records.h"
 #include "src/developer/debug/shared/register_info.h"
+#include "src/developer/debug/shared/result.h"
+#include "src/developer/debug/shared/status.h"
 #include "src/lib/fxl/memory/ref_counted.h"
 
 #if defined(__Fuchsia__)
@@ -105,8 +107,8 @@ class ThreadHandle {
 
   // Returns the new value of the registers that may have changed which is the result of reading
   // them after the write. This helps the client stay in sync. The may include other registers that
-  // weren't updated.
-  virtual std::vector<debug::RegisterValue> WriteRegisters(
+  // weren't updated. Returns an error that explains a write that the platform can't make.
+  virtual debug::Result<std::vector<debug::RegisterValue>, debug::Status> WriteRegisters(
       const std::vector<debug::RegisterValue>& regs) = 0;
 
   // Hardware breakpoints --------------------------------------------------------------------------

@@ -129,7 +129,7 @@ std::vector<debug::RegisterValue> MockThreadHandle::ReadRegisters(
   return result;
 }
 
-std::vector<debug::RegisterValue> MockThreadHandle::WriteRegisters(
+debug::Result<std::vector<debug::RegisterValue>, debug::Status> MockThreadHandle::WriteRegisters(
     const std::vector<debug::RegisterValue>& regs) {
   // Return the same values as the input to pretend the write succeeded.
   return regs;
