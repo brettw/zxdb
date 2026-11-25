@@ -52,6 +52,7 @@ class DebugAgent : public RemoteAPI, public Breakpoint::ProcessDelegate, public 
   // RemoteAPI).
   explicit DebugAgent(std::unique_ptr<SystemInterface> system_interface,
                       DebugAgentOptions options = {});
+  ~DebugAgent() override;
 
   fxl::WeakPtr<DebugAgent> GetWeakPtr();
 

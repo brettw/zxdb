@@ -98,6 +98,13 @@ DebugAgent::DebugAgent(std::unique_ptr<SystemInterface> system_interface, DebugA
 #endif  // __Fuchsia__
 }
 
+DebugAgent::~DebugAgent() {
+  // The handshake makes this agent the log backend. Logs from the destruction of the members go to
+  // the syslog instead.
+  if (debug::LogBackend::Get() == this)
+    debug::LogBackend::Unset();
+}
+
 fxl::WeakPtr<DebugAgent> DebugAgent::GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
 
 void DebugAgent::TakeAndConnectRemoteAPIStream(std::unique_ptr<debug::BufferedStream> stream) {

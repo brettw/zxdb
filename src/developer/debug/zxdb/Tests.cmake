@@ -465,6 +465,7 @@ add_executable(debug_agent_tests
   ../debug_agent/align_unittest.cc
   ../debug_agent/aligned_chunk_unittest.cc
   ../debug_agent/debug_agent_filter_unittest.cc
+  ../debug_agent/debug_agent_log_unittest.cc
   ../debug_agent/elf_utils_unittest.cc
   ../debug_agent/filter_unittest.cc
   ../debug_agent/linux_utils_unittest.cc

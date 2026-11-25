@@ -76,6 +76,9 @@ class LogBackend {
   static void Set(LogBackend* backend, bool enable_syslog);
   static void Unset();
 
+  // Returns the current backend, or null when there is none.
+  static LogBackend* Get();
+
   virtual ~LogBackend();
 };
 
