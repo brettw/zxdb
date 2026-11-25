@@ -23,6 +23,18 @@ std::string_view ExtractLastFileComponent(std::string_view path);
 // have relative components ("/foo/../bar" is still absolute).
 bool IsPathAbsolute(const std::string& path);
 
+// Returns true if the path is absolute in the POSIX style or in the Windows style. Debug info can
+// come from any OS, so its paths can have either style.
+//
+// A POSIX absolute path starts with a slash. A path that starts with exactly two slashes and then a
+// name ("//server") has a network root name. Such a path is absolute only if a slash follows the
+// name.
+//
+// A Windows absolute path has a root name and then a separator, which is a slash or a backslash.
+// The root name is a drive letter ("C:"), a network name ("\\server"), or any other first
+// component that ends with a colon.
+bool IsPathAbsoluteInAnyStyle(std::string_view path);
+
 // Returns true if the given |path| matches the |right_query| from the right-hand side. This
 // requires both that the |path| end in |right_query| (case-sensitive) AND the start of the match is
 // either the beginning of |path| or immediately following a path separator.
@@ -36,6 +48,20 @@ bool PathEndsWith(std::string_view path, std::string_view right_query);
 // Concatenates the two path components with a slash in between them. "first" can end with a slash
 // or not. The second component shouldn't begin with a slash.
 std::string CatPathComponents(const std::string& first, const std::string& second);
+
+// Appends a file name to a directory, with a slash between them. Unlike CatPathComponents(), the
+// name can start with a slash, and the result keeps an empty name. Only a slash is a separator.
+//
+// - An empty directory gives the name.
+// - If the directory ends with a slash, the leading slashes of the name are removed.
+// - Otherwise, a slash is added if the name doesn't start with one.
+//
+// Examples:
+//   dir = "src", name = "a.c" => "src/a.c"
+//   dir = "src", name = "" => "src/"
+//   dir = "src/", name = "//a.c" => "src/a.c"
+//   dir = "src", name = "//a.c" => "src//a.c"
+std::string AppendPathName(std::string_view dir, std::string_view name);
 
 // Resolves "." and ".." components to the extent possible. If there are leading "..", then they
 // will be preserved.

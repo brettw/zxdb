@@ -64,8 +64,10 @@ Key decisions:
     example an offset past the end of a string section) is different from an
     empty name.
 - **File names match `getFileNameByIndex()`.** `ResolveLineFileName()` uses
-  the same directory choice and the same `llvm::sys::path` functions. An
-  absolute name in POSIX or Windows style ignores the directory.
+  the same directory choice. `IsPathAbsoluteInAnyStyle()` and
+  `AppendPathName()` give the same results as the `llvm::sys::path` functions
+  that LLVM uses. An absolute name in POSIX or Windows style ignores the
+  directory.
 - **Immutable program and explicit results.** `DecodeRows()` and `ScanFiles()`
   are const operations. Each returns its output, decode status, and files
   added by `DW_LNE_define_file`. The header does not change. Call

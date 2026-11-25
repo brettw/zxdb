@@ -230,6 +230,7 @@ add_executable(zxdb_tests
   symbols/index_node_unittest.cc
   symbols/index_test_support.cc
   symbols/index_unittest.cc
+  symbols/line_file_table_unittest.cc
   symbols/line_program_binary_unittest.cc
   symbols/line_program_test_util.cc
   symbols/line_program_unittest.cc

@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -20,6 +21,45 @@
 
 namespace zxdb {
 
+namespace {
+
+bool IsWindowsSeparator(char c) { return c == '/' || c == '\\'; }
+
+bool IsPosixPathAbsolute(std::string_view path) {
+  if (path.empty() || path[0] != '/')
+    return false;
+
+  // A network root name needs a root directory after it.
+  if (path.size() > 2 && path[1] == '/' && path[2] != '/')
+    return path.find('/', 2) != std::string_view::npos;
+  return true;
+}
+
+bool IsWindowsPathAbsolute(std::string_view path) {
+  if (path.empty())
+    return false;
+
+  bool has_drive =
+      path.size() >= 2 && std::isalpha(static_cast<unsigned char>(path[0])) && path[1] == ':';
+  if (has_drive)
+    return path.size() > 2 && IsWindowsSeparator(path[2]);
+
+  // A network root name needs a root directory after it. Both separators must be the same.
+  if (path.size() > 2 && IsWindowsSeparator(path[0]) && path[1] == path[0] &&
+      !IsWindowsSeparator(path[2]))
+    return path.find_first_of("/\\", 2) != std::string_view::npos;
+
+  // A root directory without a root name isn't absolute.
+  if (IsWindowsSeparator(path[0]))
+    return false;
+
+  // A first component that ends with a colon is also a root name.
+  size_t first_end = path.find_first_of("/\\");
+  return first_end != std::string_view::npos && path[first_end - 1] == ':';
+}
+
+}  // namespace
+
 std::string_view ExtractLastFileComponent(std::string_view path) {
   size_t last_slash = path.rfind('/');
   if (last_slash == std::string::npos)
@@ -28,6 +68,10 @@ std::string_view ExtractLastFileComponent(std::string_view path) {
 }
 
 bool IsPathAbsolute(const std::string& path) { return !path.empty() && path[0] == '/'; }
+
+bool IsPathAbsoluteInAnyStyle(std::string_view path) {
+  return IsPosixPathAbsolute(path) || IsWindowsPathAbsolute(path);
+}
 
 bool PathEndsWith(std::string_view path, std::string_view right_query) {
   return debug::StringEndsWith(path, right_query) &&
@@ -49,6 +93,23 @@ std::string CatPathComponents(const std::string& first, const std::string& secon
   return result;
 }
 
+std::string AppendPathName(std::string_view dir, std::string_view name) {
+  std::string result(dir);
+  if (dir.empty())
+    return result.append(name);
+
+  if (dir.back() == '/') {
+    size_t name_begin = name.find_first_not_of('/');
+    if (name_begin != std::string_view::npos)
+      result.append(name.substr(name_begin));
+    return result;
+  }
+
+  if (name.empty() || name[0] != '/')
+    result.push_back('/');
+  return result.append(name);
+}
+
 std::string NormalizePath(std::string_view path) {
   return std::filesystem::path(path).lexically_normal();
 }
@@ -59,7 +120,11 @@ std::time_t GetFileModificationTime(const std::string& path) {
   if (ec)
     return 0;
 
-  return std::chrono::system_clock::to_time_t(std::chrono::file_clock::to_sys(last_write));
+  // The duration of the file clock differs between standard libraries, so cast it to the duration
+  // of the system clock.
+  return std::chrono::system_clock::to_time_t(
+      std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+          std::chrono::file_clock::to_sys(last_write)));
 }
 
 bool PathStartsWith(const std::filesystem::path& path, const std::filesystem::path& base) {

@@ -4,8 +4,6 @@
 
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 
-#include "llvm/ADT/SmallString.h"
-#include "llvm/Support/Path.h"
 #include "src/developer/debug/zxdb/common/file_util.h"
 
 namespace zxdb {
@@ -16,18 +14,14 @@ std::optional<std::string> ResolveLineFileName(LineFileEntries files, uint64_t f
     return std::nullopt;
   std::string_view name = *entry->name;
 
-  // Debug info can come from any OS, so an absolute name is absolute for either path style. LLVM
-  // returns such names without a directory.
-  if (llvm::sys::path::is_absolute(name, llvm::sys::path::Style::posix) ||
-      llvm::sys::path::is_absolute(name, llvm::sys::path::Style::windows))
+  // Debug info can come from any OS, so a name that is absolute in either path style doesn't use
+  // its directory.
+  if (IsPathAbsoluteInAnyStyle(name))
     return NormalizePath(name);
 
   // Relative names don't include the compilation directory, so the directory can be empty.
-  // llvm::sys::path::append() skips empty components.
   std::string_view dir = files.GetFileDirectory(*entry).value_or(std::string_view());
-  llvm::SmallString<128> path;
-  llvm::sys::path::append(path, dir, name);
-  return NormalizePath(path.str());
+  return NormalizePath(AppendPathName(dir, name));
 }
 
 // static

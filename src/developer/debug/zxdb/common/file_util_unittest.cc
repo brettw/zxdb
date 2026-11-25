@@ -27,6 +27,46 @@ TEST(FileUtil, IsPathAbsolute) {
   EXPECT_FALSE(IsPathAbsolute("./foo/bar"));
 }
 
+TEST(FileUtil, IsPathAbsoluteInAnyStyle) {
+  EXPECT_FALSE(IsPathAbsoluteInAnyStyle(""));
+  EXPECT_FALSE(IsPathAbsoluteInAnyStyle("a"));
+  EXPECT_FALSE(IsPathAbsoluteInAnyStyle("a/b"));
+  EXPECT_FALSE(IsPathAbsoluteInAnyStyle("./a"));
+
+  // POSIX root directories.
+  EXPECT_TRUE(IsPathAbsoluteInAnyStyle("/"));
+  EXPECT_TRUE(IsPathAbsoluteInAnyStyle("/a"));
+  EXPECT_TRUE(IsPathAbsoluteInAnyStyle("/\\server"));  // A backslash isn't a POSIX separator.
+  EXPECT_TRUE(IsPathAbsoluteInAnyStyle("//"));
+  EXPECT_TRUE(IsPathAbsoluteInAnyStyle("///a"));
+
+  // Network root names need a root directory.
+  EXPECT_FALSE(IsPathAbsoluteInAnyStyle("//server"));
+  EXPECT_TRUE(IsPathAbsoluteInAnyStyle("//server/"));
+  EXPECT_TRUE(IsPathAbsoluteInAnyStyle("//server/share"));
+  EXPECT_FALSE(IsPathAbsoluteInAnyStyle("\\\\server"));
+  EXPECT_TRUE(IsPathAbsoluteInAnyStyle("\\\\server\\share"));
+  EXPECT_TRUE(IsPathAbsoluteInAnyStyle("\\\\server/share"));
+  EXPECT_FALSE(IsPathAbsoluteInAnyStyle("\\/server\\share"));  // The separators are different.
+
+  // A Windows root directory needs a root name.
+  EXPECT_FALSE(IsPathAbsoluteInAnyStyle("\\a"));
+
+  // Drive letters need a separator.
+  EXPECT_FALSE(IsPathAbsoluteInAnyStyle("C:"));
+  EXPECT_FALSE(IsPathAbsoluteInAnyStyle("C:a"));
+  EXPECT_TRUE(IsPathAbsoluteInAnyStyle("C:\\a"));
+  EXPECT_TRUE(IsPathAbsoluteInAnyStyle("C:/a"));
+  EXPECT_TRUE(IsPathAbsoluteInAnyStyle("c:\\"));
+  EXPECT_FALSE(IsPathAbsoluteInAnyStyle("a:b:\\x"));  // "a:" is the root name.
+
+  // Other first components that end with a colon are root names.
+  EXPECT_TRUE(IsPathAbsoluteInAnyStyle("1:\\a"));
+  EXPECT_TRUE(IsPathAbsoluteInAnyStyle("ab:\\x"));
+  EXPECT_TRUE(IsPathAbsoluteInAnyStyle("http://x"));
+  EXPECT_FALSE(IsPathAbsoluteInAnyStyle("ab:"));
+}
+
 TEST(FileUtil, PathEndsWith) {
   EXPECT_TRUE(PathEndsWith("", ""));
   EXPECT_TRUE(PathEndsWith("foo.cc", "foo.cc"));
@@ -46,6 +86,30 @@ TEST(FileUtil, CatPathComponents) {
   EXPECT_EQ("a/b", CatPathComponents("a", "b"));
   EXPECT_EQ("a/b", CatPathComponents("a/", "b"));
   EXPECT_EQ("a/b/", CatPathComponents("a/", "b/"));
+}
+
+TEST(FileUtil, AppendPathName) {
+  EXPECT_EQ("", AppendPathName("", ""));
+  EXPECT_EQ("a.c", AppendPathName("", "a.c"));
+  EXPECT_EQ("/a", AppendPathName("", "/a"));
+
+  EXPECT_EQ("src/a.c", AppendPathName("src", "a.c"));
+  EXPECT_EQ("src/a.c", AppendPathName("src/", "a.c"));
+  EXPECT_EQ("src//a", AppendPathName("src//", "a"));
+
+  // An empty name adds only the missing separator.
+  EXPECT_EQ("src/", AppendPathName("src", ""));
+  EXPECT_EQ("src/", AppendPathName("src/", ""));
+
+  // A name that starts with a slash.
+  EXPECT_EQ("src/a", AppendPathName("src", "/a"));
+  EXPECT_EQ("src//x", AppendPathName("src", "//x"));
+  EXPECT_EQ("src/x", AppendPathName("src/", "//x"));
+  EXPECT_EQ("src/", AppendPathName("src/", "///"));
+
+  // A backslash isn't a separator.
+  EXPECT_EQ("C:\\src\\/a.c", AppendPathName("C:\\src\\", "a.c"));
+  EXPECT_EQ("src/\\\\x", AppendPathName("src", "\\\\x"));
 }
 
 TEST(FileUtil, NormalizePath) {
