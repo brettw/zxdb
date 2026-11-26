@@ -27,7 +27,6 @@ enum class Encoding {
   kBytes,
   kBlockFixed,
   kBlockUleb,
-  kFlag,
   kFlagPresent,
   kImplicitConst,
   kAddressIndexOffset,
@@ -105,7 +104,7 @@ std::optional<FormEncoding> GetFormEncoding(uint64_t form, uint16_t version, boo
     case DwarfForm::kExprloc:
       return FormEncoding{Encoding::kBlockUleb, Class::kExprloc};
     case DwarfForm::kFlag:
-      return FormEncoding{Encoding::kFlag, Class::kFlag, 1};
+      return FormEncoding{Encoding::kFixed, Class::kFlag, 1};
     case DwarfForm::kFlagPresent:
       return FormEncoding{Encoding::kFlagPresent, Class::kFlag};
     case DwarfForm::kString:
@@ -181,10 +180,8 @@ FormValue::Value ReadPayload(const FormEncoding& encoding, const FormParams& par
       return reader.Bytes(reader.Fixed(encoding.width));
     case Encoding::kBlockUleb:
       return reader.Bytes(reader.Uleb());
-    case Encoding::kFlag:
-      return reader.Fixed(encoding.width) != 0;
     case Encoding::kFlagPresent:
-      return true;
+      return uint64_t{1};
     case Encoding::kImplicitConst:
       return implicit_const;
     case Encoding::kAddressIndexOffset:
@@ -195,6 +192,76 @@ FormValue::Value ReadPayload(const FormEncoding& encoding, const FormParams& par
 }
 
 }  // namespace
+
+std::optional<int128_t> FormValue::AsInteger(bool data_is_signed) const {
+  if (form_class != Class::kConstant || form == DwarfForm::kData16)
+    return std::nullopt;
+  if (form == DwarfForm::kSdata || form == DwarfForm::kImplicitConst)
+    return std::get<int64_t>(value);
+
+  uint64_t bits = std::get<uint64_t>(value);
+  if (data_is_signed) {
+    switch (form) {
+      case DwarfForm::kData1:
+        return static_cast<int8_t>(bits);
+      case DwarfForm::kData2:
+        return static_cast<int16_t>(bits);
+      case DwarfForm::kData4:
+        return static_cast<int32_t>(bits);
+      case DwarfForm::kData8:
+        return static_cast<int64_t>(bits);
+      default:
+        break;
+    }
+  }
+  return bits;
+}
+
+std::optional<uint64_t> FormValue::AsUnsignedConstant() const {
+  if (form_class != Class::kConstant && form_class != Class::kFlag)
+    return std::nullopt;
+  switch (form) {
+    case DwarfForm::kSdata:
+      return std::nullopt;
+    case DwarfForm::kImplicitConst:
+      return static_cast<uint64_t>(std::get<int64_t>(value));
+    case DwarfForm::kData16:
+      return std::get<std::span<const uint8_t>>(value).size();
+    default:
+      return std::get<uint64_t>(value);
+  }
+}
+
+std::optional<uint64_t> FormValue::AsSectionOffset(uint16_t version) const {
+  switch (form) {
+    case DwarfForm::kSecOffset:
+    case DwarfForm::kStrp:
+    case DwarfForm::kLineStrp:
+    case DwarfForm::kLoclistx:
+    case DwarfForm::kRnglistx:
+      return std::get<uint64_t>(value);
+    case DwarfForm::kData4:
+    case DwarfForm::kData8:
+      if (version <= 3)
+        return std::get<uint64_t>(value);
+      break;
+    default:
+      break;
+  }
+  return std::nullopt;
+}
+
+std::optional<uint64_t> FormValue::AsReference() const {
+  if (form_class == Class::kReference)
+    return std::get<uint64_t>(value);
+  return std::nullopt;
+}
+
+std::optional<std::span<const uint8_t>> FormValue::AsBlock() const {
+  if (const auto* bytes = std::get_if<std::span<const uint8_t>>(&value))
+    return *bytes;
+  return std::nullopt;
+}
 
 bool SkipForm(uint64_t form, const FormParams& params, DataReader& reader) {
   const auto resolved = ResolveForm(form, reader);
@@ -207,7 +274,6 @@ bool SkipForm(uint64_t form, const FormParams& params, DataReader& reader) {
   switch (encoding->encoding) {
     case Encoding::kFixed:
     case Encoding::kBytes:
-    case Encoding::kFlag:
       reader.Skip(encoding->width);
       break;
     case Encoding::kFlagPresent:

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -83,7 +84,7 @@ void AddFormCases(std::vector<FormCase>& cases, const FormParams& params, Endian
   fixed(DwarfForm::kRef4, Class::kReference, 0x91234567, 4);
   fixed(DwarfForm::kRef8, Class::kReference, 0x9123456789abcdef, 8);
   add(DwarfForm::kString, Class::kString, std::string_view("foo"), {'f', 'o', 'o', 0});
-  add(DwarfForm::kFlag, Class::kFlag, true, {0x01});
+  add(DwarfForm::kFlag, Class::kFlag, uint64_t{1}, {0x01});
   add(DwarfForm::kUdata, Class::kConstant, uint64_t{12857}, {0xb9, 0x64});
   add(DwarfForm::kSdata, Class::kConstant, int64_t{-129}, {0xff, 0x7e});
   add(DwarfForm::kRefUdata, Class::kReference, uint64_t{129}, {0x81, 0x01});
@@ -102,7 +103,7 @@ void AddFormCases(std::vector<FormCase>& cases, const FormParams& params, Endian
     fixed(DwarfForm::kRefSig8, Class::kReference, 0xa123456789abcdef, 8);
     add(DwarfForm::kExprloc, Class::kExprloc, std::span<const uint8_t>(kBlock),
         {3, 0x12, 0x80, 0x00});
-    add(DwarfForm::kFlagPresent, Class::kFlag, true, {});
+    add(DwarfForm::kFlagPresent, Class::kFlag, uint64_t{1}, {});
   }
 
   if (params.version >= 5) {
@@ -269,7 +270,7 @@ TEST(FormValue, IndirectDepthLimit) {
       reader.Seek(0);
       auto read = ReadForm(Attribute(DwarfForm::kIndirect), kDwarf5, reader);
       ASSERT_TRUE(read.ok()) << read.err_or_empty().msg();
-      ExpectForm({DwarfForm::kFlagPresent, Class::kFlag, true}, read.value());
+      ExpectForm({DwarfForm::kFlagPresent, Class::kFlag, uint64_t{1}}, read.value());
       EXPECT_EQ(bytes.size(), reader.offset());
     }
   }
@@ -308,7 +309,7 @@ TEST(FormValue, ZeroValues) {
            FormValue{DwarfForm::kSecOffset, Class::kSectionOffset, uint64_t{0}},
            FormValue{DwarfForm::kStrx, Class::kString, uint64_t{0}},
            FormValue{DwarfForm::kAddr, Class::kAddress, uint64_t{0}},
-           FormValue{DwarfForm::kFlag, Class::kFlag, false},
+           FormValue{DwarfForm::kFlag, Class::kFlag, uint64_t{0}},
            FormValue{DwarfForm::kString, Class::kString, std::string_view{}},
            FormValue{DwarfForm::kBlock, Class::kBlock, std::span<const uint8_t>{}},
        }) {
@@ -333,6 +334,96 @@ TEST(FormValue, KnownEncodingInOlderVersion) {
   reader.Seek(0);
   EXPECT_TRUE(SkipForm(DwarfForm::kStrx3, kDwarf4, reader));
   EXPECT_EQ(3u, reader.offset());
+}
+
+TEST(FormValue, AsInteger) {
+  const FormValue data1{DwarfForm::kData1, Class::kConstant, uint64_t{0x80}};
+  const FormValue data2{DwarfForm::kData2, Class::kConstant, uint64_t{0x8000}};
+  const FormValue data4{DwarfForm::kData4, Class::kConstant, uint64_t{0x80000000}};
+  const FormValue data8{DwarfForm::kData8, Class::kConstant, uint64_t{0x8000000000000000}};
+  EXPECT_EQ(int128_t{-128}, data1.AsInteger(true));
+  EXPECT_EQ(int128_t{-32768}, data2.AsInteger(true));
+  EXPECT_EQ(int128_t{-2147483648}, data4.AsInteger(true));
+  EXPECT_EQ(int128_t{std::numeric_limits<int64_t>::min()}, data8.AsInteger(true));
+  EXPECT_EQ(int128_t{0x8000000000000000}, data8.AsInteger(false));
+
+  const FormValue sdata{DwarfForm::kSdata, Class::kConstant, int64_t{-5}};
+  const FormValue implicit{DwarfForm::kImplicitConst, Class::kConstant, int64_t{-7}};
+  const FormValue udata{DwarfForm::kUdata, Class::kConstant, std::numeric_limits<uint64_t>::max()};
+  EXPECT_EQ(int128_t{-5}, sdata.AsInteger(false));
+  EXPECT_EQ(int128_t{-7}, implicit.AsInteger(false));
+  EXPECT_EQ(int128_t{std::numeric_limits<uint64_t>::max()}, udata.AsInteger(true));
+
+  const FormValue flag{DwarfForm::kFlag, Class::kFlag, uint64_t{1}};
+  const FormValue data16{DwarfForm::kData16, Class::kConstant, std::span(kData16)};
+  EXPECT_FALSE(flag.AsInteger(false));
+  EXPECT_FALSE(data16.AsInteger(true));
+}
+
+TEST(FormValue, AsUnsignedConstant) {
+  const FormValue implicit{DwarfForm::kImplicitConst, Class::kConstant, int64_t{-1}};
+  const FormValue sdata{DwarfForm::kSdata, Class::kConstant, int64_t{1}};
+  const FormValue data16{DwarfForm::kData16, Class::kConstant, std::span(kData16)};
+  const FormValue ref{DwarfForm::kRef1, Class::kReference, uint64_t{1}};
+  EXPECT_EQ(std::numeric_limits<uint64_t>::max(), implicit.AsUnsignedConstant());
+  EXPECT_FALSE(sdata.AsUnsignedConstant());
+  EXPECT_EQ(16u, data16.AsUnsignedConstant());
+  EXPECT_FALSE(ref.AsUnsignedConstant());
+
+  constexpr uint8_t kFlag[] = {0x80};
+  DataReader reader(kFlag, Endian::kLittle);
+  auto flag = ReadForm(Attribute(DwarfForm::kFlag), kDwarf5, reader);
+  ASSERT_TRUE(flag.ok()) << flag.err_or_empty().msg();
+  EXPECT_EQ(0x80u, flag.value().AsUnsignedConstant());
+}
+
+TEST(FormValue, AsSectionOffset) {
+  for (DwarfForm form : {DwarfForm::kData4, DwarfForm::kData8}) {
+    SCOPED_TRACE(DwarfFormToString(form));
+    FormValue value{form, Class::kConstant, uint64_t{0}};
+    EXPECT_EQ(0u, value.AsSectionOffset(2));
+    EXPECT_EQ(0u, value.AsSectionOffset(3));
+    EXPECT_FALSE(value.AsSectionOffset(4));
+    EXPECT_FALSE(value.AsSectionOffset(5));
+  }
+
+  const FormValue sec_offset{DwarfForm::kSecOffset, Class::kSectionOffset, uint64_t{0}};
+  const FormValue strp{DwarfForm::kStrp, Class::kString, uint64_t{1}};
+  const FormValue line_strp{DwarfForm::kLineStrp, Class::kString, uint64_t{2}};
+  const FormValue loclistx{DwarfForm::kLoclistx, Class::kLoclist, uint64_t{3}};
+  const FormValue rnglistx{DwarfForm::kRnglistx, Class::kRnglist, uint64_t{4}};
+  const FormValue strx{DwarfForm::kStrx, Class::kString, uint64_t{5}};
+  EXPECT_EQ(0u, sec_offset.AsSectionOffset(5));
+  EXPECT_EQ(1u, strp.AsSectionOffset(5));
+  EXPECT_EQ(2u, line_strp.AsSectionOffset(5));
+  EXPECT_EQ(3u, loclistx.AsSectionOffset(5));
+  EXPECT_EQ(4u, rnglistx.AsSectionOffset(5));
+  EXPECT_FALSE(strx.AsSectionOffset(5));
+}
+
+TEST(FormValue, AsReference) {
+  const FormValue relative{DwarfForm::kRef4, Class::kReference, uint64_t{1}};
+  const FormValue absolute{DwarfForm::kRefAddr, Class::kReference, uint64_t{0}};
+  const FormValue signature{DwarfForm::kRefSig8, Class::kReference, uint64_t{0}};
+  const FormValue offset{DwarfForm::kSecOffset, Class::kSectionOffset, uint64_t{1}};
+  EXPECT_EQ(1u, relative.AsReference());
+  EXPECT_EQ(0u, absolute.AsReference());
+  EXPECT_EQ(0u, signature.AsReference());
+  EXPECT_FALSE(offset.AsReference());
+}
+
+TEST(FormValue, AsBlock) {
+  const FormValue block{DwarfForm::kBlock1, Class::kBlock, std::span(kBlock)};
+  const FormValue exprloc{DwarfForm::kExprloc, Class::kExprloc, std::span<const uint8_t>{}};
+  const FormValue data16{DwarfForm::kData16, Class::kConstant, std::span(kData16)};
+  const FormValue data8{DwarfForm::kData8, Class::kConstant, uint64_t{0}};
+  ASSERT_TRUE(block.AsBlock());
+  EXPECT_TRUE(std::ranges::equal(kBlock, *block.AsBlock()));
+  ASSERT_TRUE(exprloc.AsBlock());
+  EXPECT_TRUE(exprloc.AsBlock()->empty());
+  ASSERT_TRUE(data16.AsBlock());
+  EXPECT_TRUE(std::ranges::equal(kData16, *data16.AsBlock()));
+  EXPECT_FALSE(data8.AsBlock());
 }
 
 TEST(FormValue, InvalidPayloadsAndWidths) {

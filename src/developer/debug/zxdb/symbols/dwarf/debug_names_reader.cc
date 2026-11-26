@@ -108,7 +108,7 @@ std::optional<uint64_t> UnsignedValue(const FormValue& value) {
 std::optional<uint64_t> UnitIndex(const FormValue& value) {
   // LLVM 19's getAsUnsignedConstant accepts flags for unit indexes and excludes DW_FORM_sdata.
   if (value.form_class == FormValue::Class::kFlag)
-    return std::get<bool>(value.value);
+    return std::get<uint64_t>(value.value) != 0;
   if (value.form_class == FormValue::Class::kConstant && value.form != DwarfForm::kSdata)
     return UnsignedValue(value);
   return std::nullopt;

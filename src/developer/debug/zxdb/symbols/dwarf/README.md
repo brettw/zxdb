@@ -20,7 +20,8 @@
   parameters. It returns a `FormValue` or an error. `FormValue` stores the
   final form, its class, and its raw value. The form identifies the reference
   base, target string section, or index table. The caller resolves these values
-  with unit and section data.
+  with unit and section data. `DwarfDieDecoder::AttributeValue` also uses
+  `FormValue` to expose values extracted by LLVM.
 - `SkipForm()` moves past one value and returns false if the form or its
   bytes are invalid. It needs the form code and the unit's form parameters.
 - `UnitContext::Parse()` reads the first DIE of a unit. The context gives the

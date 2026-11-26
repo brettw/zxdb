@@ -106,7 +106,7 @@ llvm::DWARFContext* DwarfSymbolFactory::GetLLVMContext() const {
 }
 
 VariableLocation DwarfSymbolFactory::DecodeLocation(const llvm::DWARFDie& die,
-                                                    const llvm::DWARFFormValue& form) const {
+                                                    const FormValue& form) const {
   llvm::DWARFUnit* unit = die.getDwarfUnit();
   UncachedLazySymbol source = MakeUncachedLazy(die);
   if (binary_)
@@ -166,7 +166,7 @@ DwarfSymbolFactory::ArraySubrange DwarfSymbolFactory::ReadDynamicBound(
   DynamicArrayBound bound;
   bound.kind = kind;
   bound.lower_bound = lower_bound;
-  if (static_cast<DwarfForm>(value->form.getForm()) == DwarfForm::kExprloc) {
+  if (value->form.form == DwarfForm::kExprloc) {
     // The expression computes the value (DWARF 5 section 2.19). Its source is the subrange DIE.
     std::optional<std::vector<uint8_t>> block = range_decoder.GetBlock(attribute);
     if (!block)
@@ -659,7 +659,7 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeCollection(const llvm::DWARFDie& d
 
   std::optional<uint64_t> signature;
   if (const DwarfDieDecoder::AttributeValue* value = decoder.GetValue(DwarfAttr::kSignature))
-    signature = value->form.getAsReferenceUVal();
+    signature = value->form.AsReference();
 
   std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
   std::optional<uint64_t> byte_size = decoder.GetUnsignedConstant(DwarfAttr::kByteSize);
@@ -830,7 +830,7 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeEnum(const llvm::DWARFDie& die) co
 
   std::optional<uint64_t> signature;
   if (const DwarfDieDecoder::AttributeValue* value = main_decoder.GetValue(DwarfAttr::kSignature))
-    signature = value->form.getAsReferenceUVal();
+    signature = value->form.AsReference();
   if (signature) {
     if (binary_) {
       if (DwarfDieRef sig_ref = binary_->GetDieRefForSignature(*signature)) {
@@ -880,7 +880,7 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeEnum(const llvm::DWARFDie& die) co
     if (!type_is_signed) {
       if (const DwarfDieDecoder::AttributeValue* value =
               enumerator_decoder.GetValue(DwarfAttr::kConstValue)) {
-        if (static_cast<DwarfForm>(value->form.getForm()) == DwarfForm::kSdata)
+        if (value->form.form == DwarfForm::kSdata)
           is_signed = true;
       }
     }
@@ -970,14 +970,14 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeInheritedFrom(const llvm::DWARFDie
   std::vector<uint8_t> offset_expression;
   if (const DwarfDieDecoder::AttributeValue* value =
           decoder.GetValue(DwarfAttr::kDataMemberLocation)) {
-    DwarfForm form = static_cast<DwarfForm>(value->form.getForm());
+    DwarfForm form = value->form.form;
     if (form == DwarfForm::kExprloc) {
       // Location expression.
-      llvm::ArrayRef<uint8_t> block = *value->form.getAsBlock();
+      auto block = *value->form.AsBlock();
       offset_expression.assign(block.data(), block.data() + block.size());
     } else if (DwarfFormIsConstant(form)) {
       // Constant value.
-      member_offset = value->form.getAsUnsignedConstant();
+      member_offset = value->form.AsUnsignedConstant();
     }
     // Otherwise leave both empty.
   }
@@ -1258,12 +1258,12 @@ AddressRanges DwarfSymbolFactory::GetCodeRanges(const DwarfDieDecoder& decoder) 
   const auto* value = decoder.GetValue(DwarfAttr::kRanges);
   if (!value)
     return {};
-  auto form = static_cast<DwarfForm>(value->form.getForm());
+  auto form = value->form.form;
   if (form != DwarfForm::kRnglistx && form != DwarfForm::kSecOffset && form != DwarfForm::kData4 &&
       form != DwarfForm::kData8) {
     return {};
   }
-  auto offset = value->form.getAsSectionOffset();
+  auto offset = value->form.AsSectionOffset(value->unit->getVersion());
   if (!offset)
     return {};
 
@@ -1293,7 +1293,7 @@ std::optional<AddressRanges> DwarfSymbolFactory::GetLowHighEncodedCodeRange(
   const DwarfDieDecoder::AttributeValue* low = decoder.GetValue(DwarfAttr::kLowPc);
   const DwarfDieDecoder::AttributeValue* high = decoder.GetValue(DwarfAttr::kHighPc);
   // Note that the "high pc" has an offset form so don't check that it has an FC_Address form yet.
-  if (!low || !high || !DwarfFormIsAddress(static_cast<DwarfForm>(low->form.getForm()))) {
+  if (!low || !high || !DwarfFormIsAddress(low->form.form)) {
     return std::nullopt;
   }
 

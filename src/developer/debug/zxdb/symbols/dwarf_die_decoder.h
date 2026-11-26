@@ -12,9 +12,9 @@
 #include <vector>
 
 #include "llvm/DebugInfo/DWARF/DWARFDie.h"
-#include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
 #include "src/developer/debug/zxdb/common/int128_t.h"
 #include "src/developer/debug/zxdb/symbols/const_value.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/form_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
 #include "src/lib/fxl/macros.h"
 
@@ -76,13 +76,12 @@ class DwarfDieDecoder {
   // unit than the decoded DIE. Use it, for example, as the source of a DWARF expression, so the
   // expression uses the address table of the right unit.
   //
-  // The unit is the unit of that DIE. llvm::DWARFFormValue::getUnit() exists but this won't always
-  // be set (the implicit constant path doesn't set it). As a result, if the unit is needed, always
-  // use the unit here rather than getUnit().
+  // The unit is the unit of that DIE. Use it to resolve the form's offsets and indices.
+  // The form can borrow bytes from the binary.
   struct AttributeValue {
     llvm::DWARFUnit* unit = nullptr;  // Null when the attribute isn't present.
     llvm::DWARFDie die;
-    llvm::DWARFFormValue form;
+    FormValue form{};
   };
 
   // DW_AT_high_pc is special: If it is of class "address", it's an address, and if it's of class
@@ -149,7 +148,7 @@ class DwarfDieDecoder {
   // which linkers write for removed code.
   std::optional<uint64_t> GetAddress(DwarfAttr attribute) const;
 
-  // Calls llvm::DWARFFormValue::getAsCString().
+  // Resolves a string form. The returned string borrows bytes from the binary.
   std::optional<const char*> GetCString(DwarfAttr attribute) const;
 
   // Returns the value of an integer constant. The value is exact: a signed value is negative when
@@ -220,7 +219,7 @@ class DwarfDieDecoder {
   bool DecodeLinkedDies(const llvm::DWARFDie& first, const Links& first_links);
 
   // Decodes a cross-DIE reference. Return value will be !isValid() on failure.
-  llvm::DWARFDie DecodeReference(llvm::DWARFUnit* unit, const llvm::DWARFFormValue& form) const;
+  llvm::DWARFDie DecodeReference(llvm::DWARFUnit* unit, const FormValue& form) const;
 
   // Decodes a value of the address class. See GetAddress().
   std::optional<uint64_t> DecodeAddress(const AttributeValue& value) const;

@@ -10,6 +10,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/common/checked_math.h"
 #include "src/developer/debug/zxdb/common/data_extractor.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/form_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 
@@ -80,8 +81,8 @@ bool AppendCountedLocationDescriptionEntry(TargetPointer begin, TargetPointer en
 // Decodes a reference to a DWARF 4 location list. This is a DW_FORM_sec_offset type into the
 // .debug_loc section that contains the location list.
 VariableLocation DecodeDwarf4LocationReference(const DwarfSections& sections,
-                                               const UnitContext& context,
-                                               const llvm::DWARFFormValue& form,
+                                               const UnitContext& context, uint16_t version,
+                                               const FormValue& form,
                                                const UncachedLazySymbol& source) {
   if (sections.loc.empty()) {
     // LLVM dumpLocation() falls back on the DWARFObject::getLocDWOSection() call in this case. We
@@ -89,7 +90,7 @@ VariableLocation DecodeDwarf4LocationReference(const DwarfSections& sections,
     return VariableLocation();
   }
 
-  auto offset_or = form.getAsSectionOffset();
+  auto offset_or = form.AsSectionOffset(version);
   if (!offset_or)
     return VariableLocation();
 
@@ -102,16 +103,15 @@ VariableLocation DecodeDwarf4LocationReference(const DwarfSections& sections,
 
 // Decodes a DWARF 5 location which is a DW_FORM_loclistx-type offset into the .debug_loclist
 // section that contains the location list.
-VariableLocation DecodeDwarf5LocationReference(const UnitContext& context,
-                                               const llvm::DWARFFormValue& form,
+VariableLocation DecodeDwarf5LocationReference(const UnitContext& context, const FormValue& form,
                                                const UncachedLazySymbol& source) {
   std::optional<uint64_t> list_offset;
-  switch (static_cast<DwarfForm>(form.getForm())) {
+  switch (form.form) {
     case DwarfForm::kSecOffset:
-      list_offset = form.getAsSectionOffset();
+      list_offset = std::get<uint64_t>(form.value);
       break;
     case DwarfForm::kLoclistx:
-      list_offset = context.ReadLoclistOffset(form.getRawUValue());
+      list_offset = context.ReadLoclistOffset(std::get<uint64_t>(form.value));
       break;
     default:
       return VariableLocation();
@@ -131,15 +131,14 @@ VariableLocation DecodeDwarf5LocationReference(const UnitContext& context,
 }  // namespace
 
 VariableLocation DecodeVariableLocation(const DwarfSections& sections, llvm::DWARFUnit* unit,
-                                        const llvm::DWARFFormValue& form,
-                                        const UncachedLazySymbol& source,
+                                        const FormValue& form, const UncachedLazySymbol& source,
                                         llvm::DWARFUnit* skeleton) {
-  DwarfForm form_code = static_cast<DwarfForm>(form.getForm());
-  if (DwarfFormIsBlock(form_code) || form_code == DwarfForm::kExprloc) {
+  if (form.form_class == FormValue::Class::kBlock ||
+      form.form_class == FormValue::Class::kExprloc) {
     // These forms are both a block of data which is interpreted as a DWARF expression. There is no
     // validity range for this so assume the expression is valid as long as the variable is in
     // scope.
-    llvm::ArrayRef<uint8_t> block = *form.getAsBlock();
+    auto block = *form.AsBlock();
     return VariableLocation(DwarfExpr(std::vector<uint8_t>(block.begin(), block.end()), source));
   }
 
@@ -147,7 +146,8 @@ VariableLocation DecodeVariableLocation(const DwarfSections& sections, llvm::DWA
   if (!context)
     return VariableLocation();
   if (unit->getVersion() < 5)
-    return DecodeDwarf4LocationReference(sections, context.value(), form, source);
+    return DecodeDwarf4LocationReference(sections, context.value(), unit->getVersion(), form,
+                                         source);
   return DecodeDwarf5LocationReference(context.value(), form, source);
 }
 

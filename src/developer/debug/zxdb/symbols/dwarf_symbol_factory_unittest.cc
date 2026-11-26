@@ -681,7 +681,7 @@ TEST(DwarfSymbolFactory, TypeUnitReference) {
     ASSERT_TRUE(decoder.Decode(var_die));
     const DwarfDieDecoder::AttributeValue* type_value = decoder.GetValue(DwarfAttr::kType);
     ASSERT_TRUE(type_value);
-    ASSERT_EQ(DwarfForm::kRefSig8, static_cast<DwarfForm>(type_value->form.getForm()));
+    ASSERT_EQ(DwarfForm::kRefSig8, type_value->form.form);
 
     ResolveOptions options;
     options.symbolize = true;
@@ -733,7 +733,7 @@ TEST(DwarfSymbolFactory, AddrxOffsetLowPc) {
     ASSERT_TRUE(decoder.Decode(die));
     const DwarfDieDecoder::AttributeValue* low_pc = decoder.GetValue(DwarfAttr::kLowPc);
     ASSERT_TRUE(low_pc);
-    if (static_cast<DwarfForm>(low_pc->form.getForm()) == DwarfForm::kLlvmAddrxOffset)
+    if (low_pc->form.form == DwarfForm::kLlvmAddrxOffset)
       addrx_offset_count++;
 
     // The function starts at the address of its ELF symbol.

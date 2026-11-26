@@ -19,7 +19,6 @@
 namespace llvm {
 class DWARFContext;
 class DWARFDie;
-class DWARFFormValue;
 class DWARFUnit;
 }  // namespace llvm
 
@@ -29,6 +28,7 @@ class BaseType;
 class CompileUnit;
 class DwarfBinaryImpl;
 class DwarfDieDecoder;
+struct FormValue;
 class LazySymbol;
 class ModuleSymbols;
 class UncachedLazySymbol;
@@ -78,8 +78,7 @@ class DwarfSymbolFactory : public SymbolFactory {
 
   llvm::DWARFContext* GetLLVMContext() const;
 
-  VariableLocation DecodeLocation(const llvm::DWARFDie& die,
-                                  const llvm::DWARFFormValue& form) const;
+  VariableLocation DecodeLocation(const llvm::DWARFDie& die, const FormValue& form) const;
 
   // Returns the unit that contains the DIE, or null.
   llvm::DWARFUnit* GetUnitForDieRef(DwarfDieRef die_ref) const;

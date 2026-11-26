@@ -14,7 +14,6 @@
 #include "llvm/DebugInfo/DWARF/DWARFTypeUnit.h"
 #include "src/developer/debug/zxdb/common/checked_math.h"
 #include "src/developer/debug/zxdb/common/endian.h"
-#include "src/developer/debug/zxdb/common/file_util.h"
 #include "src/developer/debug/zxdb/symbols/const_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
@@ -30,6 +29,55 @@ namespace {
 // references directly or indirectly. Valid symbols rarely need more than 3. The limit also bounds
 // the work for corrupt symbols.
 constexpr size_t kMaxDiesToVisit = 9;
+
+// Convert LLVM's extracted value to preserve relocations and LLVM's interpretation of indirect
+// forms. The DIE decoder uses LLVM's cursor and unit bounds for all attributes.
+ErrOr<FormValue> ConvertFormValue(const llvm::DWARFFormValue& value) {
+  using Class = FormValue::Class;
+  using LLVMForm = llvm::DWARFFormValue;
+  auto form = static_cast<DwarfForm>(value.getForm());
+  switch (form) {
+    case DwarfForm::kString:
+      return FormValue{form, Class::kString,
+                       std::string_view(llvm::cantFail(value.getAsCString()))};
+    case DwarfForm::kSdata:
+    case DwarfForm::kImplicitConst:
+      return FormValue{form, Class::kConstant, *value.getAsSignedConstant()};
+    case DwarfForm::kLlvmAddrxOffset: {
+      uint64_t raw = value.getRawUValue();
+      return FormValue{form, Class::kAddress,
+                       FormValue::IndexedAddress{raw >> 32, static_cast<uint32_t>(raw)}};
+    }
+    case DwarfForm::kLoclistx:
+      return FormValue{form, Class::kLoclist, value.getRawUValue()};
+    case DwarfForm::kRnglistx:
+      return FormValue{form, Class::kRnglist, value.getRawUValue()};
+    default:
+      break;
+  }
+
+  if (auto block = value.getAsBlock()) {
+    Class form_class = form == DwarfForm::kData16    ? Class::kConstant
+                       : form == DwarfForm::kExprloc ? Class::kExprloc
+                                                     : Class::kBlock;
+    return FormValue{form, form_class, std::span<const uint8_t>(block->data(), block->size())};
+  }
+
+  // Some forms have more than one LLVM class. Keep the primary class for the encoded form.
+  constexpr std::pair<LLVMForm::FormClass, Class> kScalarClasses[] = {
+      {LLVMForm::FC_Constant, Class::kConstant},
+      {LLVMForm::FC_Address, Class::kAddress},
+      {LLVMForm::FC_String, Class::kString},
+      {LLVMForm::FC_Reference, Class::kReference},
+      {LLVMForm::FC_Flag, Class::kFlag},
+      {LLVMForm::FC_SectionOffset, Class::kSectionOffset},
+  };
+  for (const auto& [llvm_class, form_class] : kScalarClasses) {
+    if (value.isFormClass(llvm_class))
+      return FormValue{form, form_class, value.getRawUValue()};
+  }
+  return Err("Unsupported DWARF form " + DwarfFormToString(form));
+}
 
 llvm::DWARFDie GetDIEForSignature(llvm::DWARFContext* context, uint64_t signature) {
   if (!context)
@@ -133,7 +181,7 @@ const DwarfDieDecoder::AttributeValue* DwarfDieDecoder::GetValue(DwarfAttr attri
 
 std::optional<bool> DwarfDieDecoder::GetBool(DwarfAttr attribute) const {
   if (const AttributeValue* value = GetValue(attribute)) {
-    if (std::optional<uint64_t> as_unsigned = value->form.getAsUnsignedConstant())
+    if (std::optional<uint64_t> as_unsigned = value->form.AsUnsignedConstant())
       return *as_unsigned != 0;
   }
   return std::nullopt;
@@ -163,22 +211,19 @@ std::optional<uint64_t> DwarfDieDecoder::GetAddress(DwarfAttr attribute) const {
 std::optional<uint64_t> DwarfDieDecoder::DecodeAddress(const AttributeValue& value) const {
   constexpr uint64_t kTombstone = std::numeric_limits<uint64_t>::max();
 
-  DwarfForm form = static_cast<DwarfForm>(value.form.getForm());
-  if (!DwarfFormIsAddress(form))
+  if (value.form.form_class != FormValue::Class::kAddress)
     return std::nullopt;
 
-  uint64_t raw = value.form.getRawUValue();
-  if (form == DwarfForm::kAddr)
+  if (value.form.form == DwarfForm::kAddr) {
+    uint64_t raw = std::get<uint64_t>(value.form.value);
     return raw == kTombstone ? std::nullopt : std::optional<uint64_t>(raw);
-
-  // The other forms are indices into the address table. DW_FORM_LLVM_addrx_offset has the index in
-  // the high 32 bits and an offset from that address in the low 32 bits.
-  uint64_t index = raw;
-  uint64_t offset = 0;
-  if (form == DwarfForm::kLlvmAddrxOffset) {
-    index = raw >> 32;
-    offset = raw & 0xffffffff;
   }
+
+  // The other forms refer to the address table. DW_FORM_LLVM_addrx_offset adds a byte offset.
+  FormValue::IndexedAddress indexed =
+      value.form.form == DwarfForm::kLlvmAddrxOffset
+          ? std::get<FormValue::IndexedAddress>(value.form.value)
+          : FormValue::IndexedAddress{std::get<uint64_t>(value.form.value), 0};
 
   llvm::DWARFUnit* table_unit = address_table_unit_ ? address_table_unit_ : value.unit;
   auto context = ReadUnitContext(binary_ && binary_->GetLLVMContext() == &table_unit->getContext()
@@ -187,30 +232,57 @@ std::optional<uint64_t> DwarfDieDecoder::DecodeAddress(const AttributeValue& val
                                  *table_unit);
   if (!context)
     return std::nullopt;
-  auto entry = context.value().ReadAddress(index);
+  auto entry = context.value().ReadAddress(indexed.index);
   if (!entry || *entry == kTombstone)
     return std::nullopt;
-  std::optional<uint64_t> address = CheckedAdd(*entry, offset);
+  std::optional<uint64_t> address = CheckedAdd(*entry, indexed.offset);
   if (!address || *address == kTombstone)
     return std::nullopt;
   return address;
 }
 
 std::optional<const char*> DwarfDieDecoder::GetCString(DwarfAttr attribute) const {
-  if (const AttributeValue* value = GetValue(attribute)) {
-    if (llvm::Expected<const char*> result = value->form.getAsCString())
-      return *result;
-    else
-      llvm::consumeError(result.takeError());
+  const AttributeValue* value = GetValue(attribute);
+  if (!value || value->form.form_class != FormValue::Class::kString)
+    return std::nullopt;
+  if (value->form.form == DwarfForm::kString)
+    return std::get<std::string_view>(value->form.value).data();
+
+  uint64_t offset = std::get<uint64_t>(value->form.value);
+  switch (value->form.form) {
+    case DwarfForm::kStrx:
+    case DwarfForm::kStrx1:
+    case DwarfForm::kStrx2:
+    case DwarfForm::kStrx3:
+    case DwarfForm::kStrx4:
+    case DwarfForm::kGnuStrIndex: {
+      // The LLVM unit applies relocations when reading string table entries.
+      auto entry = value->unit->getStringOffsetSectionItem(offset);
+      if (!entry) {
+        llvm::consumeError(entry.takeError());
+        return std::nullopt;
+      }
+      offset = *entry;
+      break;
+    }
+    case DwarfForm::kGnuStrpAlt:
+      return std::nullopt;
+    default:
+      break;
   }
+
+  // The unit selects the string section for split DWARF.
+  auto strings = value->form.form == DwarfForm::kLineStrp
+                     ? value->unit->getContext().getLineStringExtractor()
+                     : value->unit->getStringExtractor();
+  if (const char* string = strings.getCStr(&offset))
+    return string;
   return std::nullopt;
 }
 
 std::optional<uint64_t> DwarfDieDecoder::GetSectionOffset(DwarfAttr attribute) const {
-  // The getAsSectionOffset() call returns nullopt if the form class doesn't match, so this doesn't
-  // need to check it.
   if (const AttributeValue* value = GetValue(attribute))
-    return value->form.getAsSectionOffset();
+    return value->form.AsSectionOffset(value->unit->getVersion());
   return std::nullopt;
 }
 
@@ -218,45 +290,18 @@ std::optional<std::vector<uint8_t>> DwarfDieDecoder::GetBlock(DwarfAttr attribut
   const AttributeValue* value = GetValue(attribute);
   if (!value)
     return std::nullopt;
-  DwarfForm form = static_cast<DwarfForm>(value->form.getForm());
-  if (!DwarfFormIsBlock(form) && form != DwarfForm::kExprloc)
+  if (value->form.form_class != FormValue::Class::kBlock &&
+      value->form.form_class != FormValue::Class::kExprloc)
     return std::nullopt;
 
-  std::optional<llvm::ArrayRef<uint8_t>> block = value->form.getAsBlock();
-  if (!block)
-    return std::nullopt;
-  return std::vector<uint8_t>(block->begin(), block->end());
+  auto block = *value->form.AsBlock();
+  return std::vector<uint8_t>(block.begin(), block.end());
 }
 
 std::optional<int128_t> DwarfDieDecoder::GetInteger(DwarfAttr attribute,
                                                     bool data_is_signed) const {
-  const AttributeValue* value = GetValue(attribute);
-  if (!value)
-    return std::nullopt;
-
-  const llvm::DWARFFormValue& form = value->form;
-  switch (static_cast<DwarfForm>(form.getForm())) {
-    case DwarfForm::kData1:
-    case DwarfForm::kData2:
-    case DwarfForm::kData4:
-    case DwarfForm::kData8:
-      if (!data_is_signed)
-        break;
-      [[fallthrough]];
-    case DwarfForm::kSdata:
-    case DwarfForm::kImplicitConst:
-      // LLVM sign-extends the data forms.
-      if (std::optional<int64_t> as_signed = form.getAsSignedConstant())
-        return *as_signed;
-      return std::nullopt;
-    case DwarfForm::kUdata:
-      break;
-    default:
-      return std::nullopt;
-  }
-
-  if (std::optional<uint64_t> as_unsigned = form.getAsUnsignedConstant())
-    return *as_unsigned;
+  if (const AttributeValue* value = GetValue(attribute))
+    return value->form.AsInteger(data_is_signed);
   return std::nullopt;
 }
 
@@ -265,20 +310,16 @@ ConstValue DwarfDieDecoder::GetConstValue(DwarfAttr attribute) const {
   if (!value)
     return ConstValue();
 
-  const llvm::DWARFFormValue& form = value->form;
-  DwarfForm form_code = static_cast<DwarfForm>(form.getForm());
+  const FormValue& form = value->form;
+  DwarfForm form_code = form.form;
   if (form_code == DwarfForm::kUdata) {
-    if (std::optional<uint64_t> opt_unsigned = form.getAsUnsignedConstant())
-      return ConstValue(*opt_unsigned);
+    return ConstValue(std::get<uint64_t>(form.value));
   } else if (form_code == DwarfForm::kSdata || form_code == DwarfForm::kImplicitConst) {
-    if (std::optional<int64_t> opt_signed = form.getAsSignedConstant())
-      return ConstValue(static_cast<int64_t>(*opt_signed));
+    return ConstValue(std::get<int64_t>(form.value));
   } else if (form_code == DwarfForm::kData1 || form_code == DwarfForm::kData2 ||
              form_code == DwarfForm::kData4 || form_code == DwarfForm::kData8) {
-    // LLVM gives the value as an integer. Write its bytes in target byte order.
-    std::optional<uint64_t> bits = form.getAsUnsignedConstant();
-    if (!bits)
-      return ConstValue();
+    // Write the integer's bytes in target byte order.
+    uint64_t bits = std::get<uint64_t>(form.value);
     size_t size = form_code == DwarfForm::kData1   ? 1
                   : form_code == DwarfForm::kData2 ? 2
                   : form_code == DwarfForm::kData4 ? 4
@@ -286,15 +327,14 @@ ConstValue DwarfDieDecoder::GetConstValue(DwarfAttr attribute) const {
     Endian endian = value->unit->getContext().isLittleEndian() ? Endian::kLittle : Endian::kBig;
     std::vector<uint8_t> bytes(size);
     for (size_t i = 0; i < size; i++)
-      bytes[endian == Endian::kLittle ? i : size - 1 - i] = static_cast<uint8_t>(*bits >> (8 * i));
+      bytes[endian == Endian::kLittle ? i : size - 1 - i] = static_cast<uint8_t>(bits >> (8 * i));
     return ConstValue(std::move(bytes));
   } else if (form_code == DwarfForm::kData16) {
-    // LLVM keeps the 16 bytes as a block, in the byte order of the file.
-    std::optional<llvm::ArrayRef<uint8_t>> block = form.getAsBlock();
+    auto block = form.AsBlock();
     if (block && block->size() == 16)
       return ConstValue(std::vector<uint8_t>(block->begin(), block->end()));
   } else if (DwarfFormIsBlock(form_code)) {
-    std::optional<llvm::ArrayRef<uint8_t>> block = form.getAsBlock();
+    auto block = form.AsBlock();
     if (block && !block->empty())
       return ConstValue(std::vector<uint8_t>(block->begin(), block->end()));
   }
@@ -306,12 +346,10 @@ std::optional<DwarfDieDecoder::HighPC> DwarfDieDecoder::GetHighPC() const {
   if (!value)
     return std::nullopt;
 
-  const llvm::DWARFFormValue& form = value->form;
-  DwarfForm form_code = static_cast<DwarfForm>(form.getForm());
-  if (DwarfFormIsConstant(form_code)) {
+  if (value->form.form_class == FormValue::Class::kConstant) {
     if (std::optional<uint64_t> as_constant = GetUnsignedConstant(DwarfAttr::kHighPc))
       return HighPC(true, *as_constant);
-  } else if (DwarfFormIsAddress(form_code)) {
+  } else if (value->form.form_class == FormValue::Class::kAddress) {
     if (std::optional<uint64_t> as_addr = DecodeAddress(*value))
       return HighPC(false, *as_addr);
   }
@@ -328,7 +366,7 @@ std::optional<std::string> DwarfDieDecoder::GetFile(DwarfAttr attribute) const {
   const AttributeValue* value = GetValue(attribute);
   if (!value)
     return std::nullopt;
-  std::optional<uint64_t> file_index = value->form.getAsUnsignedConstant();
+  std::optional<uint64_t> file_index = value->form.AsUnsignedConstant();
   if (!file_index)
     return std::nullopt;
 
@@ -418,16 +456,20 @@ bool DwarfDieDecoder::DecodeOneDie(const llvm::DWARFDie& die, bool is_first, Lin
       continue;
     }
 
-    llvm::DWARFFormValue form_value(spec.Form);
+    llvm::DWARFFormValue llvm_value(spec.Form);
     if (spec.isImplicitConst()) {
       // In the "implicit const" form, the value is stored in the abbreviation declaration which is
       // not passed in to the DWARFFormValue constructor or its extractValue() member. So this form
       // has to be specially decoded.
-      form_value = llvm::DWARFFormValue::createFromSValue(spec.Form, spec.getImplicitConstValue());
-    } else if (!form_value.extractValue(extractor, &offset, unit->getFormParams(), unit) ||
+      llvm_value = llvm::DWARFFormValue::createFromSValue(spec.Form, spec.getImplicitConstValue());
+    } else if (!llvm_value.extractValue(extractor, &offset, unit->getFormParams(), unit) ||
                offset > unit_end) {
       return false;
     }
+    auto converted = ConvertFormValue(llvm_value);
+    if (converted.has_error())
+      return false;
+    const FormValue& form_value = converted.value();
 
     if (is_abstract_origin)
       links->abstract_origin = DecodeReference(unit, form_value);
@@ -440,27 +482,22 @@ bool DwarfDieDecoder::DecodeOneDie(const llvm::DWARFDie& die, bool is_first, Lin
 }
 
 llvm::DWARFDie DwarfDieDecoder::DecodeReference(llvm::DWARFUnit* unit,
-                                                const llvm::DWARFFormValue& form) const {
-  switch (static_cast<DwarfForm>(form.getForm())) {
+                                                const FormValue& form) const {
+  auto ref_value = form.AsReference();
+  if (!ref_value)
+    return llvm::DWARFDie();
+
+  switch (form.form) {
     case DwarfForm::kRef1:
     case DwarfForm::kRef2:
     case DwarfForm::kRef4:
     case DwarfForm::kRef8:
-    case DwarfForm::kRefUdata: {
-      // A DWARF "form" is the way a value is encoded in the file. These
-      // are all relative location of DIEs within the same unit.
-      auto ref_value = form.getAsReferenceUVal();
-      if (ref_value)
-        return unit->getDIEForOffset(unit->getOffset() + *ref_value);
-      break;
-    }
+    case DwarfForm::kRefUdata:
+      return unit->getDIEForOffset(unit->getOffset() + *ref_value);
     case DwarfForm::kRefAddr: {
       // This is an offset in the .debug_info section of the referencing unit, so it can be used
       // across units. DWARFContext::getDIEForOffset() searches only the normal units, so a unit in
       // a .dwo file looks in the units of .debug_info.dwo itself.
-      auto ref_value = form.getAsReferenceUVal();
-      if (!ref_value)
-        break;
       if (unit->isDWOUnit()) {
         if (llvm::DWARFUnit* target =
                 unit->getContext().getDWOUnitsVector().getUnitForOffset(*ref_value))
@@ -470,18 +507,14 @@ llvm::DWARFDie DwarfDieDecoder::DecodeReference(llvm::DWARFUnit* unit,
       return context_->getDIEForOffset(*ref_value);
     }
     case DwarfForm::kRefSig8: {
-      auto ref_value = form.getAsReferenceUVal();
-      if (ref_value) {
-        if (binary_) {
-          // Prefer fast O(log N) cached signature lookup and section-aware DIE resolution
-          // via DwarfBinary.
-          if (DwarfDieRef die_ref = binary_->GetDieRefForSignature(*ref_value)) {
-            return binary_->GetLLVMDieAtOffset(die_ref);
-          }
-        } else {
-          // Fallback for tests or contexts where only a bare llvm::DWARFContext* was provided.
-          return GetDIEForSignature(context_, *ref_value);
-        }
+      if (binary_) {
+        // Prefer fast O(log N) cached signature lookup and section-aware DIE resolution
+        // via DwarfBinary.
+        if (DwarfDieRef die_ref = binary_->GetDieRefForSignature(*ref_value))
+          return binary_->GetLLVMDieAtOffset(die_ref);
+      } else {
+        // Fallback for tests or contexts where only a bare llvm::DWARFContext* was provided.
+        return GetDIEForSignature(context_, *ref_value);
       }
       break;
     }

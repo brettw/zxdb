@@ -14,12 +14,12 @@
 
 namespace llvm {
 class DWARFUnit;
-class DWARFFormValue;
 }  // namespace llvm
 
 namespace zxdb {
 
 struct DwarfSections;
+struct FormValue;
 
 // Decodes the variable location contained in the given form value. It's assumed the form value
 // contains either a block, an ExprLoc, or an offset into the .debug_loc section.
@@ -29,8 +29,7 @@ struct DwarfSections;
 //
 // On error this will return an empty VariableLocation.
 VariableLocation DecodeVariableLocation(const DwarfSections& sections, llvm::DWARFUnit* unit,
-                                        const llvm::DWARFFormValue& form,
-                                        const UncachedLazySymbol& source,
+                                        const FormValue& form, const UncachedLazySymbol& source,
                                         llvm::DWARFUnit* skeleton = nullptr);
 
 // Low-level decode for a DWARF 4 variable location description. The data should start at the

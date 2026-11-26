@@ -706,7 +706,7 @@ TEST_F(DwarfDieDecoderTest, Forms) {
   const DwarfDieDecoder::AttributeValue* value = decoder.GetValue(DwarfAttr::kLocation);
   ASSERT_TRUE(value);
   EXPECT_EQ(context()->getUnitAtIndex(0), value->unit);
-  EXPECT_EQ(DwarfForm::kExprloc, static_cast<DwarfForm>(value->form.getForm()));
+  EXPECT_EQ(DwarfForm::kExprloc, value->form.form);
 
   // A missing attribute has no value.
   EXPECT_FALSE(decoder.Has(DwarfAttr::kHighPc));
