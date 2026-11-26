@@ -10,10 +10,14 @@
 
 #include <functional>
 #include <map>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "src/developer/debug/zxdb/symbols/dwarf/abbrev_table.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/unit_header.h"
 
 namespace zxdb {
 
@@ -39,6 +43,18 @@ class DwarfSectionBuilder {
     size_t offset_size_;
   };
 
+  struct UnitHeaderOptions {
+    UnitSection section = UnitSection::kInfo;
+    uint16_t version = 5;
+    uint8_t offset_size = 4;
+    uint8_t unit_type = kUnitTypeCompile;
+    uint8_t address_size = 8;
+    uint64_t abbrev_offset = 0;
+    uint64_t type_signature = 0;
+    uint64_t type_offset = 0;
+    uint64_t dwo_id = 0;
+  };
+
   explicit DwarfSectionBuilder(std::vector<uint8_t>& out, bool little_endian = true)
       : out_(out), little_endian_(little_endian) {}
 
@@ -52,8 +68,20 @@ class DwarfSectionBuilder {
 
   // EndInitialLength patches the placeholder with the number of bytes written after it.
   // Pass the marker back to the same builder at the end of the contribution.
+  // Tests can supply a raw length to write a malformed contribution.
   LengthMarker BeginInitialLength(size_t offset_size);
-  void EndInitialLength(LengthMarker marker);
+  void EndInitialLength(LengthMarker marker, std::optional<uint64_t> raw_length = std::nullopt);
+
+  // Writes the header. Append DIE bytes before calling EndUnit.
+  LengthMarker BeginUnit(const UnitHeaderOptions& options);
+  void EndUnit(LengthMarker marker, std::optional<uint64_t> raw_length = std::nullopt) {
+    EndInitialLength(marker, raw_length);
+  }
+
+  // Writes one declaration with its attribute list terminator.
+  void AbbrevDeclaration(uint64_t code, uint64_t tag, bool has_children,
+                         std::span<const AbbrevTable::AttributeSpec> attributes = {});
+  void EndAbbrevTable() { Uleb(0); }
 
  private:
   std::vector<uint8_t>& out_;

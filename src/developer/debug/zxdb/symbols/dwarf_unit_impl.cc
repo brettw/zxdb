@@ -6,8 +6,6 @@
 
 #include <lib/syslog/cpp/macros.h>
 
-#include <algorithm>
-
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "src/developer/debug/zxdb/common/ref_ptr_to.h"
 #include "src/developer/debug/zxdb/symbols/address_range_map_builder.h"
@@ -18,14 +16,15 @@
 
 namespace zxdb {
 
-DwarfUnitImpl::DwarfUnitImpl(DwarfBinaryImpl* binary, llvm::DWARFUnit* unit)
-    : binary_(binary->GetWeakPtr()), unit_(unit) {}
+DwarfUnitImpl::DwarfUnitImpl(DwarfBinaryImpl* binary, llvm::DWARFUnit* unit,
+                             const UnitHeader& header)
+    : binary_(binary->GetWeakPtr()), unit_(unit), header_(header) {}
 
 DwarfBinary* DwarfUnitImpl::GetBinary() const { return binary_.get(); }
 
 llvm::DWARFUnit* DwarfUnitImpl::GetLLVMUnit() const { return unit_; }
 
-int DwarfUnitImpl::GetDwarfVersion() const { return unit_->getVersion(); }
+int DwarfUnitImpl::GetDwarfVersion() const { return header_.version; }
 
 llvm::DWARFDie DwarfUnitImpl::GetUnitDie() const {
   // Request that the unit DIEs be extracted (false parameter means "not unit die only"). Some
@@ -59,11 +58,7 @@ LazySymbol DwarfUnitImpl::FunctionForRelativeAddress(uint64_t relative_address) 
   return LazySymbol();
 }
 
-uint64_t DwarfUnitImpl::GetOffset() const {
-  if (!binary_)
-    return 0;
-  return unit_->getOffset();
-}
+uint64_t DwarfUnitImpl::GetOffset() const { return header_.offset; }
 
 std::string DwarfUnitImpl::GetCompilationDir() const {
   if (!binary_)
@@ -103,28 +98,13 @@ uint64_t DwarfUnitImpl::GetIndexForLLVMDie(const llvm::DWARFDie& die) const {
 }
 
 DwarfDieRef DwarfUnitImpl::GetDieRef(uint64_t offset) const {
-  if (unit_ && unit_->isTypeUnit())
-    return DwarfDieRef::ForTypeUnit(unit_->getVersion(), offset);
+  if (header_.is_type_unit())
+    return DwarfDieRef::ForTypeUnit(header_.version, offset);
   return DwarfDieRef::Main(offset);
 }
 
 DwarfDieRef DwarfUnitImpl::GetDieRef(const llvm::DWARFDie& die) const {
   return GetDieRef(die.getOffset());
-}
-
-llvm::DWARFUnit* GetUnitForOffset(const llvm::DWARFUnitVector& unit_vector, DwarfDieRef die_ref) {
-  if (die_ref.section() == DwarfDieRef::Section::kMain)
-    return unit_vector.getUnitForOffset(die_ref.offset());
-
-  auto begin = unit_vector.begin() + unit_vector.getNumInfoUnits();
-  auto end = unit_vector.end();
-  auto it = std::upper_bound(begin, end, die_ref.offset(),
-                             [](uint64_t offset, const std::unique_ptr<llvm::DWARFUnit>& unit) {
-                               return offset < unit->getNextUnitOffset();
-                             });
-  if (it != end && (*it)->getOffset() <= die_ref.offset())
-    return it->get();
-  return nullptr;
 }
 
 void DwarfUnitImpl::EnsureFuncAddrMap() const {

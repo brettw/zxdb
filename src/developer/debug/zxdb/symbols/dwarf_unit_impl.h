@@ -8,6 +8,7 @@
 #include <map>
 
 #include "src/developer/debug/zxdb/symbols/address_range_map.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/unit_header.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/line_table.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
@@ -15,7 +16,6 @@
 namespace llvm {
 class DWARFDie;
 class DWARFUnit;
-class DWARFUnitVector;
 }  // namespace llvm
 
 namespace zxdb {
@@ -50,7 +50,7 @@ class DwarfUnitImpl : public DwarfUnit {
   FRIEND_REF_COUNTED_THREAD_SAFE(DwarfUnitImpl);
   FRIEND_MAKE_REF_COUNTED(DwarfUnitImpl);
 
-  DwarfUnitImpl(DwarfBinaryImpl* binary, llvm::DWARFUnit* unit);
+  DwarfUnitImpl(DwarfBinaryImpl* binary, llvm::DWARFUnit* unit, const UnitHeader& header);
 
   // Call every time before using func_addr_to_die_offset_ to make sure it's lazily populated.
   void EnsureFuncAddrMap() const;
@@ -67,6 +67,7 @@ class DwarfUnitImpl : public DwarfUnit {
   // here is a bit messy. In practice this means that the DwarfBinary outlives all DwarfUnits, and
   // users should check that the binary_ is still valid before dereferencing.
   llvm::DWARFUnit* unit_;
+  const UnitHeader header_;
 
   // Maps the begin address of each code range in this DIE (the key) to the DIE offset of the
   // function covering that address (the value). Computed lazily by EnsureFuncAddrMap().
@@ -81,8 +82,6 @@ class DwarfUnitImpl : public DwarfUnit {
   // The line table. Computed lazily.
   mutable std::optional<LineTable> line_table_;
 };
-
-llvm::DWARFUnit* GetUnitForOffset(const llvm::DWARFUnitVector& unit_vector, DwarfDieRef die_ref);
 
 }  // namespace zxdb
 

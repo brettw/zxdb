@@ -30,7 +30,7 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_location.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_unit_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/enumeration.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/function_type.h"
@@ -271,16 +271,7 @@ DwarfLang DwarfSymbolFactory::GetLanguage(const llvm::DWARFDie& die) const {
 }
 
 llvm::DWARFUnit* DwarfSymbolFactory::GetUnitForDieRef(DwarfDieRef die_ref) const {
-  if (!binary_ || !die_ref.is_valid())
-    return nullptr;
-
-  // LLVMContext::getDIEForOffset() only works for normal (non-DWO) units so we have to look up
-  // manually. This is basically the implementation of getDIEForOffset() with the variable unit
-  // type.
-  const llvm::DWARFUnitVector& unit_vector = file_type_ == kDWO
-                                                 ? GetLLVMContext()->getDWOUnitsVector()
-                                                 : GetLLVMContext()->getNormalUnitsVector();
-  return GetUnitForOffset(unit_vector, die_ref);
+  return binary_ ? binary_->GetLLVMUnitForDieRef(die_ref, file_type_ == kDWO) : nullptr;
 }
 
 fxl::RefPtr<CompileUnit> DwarfSymbolFactory::GetCompileUnitForDie(DwarfDieRef die_ref) const {
@@ -763,10 +754,9 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeCompileUnit(const llvm::DWARFDie& 
   if (language && *language >= 0 && *language < static_cast<int>(DwarfLang::kLast))
     lang_enum = static_cast<DwarfLang>(*language);
 
-  // The weak "binary_" pointer should have already been checked for null by CreateSymbol() so we
-  // can dereference unconditionally.
-  fxl::RefPtr<DwarfUnit> dwarf_unit =
-      fxl::MakeRefCounted<DwarfUnitImpl>(binary_.get(), die.getDwarfUnit());
+  auto dwarf_unit = binary_->CreateUncachedUnit(die.getDwarfUnit());
+  if (!dwarf_unit)
+    return fxl::MakeRefCounted<Symbol>();
 
   // We know the delegate_ is valid, that was checked on entry to CreateSymbol().
   return fxl::MakeRefCounted<CompileUnit>(tag, delegate_->GetModuleSymbols(), std::move(dwarf_unit),

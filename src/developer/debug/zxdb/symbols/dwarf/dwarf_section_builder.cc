@@ -6,6 +6,8 @@
 
 #include <lib/syslog/cpp/macros.h>
 
+#include "src/developer/debug/zxdb/symbols/dwarf_form.h"
+
 namespace zxdb {
 
 namespace {
@@ -93,12 +95,56 @@ DwarfSectionBuilder::LengthMarker DwarfSectionBuilder::BeginInitialLength(size_t
   return LengthMarker(offset, offset_size);
 }
 
-void DwarfSectionBuilder::EndInitialLength(LengthMarker marker) {
+void DwarfSectionBuilder::EndInitialLength(LengthMarker marker,
+                                           std::optional<uint64_t> raw_length) {
   FX_DCHECK(marker.offset_ <= out_.size() && marker.offset_size_ <= out_.size() - marker.offset_);
   auto bytes = std::span(out_).subspan(marker.offset_);
   size_t length = bytes.size() - marker.offset_size_;
-  FX_DCHECK(marker.offset_size_ == 8 || length < 0xfffffff0);
-  WriteInteger(bytes.first(marker.offset_size_), length, little_endian_);
+  FX_DCHECK(raw_length || marker.offset_size_ == 8 || length < 0xfffffff0);
+  WriteInteger(bytes.first(marker.offset_size_), raw_length.value_or(length), little_endian_);
+}
+
+DwarfSectionBuilder::LengthMarker DwarfSectionBuilder::BeginUnit(const UnitHeaderOptions& options) {
+  auto marker = BeginInitialLength(options.offset_size);
+  Fixed(options.version, 2);
+  uint8_t unit_type = options.unit_type;
+  if (options.version >= 5) {
+    Fixed(unit_type, 1);
+    Fixed(options.address_size, 1);
+    Offset(options.abbrev_offset, options.offset_size);
+  } else {
+    Offset(options.abbrev_offset, options.offset_size);
+    Fixed(options.address_size, 1);
+    unit_type = options.section == UnitSection::kTypes ? kUnitTypeType : kUnitTypeCompile;
+  }
+
+  if (unit_type == kUnitTypeType || unit_type == kUnitTypeSplitType) {
+    Fixed(options.type_signature, 8);
+    Offset(options.type_offset, options.offset_size);
+  } else if (unit_type == kUnitTypeSkeleton || unit_type == kUnitTypeSplitCompile) {
+    Fixed(options.dwo_id, 8);
+  }
+  return marker;
+}
+
+void DwarfSectionBuilder::AbbrevDeclaration(
+    uint64_t code, uint64_t tag, bool has_children,
+    std::span<const AbbrevTable::AttributeSpec> attributes) {
+  FX_DCHECK(code != 0 && tag != 0);
+  Uleb(code);
+  Uleb(tag);
+  Fixed(has_children ? 1 : 0, 1);
+  for (const auto& spec : attributes) {
+    FX_DCHECK(spec.attribute != 0 && spec.form != 0);
+    FX_DCHECK(spec.implicit_const.has_value() ==
+              (spec.form == static_cast<uint64_t>(DwarfForm::kImplicitConst)));
+    Uleb(spec.attribute);
+    Uleb(spec.form);
+    if (spec.implicit_const)
+      Sleb(*spec.implicit_const);
+  }
+  Uleb(0);
+  Uleb(0);
 }
 
 uint64_t DwarfStringSectionBuilder::AddString(std::string_view value) {

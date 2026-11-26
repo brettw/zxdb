@@ -10,6 +10,7 @@
 
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/common/err.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/unit_header.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_symbol_factory.h"
 #include "src/developer/debug/zxdb/symbols/line_table_cache.h"
@@ -77,10 +78,23 @@ class DwarfBinaryImpl final : public DwarfBinary {
   // Decodes the whole line table of the unit. The file table is shared with GetLineFileTable().
   LineTable DecodeLineTable(llvm::DWARFUnit* unit) const;
 
+  // Returns the LLVM unit containing the DIE reference in the normal or DWO sections.
+  // Returns null for an invalid reference or a missing unit. The wrapper cache is untouched.
+  llvm::DWARFUnit* GetLLVMUnitForDieRef(DwarfDieRef die_ref, bool is_dwo) const;
+
+  // Returns a new DwarfUnit wrapper without adding it to the wrapper cache.
+  // Returns null if the LLVM unit is null, belongs to another binary, or has no matching header.
+  fxl::RefPtr<DwarfUnit> CreateUncachedUnit(llvm::DWARFUnit* llvm_unit);
+
  private:
-  // Lazily creates a unit for us and returns it. This can handle null input pointers, which will
-  // result in a null output pointer.
-  fxl::RefPtr<DwarfUnit> FromLLVMUnit(llvm::DWARFUnit* llvm_unit);
+  struct IndexedUnit {
+    const UnitHeader& header;
+    UnitSection section;
+  };
+
+  std::optional<IndexedUnit> GetUnitHeader(UnitIndex index) const;
+  const UnitList& GetUnitList(bool is_dwo, UnitSection section) const;
+  llvm::DWARFUnit* FindLLVMUnit(bool is_dwo, UnitSection section, uint64_t unit_offset) const;
 
   // Call every time before using signature_to_die_ to make sure it's lazily populated.
   void EnsureSignatureMap() const;
@@ -93,6 +107,10 @@ class DwarfBinaryImpl final : public DwarfBinary {
   std::unique_ptr<llvm::object::Binary> binary_;
   std::unique_ptr<llvm::DWARFContext> context_;  // binary_ must outlive this.
   DwarfSections sections_;                       // Views into the sections of context_.
+  UnitList info_units_;
+  UnitList types_units_;
+  UnitList info_dwo_units_;
+  UnitList types_dwo_units_;
 
   class DebugAranges;
   std::unique_ptr<DebugAranges> debug_aranges_;  // Replaces context_->Aranges.
@@ -108,7 +126,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
   mutable std::map<const llvm::DWARFUnit*, fxl::RefPtr<DwarfUnit>> unit_map_;
 
   // Maps 64-bit type unit signatures to their DIE references. Computed lazily by
-  // EnsureSignatureMap() by scanning all type units in both normal and DWO unit vectors.
+  // EnsureSignatureMap() by scanning all type units in the normal and DWO unit lists.
   mutable std::optional<std::map<uint64_t, DwarfDieRef>> signature_to_die_;
 
   // File tables of the line tables, computed lazily.

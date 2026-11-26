@@ -7,12 +7,15 @@
 #include <elf.h>
 
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <string>
 #include <string_view>
 
 #include <gtest/gtest.h>
 
+#include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/module_symbols_impl.h"
 #include "src/developer/debug/zxdb/symbols/test_symbol_module.h"
 #include "src/lib/files/file.h"
@@ -82,6 +85,58 @@ TEST(DwarfBinaryImpl, DebugAddr) {
   EXPECT_EQ(std::nullopt, binary.GetDebugAddrEntry(binary.GetSections().addr.size(), 0));
   EXPECT_EQ(std::nullopt, binary.GetDebugAddrEntry(kAddrBase, UINT64_MAX / 8 + 1));
   EXPECT_EQ(std::nullopt, binary.GetDebugAddrEntry(UINT64_MAX - 7, 2));
+}
+
+TEST(DwarfBinaryImpl, Dwarf4TypeUnits) {
+  std::string path = TestSymbolModule::GetTestDataDir() + "type_unit/gcc_dwarf4.so";
+  if (!std::filesystem::exists(path))
+    GTEST_SKIP() << "The GCC type unit fixture is unavailable.";
+
+  TestSymbolModule setup(path, "");
+  ASSERT_TRUE(setup.Init().ok());
+  DwarfBinary& binary = *setup.symbols()->binary();
+
+  // The fixture has one compilation unit. Its TypeUnitOuter and TypeUnitInner each get a
+  // type unit.
+  ASSERT_EQ(3u, binary.GetNormalUnitCount());
+
+  // The first unit in each section starts at offset zero.
+  auto info = binary.GetUnitAtIndex(UnitIndex(false, 0));
+  auto first_type = binary.GetUnitAtIndex(UnitIndex(false, 1));
+  auto second_type = binary.GetUnitAtIndex(UnitIndex(false, 2));
+  ASSERT_TRUE(info);
+  ASSERT_TRUE(first_type);
+  ASSERT_TRUE(second_type);
+  EXPECT_EQ(DwarfDieRef::Main(0), info->GetDieRef());
+  EXPECT_EQ(DwarfDieRef::Type(0), first_type->GetDieRef());
+  EXPECT_EQ(DwarfDieRef::Section::kType, second_type->GetDieRef().section());
+}
+
+TEST(DwarfBinaryImpl, Dwarf5TypeUnits) {
+  std::string path = TestSymbolModule::GetTestDataDir() + "type_unit/gcc_dwarf5.so";
+  if (!std::filesystem::exists(path))
+    GTEST_SKIP() << "The GCC type unit fixture is unavailable.";
+
+  TestSymbolModule setup(path, "");
+  ASSERT_TRUE(setup.Init().ok());
+  DwarfBinary& binary = *setup.symbols()->binary();
+
+  // The same fixture has one compilation unit and two type units, all in .debug_info.
+  ASSERT_EQ(3u, binary.GetNormalUnitCount());
+  uint32_t compile_count = 0;
+  uint32_t type_count = 0;
+  for (uint32_t i = 0; i < binary.GetNormalUnitCount(); ++i) {
+    auto unit = binary.GetUnitAtIndex(UnitIndex(false, i));
+    ASSERT_TRUE(unit);
+    if (i == 0)
+      EXPECT_EQ(DwarfDieRef::Main(0), unit->GetDieRef());
+    EXPECT_EQ(DwarfDieRef::Section::kMain, unit->GetDieRef().section());
+    auto tag = static_cast<DwarfTag>(unit->GetUnitDie().getTag());
+    compile_count += tag == DwarfTag::kCompileUnit;
+    type_count += tag == DwarfTag::kTypeUnit;
+  }
+  EXPECT_EQ(1u, compile_count);
+  EXPECT_EQ(2u, type_count);
 }
 
 // The checked-in test binary has a ".symtab" and a ".dynsym" section. The symbols of both are in

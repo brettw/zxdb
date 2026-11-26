@@ -20,6 +20,7 @@
 #include "llvm/Support/MemoryBuffer.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_sections.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/unit_header.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
@@ -28,9 +29,6 @@
 namespace zxdb {
 
 class LineTableTestSections;
-
-// The unit type of a DWARF 5 compile unit header (DW_UT_compile).
-constexpr uint8_t kUnitTypeCompile = 0x01;
 
 // Returns the form as one byte, for raw test data in braced lists. The form must fit in a one-byte
 // unsigned LEB128 value.

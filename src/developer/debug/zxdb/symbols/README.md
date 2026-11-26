@@ -107,8 +107,11 @@ Callers and implementations must preserve these invariants:
   `DCHECK(is_valid())`.
 - `DwarfSymbolFactory` handles `DwarfTag::kTypeUnit` alongside
   `DwarfTag::kCompileUnit` so child DIEs can reach `llvm::DWARFUnit` via
-  `CompileUnit`. `DwarfBinaryImpl` queries both normal compilation units
-  (`getNormalUnitsVector()`) and split-DWARF DWO units (`getDWOUnitsVector()`).
+  `CompileUnit`.
+- `DwarfBinaryImpl` reads unit headers from `DwarfSections`. Its unit lists
+  put info units before types units for both normal and DWO sections. For DIE
+  decoding, it finds the LLVM unit in the same section at the exact unit
+  offset. A raw DIE lookup does not create a unit wrapper.
 - When resolving a DWARF type signature whose target `DwarfDieRef` is invalid
   (`!sig_ref.is_valid()`), return an empty `fxl::RefPtr<Symbol>()` instead of
   crashing with `FX_CHECK`.

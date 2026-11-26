@@ -60,8 +60,7 @@ class DwarfUnit : public fxl::RefCountedThreadSafe<DwarfUnit> {
   // inlined subroutine if there are any. Returns an !is_valid() LazySymbol on failure.
   virtual LazySymbol FunctionForRelativeAddress(uint64_t relative_address) const = 0;
 
-  // Returns the offset of the beginning of this unit within the symbol file. Returns 0 on failure.
-  // The only failure case is that the symbols were unloaded.
+  // Returns the offset of the beginning of this unit within its DWARF section.
   virtual uint64_t GetOffset() const = 0;
 
   // The compilation directory is what the compiler decides to write. In normal usage this will be
