@@ -80,7 +80,7 @@ class ModuleSymbolsImpl final : public ModuleSymbols, public DwarfSymbolFactory:
   LazySymbol IndexSymbolRefToSymbol(const IndexNode::SymbolRef&) const override;
   bool HasBinary() const override;
   bool HasDebugNames() const override;
-  const llvm::DWARFDebugNames* GetDebugNames() const override;
+  const DebugNamesReader* GetDebugNames() const override;
   std::vector<DebugNamesEntry> FindDebugNamesEntries(std::string_view name) const override;
   std::vector<DebugNamesEntry> FindDebugNamesPrefixEntries(std::string_view prefix) const override;
 

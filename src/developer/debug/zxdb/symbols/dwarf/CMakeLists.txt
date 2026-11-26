@@ -2,6 +2,7 @@ add_library(zxdb_dwarf STATIC
   abbrev_table.cc
   aranges_reader.cc
   data_reader.cc
+  debug_names_reader.cc
   form_value.cc
   range_list_reader.cc
   unit_context.cc

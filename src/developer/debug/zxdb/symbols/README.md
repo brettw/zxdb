@@ -115,16 +115,21 @@ Callers and implementations must preserve these invariants:
 - When resolving a DWARF type signature whose target `DwarfDieRef` is invalid
   (`!sig_ref.is_valid()`), return an empty `fxl::RefPtr<Symbol>()` instead of
   crashing with `FX_CHECK`.
-- In `FindDebugNamesEntries()`, compile unit and DIE unit offsets are validated
-  with `has_value()` because section and unit offset 0 is a valid DWARF offset.
-  Never use 0 as an invalid sentinel.
-- Local type units in `.debug_names` use `.debug_info` offsets. Foreign type
-  unit entries return `std::nullopt` until `zxdb` supports split DWARF
-  (https://fxbug.dev/583730372).
+- `DwarfBinaryImpl` parses `.debug_names` at load time. The reader
+  uses immutable section bytes, parsed abbreviations, and any offset
+  relocations that LLVM supplies for the name index tables.
+- `FindDebugNamesEntries()` checks that both the unit and DIE offsets
+  are present and that their sum fits. Offset zero is valid. Local type units
+  use `.debug_info` offsets. The reader returns foreign type signatures and
+  their related CU offsets. The symbol lookup skips those entries until
+  `DebugNamesEntry` can identify the owning DWO (https://fxbug.dev/583730372).
+- Exact and prefix name lookups omit a variable when its indexed parent
+  identifies it as function-local. If the parent record cannot be read,
+  normal DIE resolution can still check the entry.
 - All file names from line tables come from `ResolveLineFileName()`, so names
   from line rows, `DW_AT_decl_file`, and the file index compare equal.
-- The line table, location list, range list, and aranges parsers read section
-  bytes from `DwarfSections`. The `.debug_names` fast scan also uses these views.
+- The line table, location list, range list, aranges, and name index parsers
+  read section bytes from `DwarfSections`.
   `dwarf_sections_llvm.cc` maps the LLVM sections to these views. The byte
   readers expect any required ELF relocations to be applied to the bytes.
   `UnitContext` reads root DIE metadata for string offsets, indexed addresses,
@@ -158,9 +163,8 @@ Callers and implementations must preserve these invariants:
   length by subtraction before they add it, and their memory use must stay
   in proportion to the input. Don't reserve memory from a count in the data.
   See "Malformed input" in `line_tables.md`.
-- Index fallback: when `.debug_names` is absent or empty, or when
-  `force_slow_index` is set, `ModuleSymbolsImpl` falls back to the full-DIE
-  `Index`.
+- When `.debug_names` has no readable contribution or `force_slow_index`
+  is set, `ModuleSymbolsImpl` uses the full-DIE `Index`.
 
 ## Side Effects
 

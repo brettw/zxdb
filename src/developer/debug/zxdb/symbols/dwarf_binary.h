@@ -20,7 +20,6 @@
 namespace llvm {
 
 class DWARFContext;
-class DWARFDebugNames;
 
 namespace object {
 class Binary;
@@ -31,6 +30,7 @@ class ObjectFile;
 
 namespace zxdb {
 
+class DebugNamesReader;
 class DwarfSymbolFactory;
 class LineFileTable;
 class SymbolContext;
@@ -138,8 +138,8 @@ class DwarfBinary {
   // DW_AT_signature).
   virtual DwarfDieRef GetDieRefForSignature(uint64_t signature) const = 0;
 
-  // Returns the DWARF v5 .debug_names accelerator table, or nullptr if absent or empty.
-  virtual const llvm::DWARFDebugNames* GetDebugNames() const { return nullptr; }
+  // Returns the .debug_names reader, or nullptr if there are no readable contributions.
+  virtual const DebugNamesReader* GetDebugNames() const { return nullptr; }
 
   // Returns the resolved file name table of the line table of the given unit of this binary, or
   // null if the unit has no line table. The table has the given file index if the line table has

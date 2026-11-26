@@ -391,7 +391,7 @@ const Index& ModuleSymbolsImpl::GetIndex() const { return *index_; }
 
 bool ModuleSymbolsImpl::HasDebugNames() const { return GetDebugNames() != nullptr; }
 
-const llvm::DWARFDebugNames* ModuleSymbolsImpl::GetDebugNames() const {
+const DebugNamesReader* ModuleSymbolsImpl::GetDebugNames() const {
   return force_slow_index_ ? nullptr : binary_->GetDebugNames();
 }
 
@@ -400,18 +400,16 @@ void ModuleSymbolsImpl::SetForceSlowIndex(bool force) { force_slow_index_ = forc
 bool ModuleSymbolsImpl::force_slow_index() const { return force_slow_index_; }
 
 std::vector<DebugNamesEntry> ModuleSymbolsImpl::FindDebugNamesEntries(std::string_view name) const {
-  if (!HasDebugNames()) {
-    return {};
-  }
-  return zxdb::FindDebugNamesEntries(*GetDebugNames(), name);
+  if (const auto* names = GetDebugNames())
+    return zxdb::FindDebugNamesEntries(*names, name);
+  return {};
 }
 
 std::vector<DebugNamesEntry> ModuleSymbolsImpl::FindDebugNamesPrefixEntries(
     std::string_view prefix) const {
-  if (!HasDebugNames()) {
-    return {};
-  }
-  return zxdb::FindDebugNamesPrefixEntries(*GetDebugNames(), *binary_, prefix);
+  if (const auto* names = GetDebugNames())
+    return zxdb::FindDebugNamesPrefixEntries(*names, prefix);
+  return {};
 }
 
 LazySymbol ModuleSymbolsImpl::IndexSymbolRefToSymbol(const IndexNode::SymbolRef& ref) const {

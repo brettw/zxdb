@@ -10,6 +10,7 @@
 
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/common/err.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/debug_names_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/unit_header.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_symbol_factory.h"
@@ -69,7 +70,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
   std::optional<uint64_t> GetDebugAddrEntry(uint64_t addr_base, uint64_t index) const override;
   llvm::DWARFDie GetLLVMDieAtOffset(DwarfDieRef die_ref) const override;
   DwarfDieRef GetDieRefForSignature(uint64_t signature) const override;
-  const llvm::DWARFDebugNames* GetDebugNames() const override;
+  const DebugNamesReader* GetDebugNames() const override;
   std::shared_ptr<const LineFileTable> GetLineFileTable(llvm::DWARFUnit* unit,
                                                         uint64_t file_index) const override;
   uint64_t GetFirstCodeAddress() const override { return first_code_address_; }
@@ -107,6 +108,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
   std::unique_ptr<llvm::object::Binary> binary_;
   std::unique_ptr<llvm::DWARFContext> context_;  // binary_ must outlive this.
   DwarfSections sections_;                       // Views into the sections of context_.
+  std::optional<DebugNamesReader> debug_names_;
   UnitList info_units_;
   UnitList types_units_;
   UnitList info_dwo_units_;

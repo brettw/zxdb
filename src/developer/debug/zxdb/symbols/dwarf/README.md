@@ -35,6 +35,11 @@
 - `ArangesSet::Parse()` reads one `.debug_aranges` set. It returns the
   ranges, the compilation unit offset, the next set offset, and the
   offsets of any early terminators.
+- `DebugNamesReader::Parse()` reads the contributions in `.debug_names`.
+  `LookupName()` visits the entries for an exact name. `LookupHash()`
+  visits the entries for all names with a given stored hash.
+  `VisitNamesWithPrefix()` visits the names that start with the prefix.
+  `ReadParent()` reads the parent record for one entry.
 - `DwarfSectionBuilder` and `DwarfStringSectionBuilder` write section bytes
   for tests. `DwarfSectionBuilder` writes unit headers and abbreviation
   declarations. It can write raw unit lengths for error tests. The build
@@ -107,6 +112,24 @@
   Both the aranges and range list readers require a zero segment selector
   size. An aranges set requires a zero tuple at its end. The reader skips
   earlier zero tuples, empty ranges, and tuples with overflowing end addresses.
+- A name index uses the declared contribution length to bound its tables and
+  entry pool. The reader keeps the earlier contributions and records the first
+  parse error. An invalid entry ends its list. Other lists stay available.
+- The name index reads fields in the byte order of the file and uses the
+  DWARF32 or DWARF64 offset width. It reads CU and local TU offsets, foreign
+  TU signatures, and entry pool offsets from validated table spans.
+- A zero bucket count means that the index has no hash table. A zero bucket
+  value means that the bucket is empty. Exact lookup scans a hashless index
+  by name. Hash lookup uses the stored hashes and skips hashless indexes.
+  Exact lookup compares the original spelling after a case-folded hash match.
+- The reader decodes entry attributes with `ReadForm()`. A TU index takes
+  precedence over a CU index. A single CU is implicit when the entry omits
+  its CU index. Parent offsets are relative to the entry pool.
+  `DW_FORM_flag_present` means that the parent has no entry in the pool.
+- The parsed name indexes have no lazy state. Lookups can share the reader
+  across threads while the section bytes stay alive. For relocatable objects
+  the caller can supply relocated CU, local TU, and string offsets at parse
+  time.
 - A parsed context has no lazy state. It borrows the section bytes, including
   the skeleton's address and range sections when applicable. Readers can share the
   context across threads while the section bytes stay alive. The reader
@@ -119,4 +142,4 @@ Reads change only the reader's cursor and error state.
 ## Verification
 
 - Build with `cmake --build build --target zxdb_dwarf zxdb_tests`.
-- Run `FUCHSIA_ANALYTICS_DISABLED=1 ./build/zxdb_tests --gtest_filter='AbbrevTable.*:ArangesReader.*:DataReader.*:DwarfSectionBuilder.*:FormValue.*:Dwarf2To5/FormEncodingTest.*:RangeListReader.*:UnitContext.*:UnitHeader.*:UnitList.*'`.
+- Run `FUCHSIA_ANALYTICS_DISABLED=1 ./build/zxdb_tests --gtest_filter='AbbrevTable.*:ArangesReader.*:DataReader.*:DebugNamesReader.*:DwarfSectionBuilder.*:FormValue.*:Dwarf2To5/FormEncodingTest.*:RangeListReader.*:UnitContext.*:UnitHeader.*:UnitList.*'`.

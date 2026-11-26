@@ -48,7 +48,7 @@ TEST(DwarfDebugNamesTest, LookupBuiltBinary) {
   ASSERT_TRUE(module);
   EXPECT_TRUE(module->HasDebugNames());
 
-  const llvm::DWARFDebugNames* debug_names = module->GetDebugNames();
+  const DebugNamesReader* debug_names = module->GetDebugNames();
   ASSERT_TRUE(debug_names);
 
   // Look up a known global function by unqualified name.
@@ -128,28 +128,24 @@ TEST(DwarfDebugNamesTest, LookupBuiltBinary) {
   EXPECT_TRUE(missing.empty());
 
   // Prefix searches find symbols beginning with the prefix string.
-  auto prefix_entries = FindDebugNamesPrefixEntries(*debug_names, *module->binary(), "My");
+  auto prefix_entries = FindDebugNamesPrefixEntries(*debug_names, "My");
   EXPECT_FALSE(prefix_entries.empty());
 
   // Single-character, embedded-NUL, and oversized prefixes stay within .debug_str bounds.
-  EXPECT_FALSE(FindDebugNamesPrefixEntries(*debug_names, *module->binary(), "M").empty());
-  EXPECT_TRUE(FindDebugNamesPrefixEntries(*debug_names, *module->binary(),
-                                          std::string_view("MyFunction\0extra", 16))
-                  .empty());
+  EXPECT_FALSE(FindDebugNamesPrefixEntries(*debug_names, "M").empty());
+  EXPECT_TRUE(
+      FindDebugNamesPrefixEntries(*debug_names, std::string_view("MyFunction\0extra", 16)).empty());
   std::string long_symbol_prefix =
       std::string(TestSymbolModule::kMyFunctionName) + std::string(4096, 'x');
-  EXPECT_TRUE(
-      FindDebugNamesPrefixEntries(*debug_names, *module->binary(), long_symbol_prefix).empty());
+  EXPECT_TRUE(FindDebugNamesPrefixEntries(*debug_names, long_symbol_prefix).empty());
   ASSERT_TRUE(module->binary()->GetLLVMContext());
   size_t str_sec_size = module->binary()->GetSections().str.size();
   std::string oversized_prefix(str_sec_size + 1024, 'M');
-  EXPECT_TRUE(
-      FindDebugNamesPrefixEntries(*debug_names, *module->binary(), oversized_prefix).empty());
+  EXPECT_TRUE(FindDebugNamesPrefixEntries(*debug_names, oversized_prefix).empty());
 
   // Empty prefix queries return empty without out-of-bounds access.
-  EXPECT_TRUE(FindDebugNamesPrefixEntries(*debug_names, *module->binary(), "").empty());
-  EXPECT_TRUE(
-      FindDebugNamesPrefixEntries(*debug_names, *module->binary(), std::string_view()).empty());
+  EXPECT_TRUE(FindDebugNamesPrefixEntries(*debug_names, "").empty());
+  EXPECT_TRUE(FindDebugNamesPrefixEntries(*debug_names, std::string_view()).empty());
 
   // Resolving symbol input locations functions via .debug_names lookup.
   SymbolContext symbol_context = SymbolContext::ForRelativeAddresses();

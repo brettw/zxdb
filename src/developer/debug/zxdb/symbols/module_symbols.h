@@ -23,10 +23,6 @@
 #include "src/lib/fxl/memory/ref_counted.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
 
-namespace llvm {
-class DWARFDebugNames;
-}  // namespace llvm
-
 namespace zxdb {
 
 class DwarfUnit;
@@ -171,7 +167,7 @@ class ModuleSymbols : public fxl::RefCountedThreadSafe<ModuleSymbols> {
   virtual bool HasDebugNames() const { return false; }
 
   // Returns the DWARF v5 .debug_names accelerator table for this module, or nullptr if absent.
-  virtual const llvm::DWARFDebugNames* GetDebugNames() const { return nullptr; }
+  virtual const DebugNamesReader* GetDebugNames() const { return nullptr; }
 
   // Returns matching entries from the DWARF v5 .debug_names accelerator table, or an empty vector
   // if absent.

@@ -11,13 +11,12 @@
 #include <string_view>
 #include <vector>
 
-#include "llvm/DebugInfo/DWARF/DWARFAcceleratorTable.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 
 namespace zxdb {
 
-class DwarfBinary;
+class DebugNamesReader;
 
 // Represents a matching entry resolved from the DWARF v5 .debug_names accelerator table.
 struct DebugNamesEntry {
@@ -31,14 +30,13 @@ struct DebugNamesEntry {
 //
 // Computes absolute DIE offsets from compile unit or local type unit offsets, safely handling
 // unit offset 0.
-std::vector<DebugNamesEntry> FindDebugNamesEntries(const llvm::DWARFDebugNames& debug_names,
+std::vector<DebugNamesEntry> FindDebugNamesEntries(const DebugNamesReader& debug_names,
                                                    std::string_view name);
 
 // Looks up all entries whose name starts with prefix in the DWARF v5 accelerator table.
 //
 // Iterates the name table entries across all name indexes in the section.
-std::vector<DebugNamesEntry> FindDebugNamesPrefixEntries(const llvm::DWARFDebugNames& debug_names,
-                                                         const DwarfBinary& binary,
+std::vector<DebugNamesEntry> FindDebugNamesPrefixEntries(const DebugNamesReader& debug_names,
                                                          std::string_view prefix);
 
 // Returns true if the .debug_names table at the offset of the section uses the 32-bit DWARF format.

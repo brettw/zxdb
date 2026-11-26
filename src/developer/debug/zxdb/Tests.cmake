@@ -211,6 +211,7 @@ add_executable(zxdb_tests
   symbols/dwarf/abbrev_table_unittest.cc
   symbols/dwarf/aranges_reader_unittest.cc
   symbols/dwarf/data_reader_unittest.cc
+  symbols/dwarf/debug_names_reader_unittest.cc
   symbols/dwarf/dwarf_section_builder.cc
   symbols/dwarf/dwarf_section_builder_unittest.cc
   symbols/dwarf/form_value_unittest.cc

@@ -14,9 +14,9 @@
 #include <unordered_set>
 
 #include <llvm/DebugInfo/DIContext.h>
-#include <llvm/DebugInfo/DWARF/DWARFAcceleratorTable.h>
 #include <llvm/DebugInfo/DWARF/DWARFCompileUnit.h>
 #include <llvm/DebugInfo/DWARF/DWARFContext.h>
+#include <llvm/DebugInfo/DWARF/DWARFDataExtractor.h>
 #include <llvm/DebugInfo/DWARF/DWARFObject.h>
 #include <llvm/DebugInfo/DWARF/DWARFUnit.h>
 #include <llvm/Object/Binary.h>
@@ -268,6 +268,17 @@ Err DwarfBinaryImpl::Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
                                         llvm::DWARFContext::ProcessDebugRelocations::Process,
                                         nullptr, "", &LLVMErrorHandler);
   sections_ = GetDwarfSections(*context_);
+  if (GetLLVMObjectFile()->isRelocatableObject() && !sections_.names.empty()) {
+    // In a relocatable object LLVM keeps the relocations separate from the section bytes.
+    // Resolve name index table relocations before publishing the reader.
+    const auto& object = context_->getDWARFObj();
+    llvm::DWARFDataExtractor data(object, object.getNamesSection(), object.isLittleEndian(), 0);
+    debug_names_ = DebugNamesReader::Parse(sections_, [&data](uint64_t offset, uint8_t width) {
+      return data.getRelocatedValue(width, &offset);
+    });
+  } else {
+    debug_names_ = DebugNamesReader::Parse(sections_);
+  }
   info_units_ = UnitList::Parse(sections_.info, sections_.endian, UnitSection::kInfo);
   types_units_ = UnitList::Parse(sections_.types, sections_.endian, UnitSection::kTypes);
   info_dwo_units_ = UnitList::Parse(sections_.info_dwo, sections_.endian, UnitSection::kInfo);
@@ -453,13 +464,8 @@ DwarfDieRef DwarfBinaryImpl::GetDieRefForSignature(uint64_t signature) const {
   return found->second;
 }
 
-const llvm::DWARFDebugNames* DwarfBinaryImpl::GetDebugNames() const {
-  if (!context_)
-    return nullptr;
-  const auto& names = context_->getDebugNames();
-  if (names.begin() == names.end())
-    return nullptr;
-  return &names;
+const DebugNamesReader* DwarfBinaryImpl::GetDebugNames() const {
+  return debug_names_ && debug_names_->index_count() != 0 ? &*debug_names_ : nullptr;
 }
 
 std::shared_ptr<const LineFileTable> DwarfBinaryImpl::GetLineFileTable(llvm::DWARFUnit* unit,
