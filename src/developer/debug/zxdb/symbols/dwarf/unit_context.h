@@ -19,6 +19,7 @@
 namespace zxdb {
 
 struct DwarfSections;
+class RangeListReader;
 
 // Values from the first DIE of a unit. The context borrows section bytes and has no lazy state.
 // Keep the unit and skeleton section bytes alive while using it.
@@ -87,6 +88,8 @@ class UnitContext {
   std::optional<uint64_t> ReadLoclistOffset(uint64_t index) const;
 
  private:
+  friend class RangeListReader;
+
   UnitContext() = default;
 
   std::span<const uint8_t> str_;
@@ -94,6 +97,10 @@ class UnitContext {
   std::span<const uint8_t> str_offsets_;
   std::span<const uint8_t> addr_;
   std::span<const uint8_t> loclists_;
+  std::span<const uint8_t> ranges_section_;
+  std::span<const uint8_t> rnglists_;
+  uint64_t rnglists_section_offset_ = 0;
+  bool is_dwo_ = false;
   FormParams params_;
   Endian endian_;
   uint8_t addr_entry_size_;
@@ -110,6 +117,7 @@ class UnitContext {
   std::optional<std::string_view> compilation_dir_;
   std::optional<uint64_t> base_address_;
   std::optional<uint64_t> low_pc_;
+  std::optional<FormValue> high_pc_;
   std::optional<uint64_t> stmt_list_;
   std::optional<FormValue> ranges_;
 };

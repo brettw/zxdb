@@ -7,6 +7,7 @@
 #include <lib/syslog/cpp/macros.h>
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -16,7 +17,6 @@
 #include <llvm/DebugInfo/DWARF/DWARFAcceleratorTable.h>
 #include <llvm/DebugInfo/DWARF/DWARFCompileUnit.h>
 #include <llvm/DebugInfo/DWARF/DWARFContext.h>
-#include <llvm/DebugInfo/DWARF/DWARFDebugArangeSet.h>
 #include <llvm/DebugInfo/DWARF/DWARFObject.h>
 #include <llvm/DebugInfo/DWARF/DWARFUnit.h>
 #include <llvm/Object/Binary.h>
@@ -26,7 +26,9 @@
 
 #include "src/developer/debug/shared/logging/logging.h"
 #include "src/developer/debug/zxdb/common/file_util.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/aranges_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/range_list_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit_impl.h"
 #include "src/lib/elflib/elflib.h"
@@ -109,41 +111,49 @@ void LLVMErrorHandler(llvm::Error error) {
 // To work around https://github.com/llvm/llvm-project/issues/58641.
 class DwarfBinaryImpl::DebugAranges {
  public:
-  explicit DebugAranges(llvm::DWARFContext* context) {
+  DebugAranges(llvm::DWARFContext& context, const DwarfSections& sections) {
     std::unordered_set<uint64_t> parsed_units;
 
     // Extract aranges from .debug_aranges section first.
-    llvm::DWARFDataExtractor aranges(context->getDWARFObj().getArangesSection(),
-                                     context->isLittleEndian(), 0);
-    uint64_t aranges_offset = 0;
-
-    while (aranges.isValidOffset(aranges_offset)) {
-      llvm::DWARFDebugArangeSet set;
-      if (auto err = set.extract(aranges, &aranges_offset, OnWarning)) {
-        LOGS(Error) << llvm::toString(std::move(err));
+    for (uint64_t aranges_offset = 0; aranges_offset < sections.aranges.size();) {
+      auto decoded = ArangesSet::Parse(sections.aranges, aranges_offset, sections.endian);
+      if (decoded.has_error()) {
+        LOGS(Error) << decoded.err().msg();
         break;
       }
-      uint64_t offset = set.getCompileUnitDIEOffset();
-      for (const auto& desc : set.descriptors()) {
-        // getEndAddress() might overflow.
-        if (desc.Address && desc.getEndAddress() > desc.Address)
-          ranges_.push_back({desc.Address, desc.getEndAddress(), offset});
+      const ArangesSet& set = decoded.value();
+      for (uint64_t offset : set.premature_terminators()) {
+        LOGS(Warn) << Err("DWARF address range set at offset 0x%" PRIx64
+                          " has a premature terminator at offset 0x%" PRIx64,
+                          aranges_offset, offset)
+                          .msg();
       }
-      parsed_units.insert(offset);
+      for (const auto& range : set.ranges()) {
+        if (range.begin() != 0)
+          ranges_.push_back({range.begin(), range.end(), set.unit_offset()});
+      }
+      parsed_units.insert(set.unit_offset());
+      aranges_offset = set.next_offset();
     }
 
     // Generate aranges from compile units because .debug_aranges could be incomplete.
     // But we can skip those units that we have parsed.
-    for (const auto& compile_unit : context->compile_units()) {
+    for (const auto& compile_unit : context.compile_units()) {
       uint64_t offset = compile_unit->getOffset();
       if (parsed_units.insert(offset).second) {
-        if (auto ranges = compile_unit->collectAddressRanges()) {
-          for (const auto& range : *ranges) {
-            if (range.LowPC && range.HighPC > range.LowPC)
-              ranges_.push_back({range.LowPC, range.HighPC, offset});
-          }
-        } else {
-          LOGS(Error) << llvm::toString(ranges.takeError());
+        auto unit = ReadUnitContext(sections, *compile_unit);
+        if (unit.has_error()) {
+          LOGS(Error) << unit.err().msg();
+          continue;
+        }
+        auto ranges = RangeListReader::ReadUnitRanges(unit.value());
+        if (ranges.has_error()) {
+          LOGS(Error) << ranges.err().msg();
+          continue;
+        }
+        for (const auto& range : ranges.value()) {
+          if (range.begin() != 0)
+            ranges_.push_back({range.begin(), range.end(), offset});
         }
       }
     }
@@ -173,8 +183,6 @@ class DwarfBinaryImpl::DebugAranges {
   }
 
  private:
-  static void OnWarning(llvm::Error err) { LOGS(Warn) << llvm::toString(std::move(err)); }
-
   struct Range {
     uint64_t begin;
     uint64_t end;
@@ -349,7 +357,7 @@ fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::GetUnitAtIndex(UnitIndex i) {
 
 fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::UnitForRelativeAddress(uint64_t relative_address) {
   if (!debug_aranges_) {
-    debug_aranges_ = std::make_unique<DebugAranges>(context_.get());
+    debug_aranges_ = std::make_unique<DebugAranges>(*context_, sections_);
   }
   auto offset = debug_aranges_->FindAddress(relative_address);
   if (!offset)

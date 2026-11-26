@@ -123,11 +123,17 @@ Callers and implementations must preserve these invariants:
   (https://fxbug.dev/583730372).
 - All file names from line tables come from `ResolveLineFileName()`, so names
   from line rows, `DW_AT_decl_file`, and the file index compare equal.
-- The line table and location list parsers and the `.debug_names` fast scan
-  read section bytes from `DwarfSections`. `dwarf_sections_llvm.cc` maps LLVM
-  sections to these views. `UnitContext` reads unit DIE metadata for string
-  offsets, indexed addresses, location lists, and compilation directories.
-  LLVM supplies the DIE tree and the line table offset.
+- The line table, location list, range list, and aranges parsers read section
+  bytes from `DwarfSections`. The `.debug_names` fast scan also uses these views.
+  `dwarf_sections_llvm.cc` maps the LLVM sections to these views. The byte
+  readers expect any required ELF relocations to be applied to the bytes.
+  `UnitContext` reads root DIE metadata for string offsets, indexed addresses,
+  location lists, range lists, and compilation directories. LLVM supplies the
+  DIE tree and the line table offset.
+- The address-to-unit map uses `.debug_aranges` first. It uses root DIE ranges
+  for units without a parsed set and clips overlaps at the start of the later
+  range. The map and the symbol factory omit ranges that start at address
+  zero because the linker can use zero for removed code.
 - `IsStrippedSequenceStart()` is the only rule for removed code: a sequence
   that starts below `DwarfBinary::GetFirstCodeAddress()`. This matches LLDB.
   `LineTable` drops those sequences, and the file index ignores their files.

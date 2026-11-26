@@ -209,10 +209,12 @@ add_executable(zxdb_tests
   symbols/collection_unittest.cc
   symbols/const_value_unittest.cc
   symbols/dwarf/abbrev_table_unittest.cc
+  symbols/dwarf/aranges_reader_unittest.cc
   symbols/dwarf/data_reader_unittest.cc
   symbols/dwarf/dwarf_section_builder.cc
   symbols/dwarf/dwarf_section_builder_unittest.cc
   symbols/dwarf/form_value_unittest.cc
+  symbols/dwarf/range_list_reader_unittest.cc
   symbols/dwarf/unit_context_unittest.cc
   symbols/dwarf/unit_header_unittest.cc
   symbols/dwarf_abstract_child_iterator_unittest.cc

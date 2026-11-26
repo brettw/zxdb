@@ -7,10 +7,8 @@
 
 #include <span>
 
-#include <llvm/DebugInfo/DWARF/DWARFAddressRange.h>
-#include <llvm/Support/Error.h>  // For llvm::Expected.
-
-#include "src/developer/debug/zxdb/common/address_range.h"
+#include "src/developer/debug/zxdb/common/address_ranges.h"
+#include "src/developer/debug/zxdb/common/err_or.h"
 #include "src/developer/debug/zxdb/symbols/array_type.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_lang.h"
@@ -27,7 +25,6 @@ class DWARFUnit;
 
 namespace zxdb {
 
-class AddressRanges;
 class BaseType;
 class CompileUnit;
 class DwarfBinaryImpl;
@@ -35,6 +32,7 @@ class DwarfDieDecoder;
 class LazySymbol;
 class ModuleSymbols;
 class UncachedLazySymbol;
+class UnitContext;
 class VariableLocation;
 
 // Implementation of SymbolFactory that reads from the DWARF symbols in the given DwarfBinary.
@@ -154,12 +152,13 @@ class DwarfSymbolFactory : public SymbolFactory {
   // function will compute what it can given the information (which may be an empty vector).
   AddressRanges GetCodeRanges(const DwarfDieDecoder& decoder) const;
 
-  // Returns the single code range if it's encoded with DW_AT_low_pc and DW_AT_high_pc.
-  std::optional<AddressRange> GetLowHighEncodedCodeRange(const DwarfDieDecoder& decoder) const;
+  // Returns the range from DW_AT_low_pc and DW_AT_high_pc. An empty set means that the
+  // pair describes no code. An empty optional means that there is no usable pair.
+  std::optional<AddressRanges> GetLowHighEncodedCodeRange(const DwarfDieDecoder& decoder) const;
 
-  // Decodes the index for a DW_FORM_rnglistx encoding. The unit is the unit of the attribute.
-  llvm::Expected<llvm::DWARFAddressRangesVector> GetCodeRangesFromRangelistXIndex(
-      llvm::DWARFUnit* unit, uint64_t index) const;
+  // Uses the range list contribution and address table selected for the attribute's unit.
+  ErrOr<AddressRanges::RangeVector> GetCodeRangesFromRangelistXIndex(const UnitContext& unit,
+                                                                     uint64_t index) const;
 
   // These can be null if the module is unloaded but there are still some dangling type references
   // to them.

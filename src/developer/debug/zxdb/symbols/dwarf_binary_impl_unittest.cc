@@ -14,10 +14,12 @@
 
 #include <gtest/gtest.h>
 
+#include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/module_symbols_impl.h"
 #include "src/developer/debug/zxdb/symbols/test_symbol_module.h"
+#include "src/lib/elflib/elflib.h"
 #include "src/lib/files/file.h"
 #include "src/lib/files/scoped_temp_dir.h"
 
@@ -85,6 +87,60 @@ TEST(DwarfBinaryImpl, DebugAddr) {
   EXPECT_EQ(std::nullopt, binary.GetDebugAddrEntry(binary.GetSections().addr.size(), 0));
   EXPECT_EQ(std::nullopt, binary.GetDebugAddrEntry(kAddrBase, UINT64_MAX / 8 + 1));
   EXPECT_EQ(std::nullopt, binary.GetDebugAddrEntry(UINT64_MAX - 7, 2));
+}
+
+TEST(DwarfBinaryImpl, UnitAddressFallbackUsesRootRnglist) {
+  TestSymbolModule setup(TestSymbolModule::GetCheckedInTestFileName(), "");
+  ASSERT_TRUE(setup.Init().ok());
+  DwarfBinary& binary = *setup.symbols()->binary();
+  ASSERT_TRUE(binary.GetSections().aranges.empty());
+
+  // MyFunction(int) is in the third CU, whose root DIE describes its code with DW_FORM_rnglistx.
+  auto expected_unit = binary.GetUnitAtIndex(UnitIndex(false, 2));
+  ASSERT_TRUE(expected_unit);
+  EXPECT_EQ(expected_unit, binary.UnitForRelativeAddress(0x1420));
+  EXPECT_EQ(expected_unit, binary.UnitForRelativeAddress(0x14cc));
+  EXPECT_FALSE(binary.UnitForRelativeAddress(0x14cd));
+}
+
+TEST(DwarfBinaryImpl, UnitAddressArangesMerge) {
+  std::string elf;
+  ASSERT_TRUE(
+      files::ReadFileToString(TestSymbolModule::GetTestDataDir() + "fission/fission", &elf));
+  const auto* bytes = reinterpret_cast<const uint8_t*>(elf.data());
+  auto object = elflib::ElfLib::Create(bytes, elf.size());
+  ASSERT_TRUE(object);
+  auto aranges = object->GetSectionData(".debug_aranges");
+  ASSERT_TRUE(aranges.ptr);
+  ASSERT_EQ(96u, aranges.size);  // Two 48-byte sets.
+
+  // Move the first set's start past the first CU's low PC and extend it into the second CU.
+  // Invalidate the second set's header. The second CU's root range starts at 0x1165.
+  size_t section_offset = aranges.ptr - bytes;
+  std::vector<uint8_t> tuple;
+  DwarfSectionBuilder tuple_builder(tuple, Endian::kLittle);
+  tuple_builder.Address(0x113a, 8);
+  tuple_builder.Address(0x40, 8);
+  elf.replace(section_offset + 16, tuple.size(), reinterpret_cast<const char*>(tuple.data()),
+              tuple.size());
+  elf[section_offset + 48] = 0;
+
+  files::ScopedTempDir temp_dir;
+  std::string path;
+  ASSERT_TRUE(temp_dir.NewTempFileWithData(elf, &path));
+  TestSymbolModule setup(path, "");
+  ASSERT_TRUE(setup.Init().ok());
+  DwarfBinary& binary = *setup.symbols()->binary();
+  auto first = binary.GetUnitAtIndex(UnitIndex(false, 0));
+  auto second = binary.GetUnitAtIndex(UnitIndex(false, 1));
+  ASSERT_TRUE(first);
+  ASSERT_TRUE(second);
+  EXPECT_FALSE(binary.UnitForRelativeAddress(0x1139));
+  EXPECT_EQ(first, binary.UnitForRelativeAddress(0x113a));
+  EXPECT_EQ(first, binary.UnitForRelativeAddress(0x1164));
+  EXPECT_EQ(second, binary.UnitForRelativeAddress(0x1165));
+  EXPECT_EQ(second, binary.UnitForRelativeAddress(0x1183));
+  EXPECT_FALSE(binary.UnitForRelativeAddress(0x1184));
 }
 
 TEST(DwarfBinaryImpl, Dwarf4TypeUnits) {

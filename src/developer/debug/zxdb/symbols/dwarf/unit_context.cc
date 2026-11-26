@@ -141,7 +141,7 @@ ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitH
       DwarfAttr::kStrOffsetsBase, DwarfAttr::kAddrBase,      DwarfAttr::kGnuAddrBase,
       DwarfAttr::kRnglistsBase,   DwarfAttr::kGnuRangesBase, DwarfAttr::kLoclistsBase,
       DwarfAttr::kCompDir,        DwarfAttr::kLowPc,         DwarfAttr::kEntryPc,
-      DwarfAttr::kRanges,         DwarfAttr::kStmtList,
+      DwarfAttr::kRanges,         DwarfAttr::kStmtList,      DwarfAttr::kHighPc,
   };
   std::array<std::optional<FormValue>, kAttributes.size()> values;
   auto find = [&](DwarfAttr attr) -> std::optional<FormValue>& {
@@ -166,6 +166,7 @@ ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitH
   UnitContext result;
   result.params_ = params;
   result.endian_ = sections.endian;
+  result.is_dwo_ = options.is_dwo;
   result.str_ = options.is_dwo ? sections.str_dwo : sections.str;
   result.line_str_ = sections.line_str;
   result.str_offsets_ = options.is_dwo ? sections.str_offsets_dwo : sections.str_offsets;
@@ -173,24 +174,24 @@ ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitH
   result.addr_entry_size_ = header.address_size;
   result.addr_endian_ = sections.endian;
   result.loclists_ = options.is_dwo ? sections.loclists_dwo : sections.loclists;
+  result.ranges_section_ = sections.ranges;
+  result.rnglists_ = options.is_dwo ? sections.rnglists_dwo : sections.rnglists;
 
   auto offset = [&](DwarfAttr attr) { return SectionOffset(find(attr), header.version); };
   if (options.is_dwo) {
     // LLVM and LLDB use the split contributions for the DWARF 5 lists and strings.
     if (header.version >= 5) {
       uint64_t prefix_size = length_size + 8;
-      auto rnglists = sections.rnglists_dwo;
-      uint64_t rnglists_start = 0;
       if (options.package) {
         result.loclists_ = SliceContribution(result.loclists_, options.package->loclists);
-        rnglists = SliceContribution(rnglists, options.package->rnglists);
+        result.rnglists_ = SliceContribution(result.rnglists_, options.package->rnglists);
         if (options.package->rnglists)
-          rnglists_start = options.package->rnglists->offset;
+          result.rnglists_section_offset_ = options.package->rnglists->offset;
       }
       if (result.loclists_.size() >= prefix_size)
         result.loclists_base_ = prefix_size;
-      if (rnglists.size() >= prefix_size)
-        result.rnglists_base_ = rnglists_start + prefix_size;
+      if (result.rnglists_.size() >= prefix_size)
+        result.rnglists_base_ = result.rnglists_section_offset_ + prefix_size;
     }
     const UnitContext* address_table = options.skeleton ? options.skeleton : options.address_table;
     if (address_table) {
@@ -199,8 +200,10 @@ ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitH
       result.addr_entry_size_ = address_table->addr_entry_size_;
       result.addr_endian_ = address_table->addr_endian_;
     }
-    if (options.skeleton && header.version <= 4)
+    if (options.skeleton && header.version <= 4) {
       result.ranges_base_ = options.skeleton->gnu_ranges_base_;
+      result.ranges_section_ = options.skeleton->ranges_section_;
+    }
   } else {
     result.str_offsets_base_ = offset(DwarfAttr::kStrOffsetsBase);
     result.addr_base_ = offset(DwarfAttr::kAddrBase);
@@ -221,6 +224,7 @@ ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitH
     result.compilation_dir_ = result.ResolveString(*dir);
   if (const auto& low_pc = find(DwarfAttr::kLowPc))
     result.low_pc_ = result.ResolveAddress(*low_pc);
+  result.high_pc_ = find(DwarfAttr::kHighPc);
 
   // LLVM's getBaseAddress() uses the linked skeleton's PC. Otherwise it prefers low_pc,
   // including zero. It tries entry_pc only when low_pc is absent.

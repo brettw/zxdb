@@ -28,6 +28,13 @@
   reference, and line table offset. `ResolveString()` and `ResolveAddress()`
   resolve forms that use the unit's sections and tables. `ReadAddress()` and
   `ReadLoclistOffset()` take table indices.
+- `RangeListReader` reads `.debug_ranges` in DWARF 2 through 4 and
+  `.debug_rnglists` in DWARF 5. `ReadFromOffset()` takes a list offset and
+  `ReadFromIndex()` takes a `DW_FORM_rnglistx` index. `ReadUnitRanges()`
+  reads the root DIE's low and high PCs or its range list.
+- `ArangesSet::Parse()` reads one `.debug_aranges` set. It returns the
+  ranges, the compilation unit offset, the next set offset, and the
+  offsets of any early terminators.
 - `DwarfSectionBuilder` and `DwarfStringSectionBuilder` write section bytes
   for tests. `DwarfSectionBuilder` writes unit headers and abbreviation
   declarations. It can write raw unit lengths for error tests. The build
@@ -84,8 +91,24 @@
   in the string offsets contribution. A location list index must fit in the
   offset array, and its target must follow that array in the same
   contribution. Package contribution bounds come from the caller.
+- A DWARF 5 range list index must fit in the offset array. The list must
+  start after the array and end within the same contribution. A direct
+  offset also uses these bounds when the unit identifies its contribution.
+  Without a table base, a direct offset in a main unit uses section bounds
+  and an index uses the first table.
+- A split DWARF 4 unit reads the skeleton's `.debug_ranges` section.
+  A split DWARF 5 unit reads its own `.debug_rnglists.dwo` contribution.
+  In a package, direct offsets are relative to the start of the contribution.
+- Range lists end with a terminator. A bad entry or address overflow causes
+  an error for the list. The reader skips empty ranges, reversed ranges, and
+  tombstones. It keeps the other ranges in input order.
+- An aranges set aligns tuples to the tuple size relative to the set start.
+  It accepts versions 2 through 5 and address sizes of 2, 4, and 8 bytes.
+  Both the aranges and range list readers require a zero segment selector
+  size. An aranges set requires a zero tuple at its end. The reader skips
+  earlier zero tuples, empty ranges, and tuples with overflowing end addresses.
 - A parsed context has no lazy state. It borrows the section bytes, including
-  the skeleton's address section when applicable. Readers can share the
+  the skeleton's address and range sections when applicable. Readers can share the
   context across threads while the section bytes stay alive. The reader
   expects section bytes with ELF relocations already applied.
 
@@ -96,4 +119,4 @@ Reads change only the reader's cursor and error state.
 ## Verification
 
 - Build with `cmake --build build --target zxdb_dwarf zxdb_tests`.
-- Run `FUCHSIA_ANALYTICS_DISABLED=1 ./build/zxdb_tests --gtest_filter='AbbrevTable.*:DataReader.*:DwarfSectionBuilder.*:FormValue.*:Dwarf2To5/FormEncodingTest.*:UnitContext.*:UnitHeader.*:UnitList.*'`.
+- Run `FUCHSIA_ANALYTICS_DISABLED=1 ./build/zxdb_tests --gtest_filter='AbbrevTable.*:ArangesReader.*:DataReader.*:DwarfSectionBuilder.*:FormValue.*:Dwarf2To5/FormEncodingTest.*:RangeListReader.*:UnitContext.*:UnitHeader.*:UnitList.*'`.
