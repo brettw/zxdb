@@ -223,6 +223,7 @@ add_executable(zxdb_tests
   symbols/dwarf_debug_names_unittest.cc
   symbols/dwarf_attr_unittest.cc
   symbols/dwarf_die_decoder_unittest.cc
+  symbols/dwarf_die_unittest.cc
   symbols/dwarf_die_ref_unittest.cc
   symbols/dwarf_expr_eval_unittest.cc
   symbols/dwarf_form_unittest.cc

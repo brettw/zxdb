@@ -304,7 +304,7 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
     }
 
     // This DIE is of the type we want to index so decode.
-    if (!decoder.Decode(llvm::DWARFDie(unit_.GetLLVMUnit(), die)))
+    if (!decoder.Decode(DwarfDie(llvm::DWARFDie(unit_.GetLLVMUnit(), die))))
       continue;
 
     if (kind == IndexNode::Kind::kVar &&
@@ -337,10 +337,10 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
       // Unfortunately, we need to decode again here to get the actual type instantiation. This
       // should be relatively quick and there should still be an overall speedup when using
       // -gsimple-template-names due to the drastically reduced symbol size.
-      if (!type_decoder_.Decode(llvm::DWARFDie(unit_.GetLLVMUnit(), die)))
+      if (!type_decoder_.Decode(DwarfDie(llvm::DWARFDie(unit_.GetLLVMUnit(), die))))
         continue;
 
-      if (llvm::DWARFDie type_die = type_decoder_.GetReference(DwarfAttr::kType)) {
+      if (llvm::DWARFDie type_die = type_decoder_.GetReference(DwarfAttr::kType).llvm_die()) {
         AddTemplateParameterToName(fixup_template_name, type_die.getShortName());
         parent.set_name(std::move(fixup_template_name));
         parent.set_has_modified_template_name();
@@ -351,7 +351,7 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
 
     // Compute the offset of a separate declaration if this DIE has one. This can be unit-relative
     // or .debug_info-relative (global).
-    llvm::DWARFDie decl = decoder.GetReference(DwarfAttr::kSpecification);
+    llvm::DWARFDie decl = decoder.GetReference(DwarfAttr::kSpecification).llvm_die();
     uint64_t decl_offset = decl ? decl.getOffset() : 0;
 
     FX_DCHECK(scanner_.die_index() < indexable_.size());
@@ -367,7 +367,7 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
     if (kind == IndexNode::Kind::kFunction) {
       IndexFunctionNames(*names, indexable_[scanner_.die_index()],
                          llvm::DWARFDie(unit_.GetLLVMUnit(), die),
-                         decl ? decl : decoder.GetReference(DwarfAttr::kAbstractOrigin));
+                         decl ? decl : decoder.GetReference(DwarfAttr::kAbstractOrigin).llvm_die());
     }
 
     // Check for "main" function annotation.
@@ -449,7 +449,7 @@ IndexNode::Kind UnitIndexer::GetKindForDie(const llvm::DWARFDebugInfoEntry* die)
 }
 
 const char* UnitIndexer::GetDieName(uint32_t index) {
-  if (name_decoder_.Decode(unit_.GetLLVMDieAtIndex(index))) {
+  if (name_decoder_.Decode(DwarfDie(unit_.GetLLVMDieAtIndex(index)))) {
     if (std::optional<const char*> name = name_decoder_.GetCString(DwarfAttr::kName))
       return *name;
   }
@@ -587,7 +587,7 @@ void UnitIndexer::AddStandaloneEntryToIndex(uint32_t index_me, IndexNode* index_
 
   // When walking the dependency path, the abstract origin (if any) encodes the lexical scope
   // (see has_abstract_origin() declaration above).
-  if (llvm::DWARFDie ao = GetAbstractOrigin(die))
+  if (llvm::DWARFDie ao = GetAbstractOrigin(DwarfDie(die)).llvm_die())
     die = ao;
 
   // Stores the reverse path to the node we're inserting. This includes all scopes like namespaces
@@ -628,7 +628,7 @@ bool UnitIndexer::GetAbstractOriginIndex(uint32_t source, uint32_t* abstract_ori
   if (!die)
     return false;  // Internal error, maybe symbols corrupt.
 
-  llvm::DWARFDie ao = GetAbstractOrigin(die);
+  llvm::DWARFDie ao = GetAbstractOrigin(DwarfDie(die)).llvm_die();
   if (!ao)
     return false;  // Symbols corrupt.
   if (ao.getDwarfUnit() != unit_.GetLLVMUnit())
@@ -769,7 +769,7 @@ void Index::IndexSkeletonCompileUnit(const DwarfUnit& unit, const llvm::DWARFDie
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kDwoName, DwarfAttr::kGnuDwoName,
                                          DwarfAttr::kCompDir, DwarfAttr::kAddrBase};
   DwarfDieDecoder unit_decoder(*unit.GetBinary(), kAttrs);
-  if (!unit_decoder.Decode(unit_die))
+  if (!unit_decoder.Decode(DwarfDie(unit_die)))
     return;
 
   std::optional<const char*> dwo_name = unit_decoder.GetCString(DwarfAttr::kDwoName);

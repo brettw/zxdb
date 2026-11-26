@@ -60,9 +60,13 @@ Public headers expose these symbol classes, factories, and evaluators:
   `symbol_utils.h` (`zxdb::GetSymbolScopePrefix`, `zxdb::NameHasTemplate`,
   `zxdb::StripTemplate`, `zxdb::AddTemplateParameterToName`).
 
-- `DwarfDieDecoder::GetValue()` returns an `AttributeValue` with a zxdb
-  `FormValue`, the DIE that supplied it, and that DIE's unit. The decoder
-  converts the values extracted by LLVM and preserves their relocations.
+- `DwarfDie` is a handle to an entry in a unit's DIE array. Use it to read
+  the tag, walk the tree, or iterate over the attribute specifications. Use
+  the handle only while the unit keeps its DIE array.
+- `DwarfDieDecoder::Decode()` takes a `DwarfDie`. `GetValue()` returns an
+  `AttributeValue` with a zxdb `FormValue`, the `DwarfDie` that supplied it,
+  and that DIE's unit. The decoder converts the values that LLVM reads and
+  preserves their relocations.
 
 - Line tables: `zxdb::LineTable` (`line_table.h`) is concrete, immutable data
   made of `zxdb::LineRow` rows (`line_row.h`) and a `zxdb::LineFileTable`

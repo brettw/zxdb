@@ -678,7 +678,7 @@ TEST(DwarfSymbolFactory, TypeUnitReference) {
     ASSERT_TRUE(var_die);
     static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kType};
     DwarfDieDecoder decoder(context, kAttrs);
-    ASSERT_TRUE(decoder.Decode(var_die));
+    ASSERT_TRUE(decoder.Decode(DwarfDie(var_die)));
     const DwarfDieDecoder::AttributeValue* type_value = decoder.GetValue(DwarfAttr::kType);
     ASSERT_TRUE(type_value);
     ASSERT_EQ(DwarfForm::kRefSig8, type_value->form.form);
@@ -730,7 +730,7 @@ TEST(DwarfSymbolFactory, AddrxOffsetLowPc) {
     ASSERT_TRUE(die);
     static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kLowPc};
     DwarfDieDecoder decoder(context, kAttrs);
-    ASSERT_TRUE(decoder.Decode(die));
+    ASSERT_TRUE(decoder.Decode(DwarfDie(die)));
     const DwarfDieDecoder::AttributeValue* low_pc = decoder.GetValue(DwarfAttr::kLowPc);
     ASSERT_TRUE(low_pc);
     if (low_pc->form.form == DwarfForm::kLlvmAddrxOffset)

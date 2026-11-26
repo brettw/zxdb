@@ -18,8 +18,8 @@ namespace zxdb {
 // EXAMPLE USAGE
 // 🭶🭶🭶🭶🭶🭶🭶🭶🭶🭶🭶🭶🭶
 //
-//   llvm::DWARFDie die;  // Passed in from somewhere.
-//   for (const llvm::DWARFDie& child : DwarfAbstractChildIterator(die)) {
+//   DwarfDie die;  // Passed in from somewhere.
+//   for (const DwarfDie& child : DwarfAbstractChildIterator(die)) {
 //     DoSomething(child);
 //   }
 //
@@ -108,9 +108,7 @@ namespace zxdb {
 //
 //   0x000005ce:       NULL
 
-// llvm::DWARFDies are not easily mockable and this logic is complex. As a result, this
-// iterator is templatized so the unit test can specify a different DIE implementation. The
-// iterator calls GetAbstractOrigin() for the DIE type, so a test DIE type needs an overload of it.
+// Tests supply a DIE type with the same tree operations and an overload of GetAbstractOrigin().
 //
 // The constructor computes all the children, so the DIE doesn't need to outlive this object.
 template <class Die>
@@ -138,13 +136,13 @@ class DwarfAbstractChildIteratorBase {
 template <class Die>
 std::vector<Die> DwarfAbstractChildIteratorBase<Die>::Collect(const Die& die, int depth) {
   std::vector<Die> own;
-  if (!die.isValid())
+  if (!die.is_valid())
     return own;
-  for (auto iter = die.begin(); iter != die.end(); ++iter)
-    own.push_back(*iter);
+  for (const auto& child : die.children())
+    own.push_back(child);
 
   Die origin = GetAbstractOrigin(die);
-  if (!origin.isValid() || origin == die || depth == 0)
+  if (!origin.is_valid() || origin == die || depth == 0)
     return own;  // The common case.
 
   // The abstract origin can have its own abstract origin, so its children are merged first.
@@ -155,8 +153,8 @@ std::vector<Die> DwarfAbstractChildIteratorBase<Die>::Collect(const Die& die, in
   own_origins.reserve(own.size());
   for (const Die& child : own) {
     Die child_origin = GetAbstractOrigin(child);
-    own_origins.push_back(child_origin.isValid() ? std::optional<uint64_t>(child_origin.getOffset())
-                                                 : std::nullopt);
+    own_origins.push_back(child_origin.is_valid() ? std::optional<uint64_t>(child_origin.offset())
+                                                  : std::nullopt);
   }
 
   std::vector<Die> result;
@@ -167,7 +165,7 @@ std::vector<Die> DwarfAbstractChildIteratorBase<Die>::Collect(const Die& die, in
     // trees are small, so a linear search is fast enough.
     size_t found = own.size();
     for (size_t i = 0; i < own.size(); i++) {
-      if (!used[i] && own_origins[i] == base_child.getOffset()) {
+      if (!used[i] && own_origins[i] == base_child.offset()) {
         found = i;
         break;
       }
@@ -188,7 +186,7 @@ std::vector<Die> DwarfAbstractChildIteratorBase<Die>::Collect(const Die& die, in
   return result;
 }
 
-using DwarfAbstractChildIterator = DwarfAbstractChildIteratorBase<llvm::DWARFDie>;
+using DwarfAbstractChildIterator = DwarfAbstractChildIteratorBase<DwarfDie>;
 
 }  // namespace zxdb
 

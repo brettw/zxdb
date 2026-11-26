@@ -79,11 +79,11 @@ ErrOr<FormValue> ConvertFormValue(const llvm::DWARFFormValue& value) {
   return Err("Unsupported DWARF form " + DwarfFormToString(form));
 }
 
-llvm::DWARFDie GetDIEForSignature(llvm::DWARFContext* context, uint64_t signature) {
+DwarfDie GetDIEForSignature(llvm::DWARFContext* context, uint64_t signature) {
   if (!context)
-    return llvm::DWARFDie();
+    return DwarfDie();
 
-  auto search_units = [signature](const llvm::DWARFUnitVector& units) -> llvm::DWARFDie {
+  auto search_units = [signature](const llvm::DWARFUnitVector& units) -> DwarfDie {
     for (const std::unique_ptr<llvm::DWARFUnit>& unit : units) {
       if (!unit->isTypeUnit())
         continue;
@@ -91,12 +91,12 @@ llvm::DWARFDie GetDIEForSignature(llvm::DWARFContext* context, uint64_t signatur
       if (type_unit->getTypeHash() != signature)
         continue;
       uint64_t die_offset = unit->getOffset() + type_unit->getTypeOffset();
-      return unit->getDIEForOffset(die_offset);
+      return DwarfDie(unit->getDIEForOffset(die_offset));
     }
-    return llvm::DWARFDie();
+    return DwarfDie();
   };
 
-  if (llvm::DWARFDie die = search_units(context->getNormalUnitsVector()))
+  if (DwarfDie die = search_units(context->getNormalUnitsVector()))
     return die;
   return search_units(context->getDWOUnitsVector());
 }
@@ -120,7 +120,7 @@ DwarfDieDecoder::DwarfDieDecoder(DwarfBinary& binary, std::span<const DwarfAttr>
 
 DwarfDieDecoder::~DwarfDieDecoder() = default;
 
-bool DwarfDieDecoder::Decode(const llvm::DWARFDie& die) {
+bool DwarfDieDecoder::Decode(DwarfDie die) {
   for (size_t i = 0; i < attributes_.size(); i++)
     values_[i] = AttributeValue();
 
@@ -130,30 +130,30 @@ bool DwarfDieDecoder::Decode(const llvm::DWARFDie& die) {
   context_die_ = die;
 
   // Most DIEs reference no other DIE. They don't need the bookkeeping below.
-  if (!links.abstract_origin.isValid() && !links.specification.isValid())
+  if (!links.abstract_origin.is_valid() && !links.specification.is_valid())
     return true;
   return DecodeLinkedDies(die, links);
 }
 
-bool DwarfDieDecoder::DecodeLinkedDies(const llvm::DWARFDie& first, const Links& first_links) {
+bool DwarfDieDecoder::DecodeLinkedDies(DwarfDie first, const Links& first_links) {
   // The DIEs to visit are a stack. Each DIE pushes its specification and then its abstract origin,
   // so the abstract origin and the DIEs it references come before the specification.
-  std::array<llvm::DWARFDie, kMaxDiesToVisit> visited;
+  std::array<DwarfDie, kMaxDiesToVisit> visited;
   size_t visited_count = 0;
   visited[visited_count++] = first;
 
-  std::array<llvm::DWARFDie, 2 * kMaxDiesToVisit> pending;
+  std::array<DwarfDie, 2 * kMaxDiesToVisit> pending;
   size_t pending_count = 0;
   auto push_links = [&pending, &pending_count](const Links& links) {
-    for (const llvm::DWARFDie& next : {links.specification, links.abstract_origin}) {
-      if (next.isValid() && pending_count < pending.size())
+    for (const DwarfDie& next : {links.specification, links.abstract_origin}) {
+      if (next.is_valid() && pending_count < pending.size())
         pending[pending_count++] = next;
     }
   };
   push_links(first_links);
 
   while (pending_count > 0 && visited_count < kMaxDiesToVisit) {
-    llvm::DWARFDie cur = pending[--pending_count];
+    DwarfDie cur = pending[--pending_count];
     if (std::find(visited.begin(), visited.begin() + visited_count, cur) !=
         visited.begin() + visited_count)
       continue;  // Already visited, the symbols have a cycle.
@@ -356,10 +356,10 @@ std::optional<DwarfDieDecoder::HighPC> DwarfDieDecoder::GetHighPC() const {
   return std::nullopt;
 }
 
-llvm::DWARFDie DwarfDieDecoder::GetReference(DwarfAttr attribute) const {
+DwarfDie DwarfDieDecoder::GetReference(DwarfAttr attribute) const {
   if (const AttributeValue* value = GetValue(attribute))
     return DecodeReference(value->unit, value->form);
-  return llvm::DWARFDie();
+  return DwarfDie();
 }
 
 std::optional<std::string> DwarfDieDecoder::GetFile(DwarfAttr attribute) const {
@@ -386,10 +386,10 @@ std::optional<std::string> DwarfDieDecoder::GetFile(DwarfAttr attribute) const {
   return std::nullopt;
 }
 
-llvm::DWARFDie DwarfDieDecoder::GetContextParent() const {
-  if (!context_die_.isValid())
-    return llvm::DWARFDie();
-  return context_die_.getParent();
+DwarfDie DwarfDieDecoder::GetContextParent() const {
+  if (!context_die_.is_valid())
+    return DwarfDie();
+  return context_die_.parent();
 }
 
 size_t DwarfDieDecoder::FindIndex(DwarfAttr attribute) const {
@@ -401,42 +401,31 @@ size_t DwarfDieDecoder::FindIndex(DwarfAttr attribute) const {
   return attributes_.size();
 }
 
-bool DwarfDieDecoder::DecodeOneDie(const llvm::DWARFDie& die, bool is_first, Links* links) {
-  // This indicates the abbreviation. Each DIE starts with an abbreviation
-  // code.  The is the number that the DWARFAbbreviationDeclaration was derived
-  // from above. We have to read it again to skip the offset over the number.
-  //
-  //  - A zero abbreviation code indicates a null DIE which is used to mark
-  //    the end of a sequence of siblings.
-  //
-  //  - Otherwise this is a tag of an entry in the .debug_abbrev table (each
-  //    entry in that table declares its own tag so it's not an index or an
-  //    offset). The abbreviation entry indicates the attributes that this
-  //    type of DIE contains, plus the data format for each.
-  const llvm::DWARFAbbreviationDeclaration* abbrev = die.getAbbreviationDeclarationPtr();
-  if (!abbrev)
+bool DwarfDieDecoder::DecodeOneDie(DwarfDie die, bool is_first, Links* links) {
+  auto specs = die.attributes();
+  if (!specs)
     return false;
 
-  llvm::DWARFUnit* unit = die.getDwarfUnit();
+  llvm::DWARFUnit* unit = die.llvm_unit();
   llvm::DWARFDataExtractor extractor = unit->getDebugInfoExtractor();
-  uint64_t offset = die.getOffset();
+  uint64_t offset = die.offset();
 
   // Each value must end inside the unit. LLVM's skipValue() and extractValue() don't check the
   // lengths of blocks against the data, so the decoder checks the offset after each attribute.
   const uint64_t unit_end = unit->getNextUnitOffset();
 
-  // Skip over the abbreviationcode. We don't actually need this (the abbrev
-  // pointer above is derived from this) but we need to move offset past it.
+  // The attributes start after the DIE's abbreviation code.
   uint64_t abbr_code = extractor.getULEB128(&offset);
   if (!abbr_code) {
-    FX_NOTREACHED();  // Should have gotten a null abbrev for this above.
+    FX_NOTREACHED();  // A null DIE has no attribute specifications.
     return false;
   }
 
-  for (const llvm::DWARFAbbreviationDeclaration::AttributeSpec& spec : abbrev->attributes()) {
+  for (const auto spec : *specs) {
     // A value that is already filled came from a DIE that the decoder visited earlier, or from an
     // earlier duplicate of the attribute in this DIE. That value wins.
-    DwarfAttr attr = static_cast<DwarfAttr>(spec.Attr);
+    DwarfAttr attr = static_cast<DwarfAttr>(spec.attribute);
+    auto form = static_cast<llvm::dwarf::Form>(spec.form);
     size_t index = FindIndex(attr);
     bool applies = is_first || (attr != DwarfAttr::kDeclaration && attr != DwarfAttr::kSibling);
     bool wanted = applies && index < attributes_.size() && !values_[index].unit;
@@ -444,24 +433,24 @@ bool DwarfDieDecoder::DecodeOneDie(const llvm::DWARFDie& die, bool is_first, Lin
     // The links are decoded so Decode() can follow them. The first link of each kind in the DIE is
     // used.
     bool is_abstract_origin = follow_abstract_origins_ && attr == DwarfAttr::kAbstractOrigin &&
-                              !links->abstract_origin.isValid();
+                              !links->abstract_origin.is_valid();
     bool is_specification = follow_specifications_ && attr == DwarfAttr::kSpecification &&
-                            !links->specification.isValid();
+                            !links->specification.is_valid();
 
     if (!wanted && !is_abstract_origin && !is_specification) {
       // Skip over the attribute to go to the next.
-      if (!llvm::DWARFFormValue::skipValue(spec.Form, extractor, &offset, unit->getFormParams()) ||
+      if (!llvm::DWARFFormValue::skipValue(form, extractor, &offset, unit->getFormParams()) ||
           offset > unit_end)
         return false;
       continue;
     }
 
-    llvm::DWARFFormValue llvm_value(spec.Form);
-    if (spec.isImplicitConst()) {
+    llvm::DWARFFormValue llvm_value(form);
+    if (spec.implicit_const) {
       // In the "implicit const" form, the value is stored in the abbreviation declaration which is
       // not passed in to the DWARFFormValue constructor or its extractValue() member. So this form
       // has to be specially decoded.
-      llvm_value = llvm::DWARFFormValue::createFromSValue(spec.Form, spec.getImplicitConstValue());
+      llvm_value = llvm::DWARFFormValue::createFromSValue(form, *spec.implicit_const);
     } else if (!llvm_value.extractValue(extractor, &offset, unit->getFormParams(), unit) ||
                offset > unit_end) {
       return false;
@@ -481,11 +470,10 @@ bool DwarfDieDecoder::DecodeOneDie(const llvm::DWARFDie& die, bool is_first, Lin
   return true;
 }
 
-llvm::DWARFDie DwarfDieDecoder::DecodeReference(llvm::DWARFUnit* unit,
-                                                const FormValue& form) const {
+DwarfDie DwarfDieDecoder::DecodeReference(llvm::DWARFUnit* unit, const FormValue& form) const {
   auto ref_value = form.AsReference();
   if (!ref_value)
-    return llvm::DWARFDie();
+    return DwarfDie();
 
   switch (form.form) {
     case DwarfForm::kRef1:
@@ -493,7 +481,7 @@ llvm::DWARFDie DwarfDieDecoder::DecodeReference(llvm::DWARFUnit* unit,
     case DwarfForm::kRef4:
     case DwarfForm::kRef8:
     case DwarfForm::kRefUdata:
-      return unit->getDIEForOffset(unit->getOffset() + *ref_value);
+      return DwarfDie(unit->getDIEForOffset(unit->getOffset() + *ref_value));
     case DwarfForm::kRefAddr: {
       // This is an offset in the .debug_info section of the referencing unit, so it can be used
       // across units. DWARFContext::getDIEForOffset() searches only the normal units, so a unit in
@@ -501,17 +489,17 @@ llvm::DWARFDie DwarfDieDecoder::DecodeReference(llvm::DWARFUnit* unit,
       if (unit->isDWOUnit()) {
         if (llvm::DWARFUnit* target =
                 unit->getContext().getDWOUnitsVector().getUnitForOffset(*ref_value))
-          return target->getDIEForOffset(*ref_value);
+          return DwarfDie(target->getDIEForOffset(*ref_value));
         break;
       }
-      return context_->getDIEForOffset(*ref_value);
+      return DwarfDie(context_->getDIEForOffset(*ref_value));
     }
     case DwarfForm::kRefSig8: {
       if (binary_) {
         // Prefer fast O(log N) cached signature lookup and section-aware DIE resolution
         // via DwarfBinary.
         if (DwarfDieRef die_ref = binary_->GetDieRefForSignature(*ref_value))
-          return binary_->GetLLVMDieAtOffset(die_ref);
+          return DwarfDie(binary_->GetLLVMDieAtOffset(die_ref));
       } else {
         // Fallback for tests or contexts where only a bare llvm::DWARFContext* was provided.
         return GetDIEForSignature(context_, *ref_value);
@@ -523,19 +511,19 @@ llvm::DWARFDie DwarfDieDecoder::DecodeReference(llvm::DWARFUnit* unit,
       // The "sup4/8" ones require a shared separate symbol file we don't use.
       break;
   }
-  return llvm::DWARFDie();
+  return DwarfDie();
 }
 
-llvm::DWARFDie GetAbstractOrigin(const llvm::DWARFDie& die) {
-  if (!die.isValid())
-    return llvm::DWARFDie();
+DwarfDie GetAbstractOrigin(DwarfDie die) {
+  if (!die.is_valid())
+    return DwarfDie();
 
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kAbstractOrigin};
-  DwarfDieDecoder decoder(&die.getDwarfUnit()->getContext(), kAttrs);
+  DwarfDieDecoder decoder(&die.llvm_unit()->getContext(), kAttrs);
   decoder.set_follow_abstract_origins(false);
   decoder.set_follow_specifications(false);
   if (!decoder.Decode(die))
-    return llvm::DWARFDie();
+    return DwarfDie();
   return decoder.GetReference(DwarfAttr::kAbstractOrigin);
 }
 

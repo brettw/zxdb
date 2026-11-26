@@ -388,7 +388,7 @@ TEST_F(UnitContextCacheTest, ReusesContextAcrossAttributesAndClears) {
 
   constexpr DwarfAttr kAttrs[] = {DwarfAttr::kLowPc};
   DwarfDieDecoder decoder(binary, kAttrs);
-  ASSERT_TRUE(decoder.Decode(binary.GetLLVMDieAtOffset(DwarfDieRef::Main(0x2b))));
+  ASSERT_TRUE(decoder.Decode(DwarfDie(binary.GetLLVMDieAtOffset(DwarfDieRef::Main(0x2b)))));
   EXPECT_EQ(0x1000u, decoder.GetAddress(DwarfAttr::kLowPc));
   ASSERT_EQ(1u, UnitEntries(binary, llvm_unit));
 
@@ -490,7 +490,7 @@ TEST_F(UnitContextCacheTest, RangedFunctionDecodePopulatesCache) {
   DwarfDieRef function_ref;
   for (const auto& entry : llvm_unit->dies()) {
     llvm::DWARFDie die(llvm_unit, &entry);
-    if (die.getTag() == llvm::dwarf::DW_TAG_inlined_subroutine && decoder.Decode(die) &&
+    if (die.getTag() == llvm::dwarf::DW_TAG_inlined_subroutine && decoder.Decode(DwarfDie(die)) &&
         decoder.GetValue(DwarfAttr::kRanges) && !decoder.GetValue(DwarfAttr::kLowPc)) {
       function_ref = DwarfDieRef::Main(die.getOffset());
       break;

@@ -10,13 +10,11 @@ namespace zxdb {
 
 namespace {
 
-// Stand-in for llvm::DWARFDie that emulates enough of the API to be used in the
+// Stand-in for DwarfDie that emulates enough of the API to be used in the
 // DwarfAbstractChildIterator.
 class TestDie {
  public:
   using Vector = std::vector<TestDie>;
-  using iterator = typename Vector::iterator;
-  using const_iterator = typename Vector::const_iterator;
 
   // Constructs a null DIE.
   TestDie() = default;
@@ -54,14 +52,11 @@ class TestDie {
   }
   Vector& children() { return children_; }
 
-  const_iterator begin() const { return children_.begin(); }
-  const_iterator end() const { return children_.end(); }
-  iterator begin() { return children_.begin(); }
-  iterator end() { return children_.end(); }
+  const Vector& children() const { return children_; }
 
-  // DWARFDie implementation (enough for the iterator).
-  bool isValid() const { return is_valid_; }
-  uint64_t getOffset() const { return offset_; }
+  // DwarfDie implementation (enough for the iterator).
+  bool is_valid() const { return is_valid_; }
+  uint64_t offset() const { return offset_; }
 
  private:
   bool is_valid_ = false;
@@ -112,11 +107,11 @@ TEST(DwarfAbstractChildIterator, NoAbstract) {
   root.children().emplace_back(expected_child_offset + 1);
   root.children().emplace_back(expected_child_offset + 2);
 
-  EXPECT_EQ(102u, root.children().back().getOffset());
+  EXPECT_EQ(102u, root.children().back().offset());
 
   // Validate the unique offsets of each child.
   for (const auto& child : TestIterator(root)) {
-    EXPECT_EQ(expected_child_offset, child.getOffset());
+    EXPECT_EQ(expected_child_offset, child.offset());
     expected_child_offset++;
   }
   EXPECT_EQ(103u, expected_child_offset);  // Should have seen them all.
@@ -172,7 +167,7 @@ TEST(DwarfAbstractChildIterator, Abstract) {
   size_t i = 0;
   for (const auto& child : TestIterator(concrete)) {
     ASSERT_LT(i, expected.size());
-    EXPECT_EQ(expected[i], child.getOffset());
+    EXPECT_EQ(expected[i], child.offset());
     ++i;
   }
   EXPECT_EQ(i, expected.size());
@@ -197,10 +192,10 @@ TEST(DwarfAbstractChildIterator, ConcreteNoChildren) {
 
   // We should find both children on the double-abstract origin.
   ASSERT_NE(cur, iter.end());
-  EXPECT_EQ(cur->getOffset(), 101u);
+  EXPECT_EQ(cur->offset(), 101u);
   ++cur;
   ASSERT_NE(cur, iter.end());
-  EXPECT_EQ(cur->getOffset(), 102u);
+  EXPECT_EQ(cur->offset(), 102u);
   ++cur;
   EXPECT_EQ(cur, iter.end());
 }
@@ -211,7 +206,7 @@ namespace {
 std::vector<uint64_t> ChildOffsets(const TestDie& die) {
   std::vector<uint64_t> result;
   for (const auto& child : TestIterator(die))
-    result.push_back(child.getOffset());
+    result.push_back(child.offset());
   return result;
 }
 

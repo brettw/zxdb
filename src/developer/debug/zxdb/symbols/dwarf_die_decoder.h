@@ -11,11 +11,11 @@
 #include <string>
 #include <vector>
 
-#include "llvm/DebugInfo/DWARF/DWARFDie.h"
 #include "src/developer/debug/zxdb/common/int128_t.h"
 #include "src/developer/debug/zxdb/symbols/const_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/form_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/lib/fxl/macros.h"
 
@@ -40,7 +40,7 @@ class DwarfBinary;
 //   if (!decoder.Decode(die))
 //     return Error();
 //   std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
-//   llvm::DWARFDie type = decoder.GetReference(DwarfAttr::kType);
+//   DwarfDie type = decoder.GetReference(DwarfAttr::kType);
 //
 // The decoder doesn't allocate memory. It keeps the values in a fixed array, so a table can have
 // at most kMaxAttributes attributes.
@@ -81,7 +81,7 @@ class DwarfDieDecoder {
   // The form can borrow bytes from the binary.
   struct AttributeValue {
     llvm::DWARFUnit* unit = nullptr;  // Null when the attribute isn't present.
-    llvm::DWARFDie die;
+    DwarfDie die;
     FormValue form{};
   };
 
@@ -111,7 +111,7 @@ class DwarfDieDecoder {
   // Decodes one DIE. Returns true on success, false means the DIE was corrupt: an attribute has a
   // form that can't be read, or a value ends past the end of its unit. After a failure, the values
   // are incomplete.
-  bool Decode(const llvm::DWARFDie& die);
+  bool Decode(DwarfDie die);
 
   // Control whether Decode() follows DW_AT_abstract_origin and DW_AT_specification attributes. The
   // default for both is true. Turn one off when the caller doesn't need the attributes from those
@@ -182,8 +182,8 @@ class DwarfDieDecoder {
   std::optional<HighPC> GetHighPC() const;
 
   // For cross-DIE references. Note that the resulting DIE may not be in the same unit. If the
-  // attribute doesn't exist or is invalid, the returned DIE will be !isValid().
-  llvm::DWARFDie GetReference(DwarfAttr attribute) const;
+  // attribute doesn't exist or is invalid, the returned DIE will be !is_valid().
+  DwarfDie GetReference(DwarfAttr attribute) const;
 
   // Gets a file name. File names (e.g. for DW_AT_decl_file) are not strings but rather indices
   // into the file name table for the corresponding unit. This function resolves the string.
@@ -199,8 +199,8 @@ class DwarfDieDecoder {
   // member function, that is the class (DWARF 5 section 3.3.8.1).
   //
   // If the DIE references no other DIE, this returns the regular parent of the DIE. The only case
-  // the result should be !isValid() is when decoding a toplevel DIE with no parent.
-  llvm::DWARFDie GetContextParent() const;
+  // the result should be !is_valid() is when decoding a toplevel DIE with no parent.
+  DwarfDie GetContextParent() const;
 
  private:
   // Returns the index of the attribute in attributes_, or attributes_.size() if it isn't there.
@@ -208,19 +208,19 @@ class DwarfDieDecoder {
 
   // The DIEs that one DIE references through the links that Decode() follows.
   struct Links {
-    llvm::DWARFDie abstract_origin;
-    llvm::DWARFDie specification;
+    DwarfDie abstract_origin;
+    DwarfDie specification;
   };
 
   // Decodes the attributes of one DIE into the values that aren't filled yet. The first DIE is the
   // DIE that the caller gave to Decode(). Returns false if the DIE is corrupt.
-  bool DecodeOneDie(const llvm::DWARFDie& die, bool is_first, Links* links);
+  bool DecodeOneDie(DwarfDie die, bool is_first, Links* links);
 
   // Visits the DIEs that the first DIE references, after Decode() decoded the first DIE.
-  bool DecodeLinkedDies(const llvm::DWARFDie& first, const Links& first_links);
+  bool DecodeLinkedDies(DwarfDie first, const Links& first_links);
 
-  // Decodes a cross-DIE reference. Return value will be !isValid() on failure.
-  llvm::DWARFDie DecodeReference(llvm::DWARFUnit* unit, const FormValue& form) const;
+  // Decodes a cross-DIE reference. Return value will be !is_valid() on failure.
+  DwarfDie DecodeReference(llvm::DWARFUnit* unit, const FormValue& form) const;
 
   // Decodes a value of the address class. See GetAddress().
   std::optional<uint64_t> DecodeAddress(const AttributeValue& value) const;
@@ -236,7 +236,7 @@ class DwarfDieDecoder {
   std::array<AttributeValue, kMaxAttributes> values_;
 
   // The last DIE that Decode() visited. See GetContextParent().
-  llvm::DWARFDie context_die_;
+  DwarfDie context_die_;
 
   bool follow_abstract_origins_ = true;
   bool follow_specifications_ = true;
@@ -247,7 +247,7 @@ class DwarfDieDecoder {
 // Returns the DIE that the DW_AT_abstract_origin attribute of the given DIE references. This
 // doesn't follow the abstract origin of that DIE. Returns an invalid DIE if the DIE has no abstract
 // origin or the reference is invalid.
-llvm::DWARFDie GetAbstractOrigin(const llvm::DWARFDie& die);
+DwarfDie GetAbstractOrigin(DwarfDie die);
 
 }  // namespace zxdb
 

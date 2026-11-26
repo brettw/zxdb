@@ -14,6 +14,8 @@ add_library(zxdb_symbols STATIC
   dwarf_attr.cc
   dwarf_binary_impl.cc
   dwarf_debug_names.cc
+  dwarf_die.cc
+  dwarf_die.h
   dwarf_die_decoder.cc
   dwarf_die_scanner.cc
   dwarf_expr.cc

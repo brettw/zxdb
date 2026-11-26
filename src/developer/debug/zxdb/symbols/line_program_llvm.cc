@@ -33,7 +33,7 @@ LineStringSections GetLineStringSections(const DwarfSections& sections, llvm::DW
 }
 
 std::optional<uint64_t> GetUnitLineTableOffset(llvm::DWARFUnit& unit) {
-  llvm::DWARFDie unit_die = unit.getUnitDIE();
+  DwarfDie unit_die(unit.getUnitDIE());
   if (!unit_die)
     return std::nullopt;
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kStmtList};

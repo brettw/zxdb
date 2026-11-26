@@ -43,7 +43,7 @@ std::optional<std::string> DecodeDeclFile(llvm::DWARFContext& context, llvm::DWA
 
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kDeclFile};
   DwarfDieDecoder decoder(&context, kAttrs);
-  EXPECT_TRUE(decoder.Decode(die));
+  EXPECT_TRUE(decoder.Decode(DwarfDie(die)));
   return decoder.GetFile(DwarfAttr::kDeclFile);
 }
 

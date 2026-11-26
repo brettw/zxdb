@@ -359,7 +359,7 @@ std::vector<fxl::RefPtr<Function>> ModuleSymbolsImpl::GetMainFunctions() const {
         continue;
       }
       llvm::DWARFDie die = binary_->GetLLVMDieAtOffset(entry.die_ref);
-      if (!die.isValid() || !decoder.Decode(die) ||
+      if (!die.isValid() || !decoder.Decode(DwarfDie(die)) ||
           !decoder.GetBool(DwarfAttr::kMainSubprogram).value_or(false)) {
         continue;
       }

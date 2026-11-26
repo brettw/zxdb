@@ -15,7 +15,7 @@ namespace {
 std::string GetDIEName(llvm::DWARFContext* context, const llvm::DWARFDie& die) {
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName};
   DwarfDieDecoder decoder(context, kAttrs);
-  if (!decoder.Decode(die))
+  if (!decoder.Decode(DwarfDie(die)))
     return std::string();
   std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
   return name ? std::string(*name) : std::string();
