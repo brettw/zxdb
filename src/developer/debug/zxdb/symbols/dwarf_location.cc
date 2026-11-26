@@ -132,7 +132,7 @@ VariableLocation DecodeDwarf5LocationReference(const UnitContext& context, const
 
 VariableLocation DecodeVariableLocation(const DwarfSections& sections, llvm::DWARFUnit* unit,
                                         const FormValue& form, const UncachedLazySymbol& source,
-                                        llvm::DWARFUnit* skeleton) {
+                                        const DwarfBinary* binary, UnitContextSource skeleton) {
   if (form.form_class == FormValue::Class::kBlock ||
       form.form_class == FormValue::Class::kExprloc) {
     // These forms are both a block of data which is interpreted as a DWARF expression. There is no
@@ -142,13 +142,13 @@ VariableLocation DecodeVariableLocation(const DwarfSections& sections, llvm::DWA
     return VariableLocation(DwarfExpr(std::vector<uint8_t>(block.begin(), block.end()), source));
   }
 
-  auto context = ReadUnitContext(sections, *unit, skeleton);
+  auto context = GetUnitContext(*unit, binary, skeleton, &sections);
   if (!context)
     return VariableLocation();
   if (unit->getVersion() < 5)
-    return DecodeDwarf4LocationReference(sections, context.value(), unit->getVersion(), form,
+    return DecodeDwarf4LocationReference(sections, *context.value(), unit->getVersion(), form,
                                          source);
-  return DecodeDwarf5LocationReference(context.value(), form, source);
+  return DecodeDwarf5LocationReference(*context.value(), form, source);
 }
 
 VariableLocation DecodeDwarf4LocationList(TargetPointer unit_base_addr,

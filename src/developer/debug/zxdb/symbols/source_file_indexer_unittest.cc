@@ -328,8 +328,10 @@ TEST_P(SourceFileIndexerStrxTest, ResolvesWithUnit) {
   sections.Finish(Endian::kLittle);
 
   std::vector<LineTableJob> jobs;
-  AddLineTableJob(sections.sections(), UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs);
-  AddLineTableJob(sections.sections(), UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs,
+                  nullptr);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs,
+                  nullptr);
   ASSERT_EQ(2u, jobs.size());
   EXPECT_EQ(0x1000u, jobs[0].first_code_address);
 
@@ -399,9 +401,11 @@ TEST(SourceFileIndexer, UnitWithoutLineTable) {
   sections.Finish(Endian::kLittle);
 
   std::vector<LineTableJob> jobs;
-  AddLineTableJob(sections.sections(), UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs,
+                  nullptr);
   EXPECT_TRUE(jobs.empty());
-  AddLineTableJob(sections.sections(), UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs,
+                  nullptr);
   ASSERT_EQ(1u, jobs.size());
 
   SourceFileIndexer indexer(std::move(jobs));

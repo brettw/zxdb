@@ -132,9 +132,13 @@
   the caller can supply relocated CU, local TU, and string offsets at parse
   time.
 - A parsed context has no lazy state. It borrows the section bytes, including
-  the skeleton's address and range sections when applicable. Readers can share the
-  context across threads while the section bytes stay alive. The reader
-  expects section bytes with ELF relocations already applied.
+  the skeleton's address and range sections when applicable. Readers can
+  share the context across threads while the section bytes stay alive. The
+  reader expects section bytes with ELF relocations already applied.
+- The caller can supply an abbreviation table from its cache. The context
+  uses the table during parsing. After parsing, the context only depends on
+  the section bytes. The binary can clear its caches while a caller holds
+  the parsed context.
 
 ## Side Effects
 

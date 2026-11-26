@@ -33,6 +33,7 @@ class LazySymbol;
 class ModuleSymbols;
 class UncachedLazySymbol;
 class UnitContext;
+struct UnitContextSource;
 class VariableLocation;
 
 // Implementation of SymbolFactory that reads from the DWARF symbols in the given DwarfBinary.
@@ -111,7 +112,7 @@ class DwarfSymbolFactory : public SymbolFactory {
   // Returns the language of the unit that contains the DIE.
   DwarfLang GetLanguage(const llvm::DWARFDie& die) const;
 
-  llvm::DWARFUnit* GetSkeletonLLVMUnit() const;
+  UnitContextSource GetSkeletonUnit() const;
 
   // Makes a decoder for the given attribute table. The decoder uses the binary, so it finds type
   // unit signatures and file tables in the binary's caches.

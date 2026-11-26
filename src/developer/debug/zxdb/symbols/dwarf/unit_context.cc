@@ -100,7 +100,8 @@ std::optional<UnitContext::StringOffsets> ReadStringOffsets(std::span<const uint
 }  // namespace
 
 ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitHeader& header,
-                                      UnitSection section, const Options& options) {
+                                      UnitSection section, const Options& options,
+                                      const AbbrevLookup& lookup_abbrevs) {
   auto error = [offset = header.offset](const char* reason) {
     return Err("DWARF unit DIE for unit at offset 0x%" PRIx64 ": %s", offset, reason);
   };
@@ -127,8 +128,12 @@ ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitH
   if (!reader.ok() || code == 0)
     return error("invalid root abbreviation code");
 
-  auto abbrevs = AbbrevTable::Parse(options.is_dwo ? sections.abbrev_dwo : sections.abbrev,
-                                    header.abbrev_offset);
+  auto abbrev_section = options.is_dwo ? sections.abbrev_dwo : sections.abbrev;
+  std::optional<ErrOr<AbbrevTable>> local_abbrevs;
+  const auto& abbrevs =
+      lookup_abbrevs
+          ? lookup_abbrevs(abbrev_section, header.abbrev_offset)
+          : local_abbrevs.emplace(AbbrevTable::Parse(abbrev_section, header.abbrev_offset));
   if (abbrevs.has_error())
     return abbrevs.err();
   const auto* declaration = abbrevs.value().Find(code);

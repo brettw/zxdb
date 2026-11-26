@@ -4,6 +4,7 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 
+#include <lib/fit/defer.h>
 #include <lib/syslog/cpp/macros.h>
 
 #include <algorithm>
@@ -36,6 +37,14 @@
 namespace zxdb {
 
 namespace {
+
+#ifndef NDEBUG
+auto CheckUnitContextCacheAccess(std::atomic_flag& active) {
+  FX_DCHECK(!active.test_and_set(std::memory_order_acquire))
+      << "Concurrent unit context cache access";
+  return fit::defer([&active] { active.clear(std::memory_order_release); });
+}
+#endif
 
 uint64_t ComputeMappedLength(elflib::ElfLib& elf) {
   uint64_t max = 0;
@@ -111,7 +120,8 @@ void LLVMErrorHandler(llvm::Error error) {
 // To work around https://github.com/llvm/llvm-project/issues/58641.
 class DwarfBinaryImpl::DebugAranges {
  public:
-  DebugAranges(llvm::DWARFContext& context, const DwarfSections& sections) {
+  explicit DebugAranges(const DwarfBinaryImpl& binary) {
+    const auto& sections = binary.GetSections();
     std::unordered_set<uint64_t> parsed_units;
 
     // Extract aranges from .debug_aranges section first.
@@ -138,15 +148,15 @@ class DwarfBinaryImpl::DebugAranges {
 
     // Generate aranges from compile units because .debug_aranges could be incomplete.
     // But we can skip those units that we have parsed.
-    for (const auto& compile_unit : context.compile_units()) {
+    for (const auto& compile_unit : binary.GetLLVMContext()->compile_units()) {
       uint64_t offset = compile_unit->getOffset();
       if (parsed_units.insert(offset).second) {
-        auto unit = ReadUnitContext(sections, *compile_unit);
+        auto unit = binary.GetUnitContext(*compile_unit);
         if (unit.has_error()) {
           LOGS(Error) << unit.err().msg();
           continue;
         }
-        auto ranges = RangeListReader::ReadUnitRanges(unit.value());
+        auto ranges = RangeListReader::ReadUnitRanges(*unit.value());
         if (ranges.has_error()) {
           LOGS(Error) << ranges.err().msg();
           continue;
@@ -368,7 +378,7 @@ fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::GetUnitAtIndex(UnitIndex i) {
 
 fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::UnitForRelativeAddress(uint64_t relative_address) {
   if (!debug_aranges_) {
-    debug_aranges_ = std::make_unique<DebugAranges>(*context_, sections_);
+    debug_aranges_ = std::make_unique<DebugAranges>(*this);
   }
   auto offset = debug_aranges_->FindAddress(relative_address);
   if (!offset)
@@ -468,24 +478,39 @@ const DebugNamesReader* DwarfBinaryImpl::GetDebugNames() const {
   return debug_names_ && debug_names_->index_count() != 0 ? &*debug_names_ : nullptr;
 }
 
+UnitContextResult DwarfBinaryImpl::GetUnitContext(llvm::DWARFUnit& unit,
+                                                  UnitContextSource skeleton) const {
+  FX_CHECK(&unit.getContext() == context_.get());
+#ifndef NDEBUG
+  // Same-binary skeleton lookups stay inside UnitContextCache. A different binary has its own
+  // guard. Release the guard on return so a DWO index worker can hand the binary to the module.
+  auto access = CheckUnitContextCacheAccess(unit_context_cache_active_);
+#endif
+  return unit_contexts_.GetOrParse(sections_, unit, skeleton);
+}
+
 std::shared_ptr<const LineFileTable> DwarfBinaryImpl::GetLineFileTable(llvm::DWARFUnit* unit,
                                                                        uint64_t file_index) const {
   if (!unit)
     return nullptr;
   FX_DCHECK(&unit->getContext() == context_.get());
-  return line_tables_.GetFileTable(sections_, *unit, file_index);
+  return line_tables_.GetFileTable(sections_, *unit, file_index, this);
 }
 
 LineTable DwarfBinaryImpl::DecodeLineTable(llvm::DWARFUnit* unit) const {
   if (!unit)
     return LineTable();
   FX_DCHECK(&unit->getContext() == context_.get());
-  return line_tables_.DecodeLineTable(sections_, *unit, first_code_address_);
+  return line_tables_.DecodeLineTable(sections_, *unit, first_code_address_, this);
 }
 
 void DwarfBinaryImpl::ClearLLVMCache() {
+#ifndef NDEBUG
+  auto access = CheckUnitContextCacheAccess(unit_context_cache_active_);
+#endif
   signature_to_die_.reset();
   line_tables_.Clear();
+  unit_contexts_.Clear();
 
   // Drop cached DwarfUnitImpl wrappers accumulated during indexing, and the line tables they
   // own. Iterate the underlying LLVM unit vectors directly rather than calling GetUnitAtIndex(),

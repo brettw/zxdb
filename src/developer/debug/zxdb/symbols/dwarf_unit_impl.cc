@@ -65,8 +65,8 @@ std::string DwarfUnitImpl::GetCompilationDir() const {
   if (!binary_)
     return std::string();
 
-  auto context = ReadUnitContext(binary_->GetSections(), *unit_);
-  return context ? std::string(context.value().compilation_dir().value_or(std::string_view()))
+  auto context = binary_->GetUnitContext(*unit_);
+  return context ? std::string(context.value()->compilation_dir().value_or(std::string_view()))
                  : std::string();
 }
 

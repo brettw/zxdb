@@ -10,6 +10,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFObject.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 
 namespace zxdb {
 
@@ -45,6 +46,12 @@ const llvm::DWARFUnitIndex::Entry* GetPackageEntry(llvm::DWARFUnit& unit,
       return entry;
   }
   return index.getFromOffset(header.offset);
+}
+
+UnitContextSource GetLinkedSkeleton(llvm::DWARFUnit& unit, UnitContextSource skeleton) {
+  if (!unit.isDWOUnit())
+    return {};
+  return skeleton.unit ? skeleton : UnitContextSource{unit.getLinkedUnit()};
 }
 
 }  // namespace
@@ -97,8 +104,50 @@ std::span<const uint8_t> GetUnitStrOffsetsSection(const DwarfSections& sections,
   return unit.isDWOUnit() ? sections.str_offsets_dwo : sections.str_offsets;
 }
 
-ErrOr<UnitContext> ReadUnitContext(const DwarfSections& sections, llvm::DWARFUnit& unit,
-                                   llvm::DWARFUnit* skeleton) {
+UnitContextResult ReadUnitContextUncached(const DwarfSections& sections, llvm::DWARFUnit& unit,
+                                          UnitContextSource skeleton) {
+  return UnitContextCache::Parse(sections, unit, GetLinkedSkeleton(unit, skeleton), nullptr);
+}
+
+UnitContextResult GetUnitContext(llvm::DWARFUnit& unit, const DwarfBinary* binary,
+                                 UnitContextSource skeleton,
+                                 const DwarfSections* fallback_sections) {
+  if (binary && binary->GetLLVMContext() == &unit.getContext())
+    return binary->GetUnitContext(unit, skeleton);
+  if (fallback_sections)
+    return ReadUnitContextUncached(*fallback_sections, unit, skeleton);
+  return ReadUnitContextUncached(GetDwarfSections(unit.getContext()), unit, skeleton);
+}
+
+UnitContextResult UnitContextCache::GetOrParse(const DwarfSections& sections, llvm::DWARFUnit& unit,
+                                               UnitContextSource skeleton) {
+  skeleton = GetLinkedSkeleton(unit, skeleton);
+  // A foreign skeleton without a known owner can disappear while this cache still exists.
+  if (skeleton.unit && &skeleton.unit->getContext() != &unit.getContext() &&
+      (!skeleton.binary || skeleton.binary->GetLLVMContext() != &skeleton.unit->getContext())) {
+    return Parse(sections, unit, skeleton, this);
+  }
+
+  auto [begin, end] = units_.equal_range(&unit);
+  for (auto it = begin; it != end; ++it) {
+    const auto& entry = it->second;
+    if (entry.skeleton == skeleton.unit)
+      return entry.result;
+  }
+
+  // Section data is immutable. Keep parse errors too, so a bad unit costs one parse.
+  auto result = Parse(sections, unit, skeleton, this);
+  units_.emplace(&unit, Entry{skeleton.unit, result});
+  return result;
+}
+
+void UnitContextCache::Clear() {
+  units_ = decltype(units_)();
+  abbrevs_.clear();
+}
+
+UnitContextResult UnitContextCache::Parse(const DwarfSections& sections, llvm::DWARFUnit& unit,
+                                          UnitContextSource skeleton, UnitContextCache* cache) {
   auto info = AsBytes(unit.getInfoSection().Data);
   bool is_dwo = unit.isDWOUnit();
   UnitSection kind =
@@ -138,34 +187,47 @@ ErrOr<UnitContext> ReadUnitContext(const DwarfSections& sections, llvm::DWARFUni
     };
   }
 
-  std::optional<UnitContext> skeleton_context;
+  std::shared_ptr<const UnitContext> address_context;
   if (is_dwo) {
-    if (!skeleton)
-      skeleton = unit.getLinkedUnit();
-    llvm::DWARFUnit* address_table = skeleton;
-    if (!address_table) {
+    auto* address_unit = skeleton.unit;
+    if (!address_unit) {
       // LLVM's address lookup uses the sole main info unit when there is no explicit link.
       auto main_units = unit.getContext().info_section_units();
       if (main_units.begin() != main_units.end() &&
           std::next(main_units.begin()) == main_units.end()) {
-        address_table = main_units.begin()->get();
+        address_unit = main_units.begin()->get();
       }
     }
-    if (address_table && !address_table->isDWOUnit()) {
-      auto context = ReadUnitContext(&address_table->getContext() == &unit.getContext()
-                                         ? sections
-                                         : GetDwarfSections(address_table->getContext()),
-                                     *address_table);
-      if (context.ok()) {
-        skeleton_context = context.take_value();
-        if (skeleton)
-          options.skeleton = &*skeleton_context;
-        else
-          options.address_table = &*skeleton_context;
+    if (address_unit && !address_unit->isDWOUnit()) {
+      if (&address_unit->getContext() == &unit.getContext()) {
+        address_context = (cache ? cache->GetOrParse(sections, *address_unit, {})
+                                 : ReadUnitContextUncached(sections, *address_unit))
+                              .take_value_or_empty();
+      } else {
+        address_context = GetUnitContext(*address_unit, skeleton.binary).take_value_or_empty();
       }
+      if (skeleton.unit)
+        options.skeleton = address_context.get();
+      else
+        options.address_table = address_context.get();
     }
   }
-  return UnitContext::Parse(unit_sections, header.value(), kind, options);
+
+  UnitContext::AbbrevLookup lookup_abbrevs;
+  if (cache) {
+    lookup_abbrevs = [cache, is_dwo](std::span<const uint8_t> section,
+                                     uint64_t offset) -> const ErrOr<AbbrevTable>& {
+      AbbrevKey key(is_dwo, offset, section.size());
+      auto found = cache->abbrevs_.find(key);
+      if (found != cache->abbrevs_.end())
+        return found->second;
+      return cache->abbrevs_.emplace(key, AbbrevTable::Parse(section, offset)).first->second;
+    };
+  }
+  auto context = UnitContext::Parse(unit_sections, header.value(), kind, options, lookup_abbrevs);
+  if (context.has_error())
+    return context.err();
+  return std::make_shared<const UnitContext>(context.take_value());
 }
 
 }  // namespace zxdb

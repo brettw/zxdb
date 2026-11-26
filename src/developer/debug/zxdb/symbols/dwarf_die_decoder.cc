@@ -105,15 +105,15 @@ llvm::DWARFDie GetDIEForSignature(llvm::DWARFContext* context, uint64_t signatur
 
 DwarfDieDecoder::DwarfDieDecoder(llvm::DWARFContext* context, std::span<const DwarfAttr> attributes,
                                  llvm::DWARFUnit* address_table_unit)
-    : context_(context), address_table_unit_(address_table_unit), attributes_(attributes) {
+    : context_(context), address_table_{address_table_unit}, attributes_(attributes) {
   FX_CHECK(attributes_.size() <= kMaxAttributes);
 }
 
 DwarfDieDecoder::DwarfDieDecoder(DwarfBinary& binary, std::span<const DwarfAttr> attributes,
-                                 llvm::DWARFUnit* address_table_unit)
+                                 UnitContextSource address_table)
     : context_(binary.GetLLVMContext()),
       binary_(&binary),
-      address_table_unit_(address_table_unit),
+      address_table_(address_table),
       attributes_(attributes) {
   FX_CHECK(attributes_.size() <= kMaxAttributes);
 }
@@ -225,14 +225,12 @@ std::optional<uint64_t> DwarfDieDecoder::DecodeAddress(const AttributeValue& val
           ? std::get<FormValue::IndexedAddress>(value.form.value)
           : FormValue::IndexedAddress{std::get<uint64_t>(value.form.value), 0};
 
-  llvm::DWARFUnit* table_unit = address_table_unit_ ? address_table_unit_ : value.unit;
-  auto context = ReadUnitContext(binary_ && binary_->GetLLVMContext() == &table_unit->getContext()
-                                     ? binary_->GetSections()
-                                     : GetDwarfSections(table_unit->getContext()),
-                                 *table_unit);
+  llvm::DWARFUnit* table_unit = address_table_.unit ? address_table_.unit : value.unit;
+  auto context =
+      GetUnitContext(*table_unit, address_table_.binary ? address_table_.binary : binary_);
   if (!context)
     return std::nullopt;
-  auto entry = context.value().ReadAddress(indexed.index);
+  auto entry = context.value()->ReadAddress(indexed.index);
   if (!entry || *entry == kTombstone)
     return std::nullopt;
   std::optional<uint64_t> address = CheckedAdd(*entry, indexed.offset);
@@ -378,7 +376,7 @@ std::optional<std::string> DwarfDieDecoder::GetFile(DwarfAttr attribute) const {
     files = binary_->GetLineFileTable(value->unit, *file_index);
   } else {
     files = LineTableCache().GetFileTable(GetDwarfSections(value->unit->getContext()), *value->unit,
-                                          *file_index);
+                                          *file_index, nullptr);
   }
   if (!files)
     return std::nullopt;

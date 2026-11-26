@@ -16,6 +16,7 @@
 #include "src/developer/debug/zxdb/symbols/const_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/form_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/lib/fxl/macros.h"
 
 namespace llvm {
@@ -104,7 +105,7 @@ class DwarfDieDecoder {
   DwarfDieDecoder(llvm::DWARFContext* context, std::span<const DwarfAttr> attributes,
                   llvm::DWARFUnit* address_table_unit = nullptr);
   DwarfDieDecoder(DwarfBinary& binary, std::span<const DwarfAttr> attributes,
-                  llvm::DWARFUnit* address_table_unit = nullptr);
+                  UnitContextSource address_table = {});
   ~DwarfDieDecoder();
 
   // Decodes one DIE. Returns true on success, false means the DIE was corrupt: an attribute has a
@@ -226,7 +227,7 @@ class DwarfDieDecoder {
 
   llvm::DWARFContext* context_;
   const DwarfBinary* binary_ = nullptr;
-  llvm::DWARFUnit* address_table_unit_ = nullptr;
+  UnitContextSource address_table_;
 
   std::span<const DwarfAttr> attributes_;
 

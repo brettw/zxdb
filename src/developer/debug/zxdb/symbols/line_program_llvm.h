@@ -13,17 +13,21 @@ class DWARFUnit;
 
 namespace zxdb {
 
+class DwarfBinary;
+
 // Supplies the unit's line table offset and string offsets contribution to the line parser.
 // Call these functions on the thread that owns the LLVM context. Unit access can extract DIEs
 // and change LLVM caches. Workers can read the resulting views while the section bytes are alive.
-LineStringSections GetLineStringSections(const DwarfSections& sections, llvm::DWARFUnit& unit);
+LineStringSections GetLineStringSections(const DwarfSections& sections, llvm::DWARFUnit& unit,
+                                         const DwarfBinary* binary);
 
 // Includes the contribution offset for split DWARF. Offset 0 is valid; nullopt means no table.
 std::optional<uint64_t> GetUnitLineTableOffset(llvm::DWARFUnit& unit);
 
+// Test helper for a standalone LLVM context. Reads the unit's line table offset.
 ErrOr<LineProgram> ParseLineProgramForUnit(const DwarfSections& sections, llvm::DWARFUnit& unit);
 ErrOr<LineProgram> ParseLineProgramForUnit(const DwarfSections& sections, llvm::DWARFUnit& unit,
-                                           uint64_t offset);
+                                           uint64_t offset, const DwarfBinary* binary);
 
 }  // namespace zxdb
 

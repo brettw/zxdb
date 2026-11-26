@@ -12,7 +12,8 @@ namespace zxdb {
 
 std::shared_ptr<const LineFileTable> LineTableCache::GetFileTable(const DwarfSections& sections,
                                                                   llvm::DWARFUnit& unit,
-                                                                  uint64_t file_index) {
+                                                                  uint64_t file_index,
+                                                                  const DwarfBinary* binary) {
   std::optional<uint64_t> offset = GetUnitLineTableOffset(unit);
   if (!offset)
     return nullptr;
@@ -24,7 +25,7 @@ std::shared_ptr<const LineFileTable> LineTableCache::GetFileTable(const DwarfSec
   if (!inserted && !needs_more)
     return entry.files;
 
-  ErrOr<LineProgram> program = ParseLineProgramForUnit(sections, unit, *offset);
+  ErrOr<LineProgram> program = ParseLineProgramForUnit(sections, unit, *offset, binary);
   if (program.has_error()) {
     entry.exhausted = true;  // Don't try again.
     return entry.files;
@@ -40,13 +41,13 @@ std::shared_ptr<const LineFileTable> LineTableCache::GetFileTable(const DwarfSec
 }
 
 LineTable LineTableCache::DecodeLineTable(const DwarfSections& sections, llvm::DWARFUnit& unit,
-                                          uint64_t first_code_address) {
+                                          uint64_t first_code_address, const DwarfBinary* binary) {
   std::optional<uint64_t> offset = GetUnitLineTableOffset(unit);
   if (!offset)
     return LineTable();
 
   Entry& entry = entries_[Key(GetUnitLineSection(sections, unit).data(), *offset)];
-  ErrOr<LineProgram> program = ParseLineProgramForUnit(sections, unit, *offset);
+  ErrOr<LineProgram> program = ParseLineProgramForUnit(sections, unit, *offset, binary);
   if (program.has_error()) {
     entry.exhausted = true;
     return LineTable();

@@ -13,7 +13,8 @@
 
 namespace zxdb {
 
-LineStringSections GetLineStringSections(const DwarfSections& sections, llvm::DWARFUnit& unit) {
+LineStringSections GetLineStringSections(const DwarfSections& sections, llvm::DWARFUnit& unit,
+                                         const DwarfBinary* binary) {
   LineStringSections result;
   // DWO units also use the main .debug_line_str section.
   result.line_str = AsStringView(sections.line_str);
@@ -21,8 +22,8 @@ LineStringSections GetLineStringSections(const DwarfSections& sections, llvm::DW
   result.str_offsets = AsStringView(GetUnitStrOffsetsSection(sections, unit));
   if (unit.getVersion() < 5 && !unit.isDWOUnit())
     return result;
-  if (auto context = ReadUnitContext(sections, unit)) {
-    if (auto contribution = context.value().string_offsets()) {
+  if (auto context = GetUnitContext(unit, binary, {}, &sections)) {
+    if (auto contribution = context.value()->string_offsets()) {
       result.str_offsets = result.str_offsets.substr(0, contribution->end);
       result.str_offsets_base = contribution->base;
       result.str_offset_size = contribution->entry_size;
@@ -49,14 +50,14 @@ ErrOr<LineProgram> ParseLineProgramForUnit(const DwarfSections& sections, llvm::
   std::optional<uint64_t> offset = GetUnitLineTableOffset(unit);
   if (!offset)
     return Err("The unit has no line table.");
-  return ParseLineProgramForUnit(sections, unit, *offset);
+  return ParseLineProgramForUnit(sections, unit, *offset, nullptr);
 }
 
 ErrOr<LineProgram> ParseLineProgramForUnit(const DwarfSections& sections, llvm::DWARFUnit& unit,
-                                           uint64_t offset) {
+                                           uint64_t offset, const DwarfBinary* binary) {
   FX_DCHECK(sections.endian == (unit.isLittleEndian() ? Endian::kLittle : Endian::kBig));
   return LineProgram::Parse(AsStringView(GetUnitLineSection(sections, unit)), offset,
-                            sections.endian, GetLineStringSections(sections, unit));
+                            sections.endian, GetLineStringSections(sections, unit, binary));
 }
 
 }  // namespace zxdb

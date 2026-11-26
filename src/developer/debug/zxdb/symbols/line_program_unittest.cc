@@ -1064,7 +1064,7 @@ TEST(LineProgram, IndexedStringByteOrder) {
         llvm::DWARFUnit* unit = context->getUnitAtIndex(0);
         ASSERT_TRUE(unit);
         DwarfSections sections = GetDwarfSections(*context);
-        LineStringSections strings = GetLineStringSections(sections, *unit);
+        LineStringSections strings = GetLineStringSections(sections, *unit, nullptr);
         EXPECT_EQ(str_offsets_base, strings.str_offsets_base);
         EXPECT_EQ(offset_size, strings.str_offset_size);
 

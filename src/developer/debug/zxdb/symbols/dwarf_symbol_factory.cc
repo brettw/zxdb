@@ -52,13 +52,14 @@ namespace {
 
 // Extracts a FileLine if possible from the given input. If the optional values aren't present, or
 // are empty, returns an empty FileLine.
-FileLine MakeFileLine(llvm::DWARFUnit* unit, const std::optional<std::string>& file,
-                      const std::optional<uint64_t>& line, std::string compilation_dir) {
+FileLine MakeFileLine(const DwarfBinary* binary, llvm::DWARFUnit* unit,
+                      const std::optional<std::string>& file, const std::optional<uint64_t>& line,
+                      std::string compilation_dir) {
   if (!file || file->empty() || !line || *line == 0)
     return FileLine();
   if (compilation_dir.empty()) {
-    if (auto context = ReadUnitContext(GetDwarfSections(unit->getContext()), *unit))
-      compilation_dir = context.value().compilation_dir().value_or(std::string_view());
+    if (auto context = GetUnitContext(*unit, binary))
+      compilation_dir = context.value()->compilation_dir().value_or(std::string_view());
   }
   return FileLine(*file, compilation_dir, static_cast<int>(*line));
 }
@@ -113,7 +114,7 @@ VariableLocation DwarfSymbolFactory::DecodeLocation(const llvm::DWARFDie& die,
     FX_DCHECK(&unit->getContext() == binary_->GetLLVMContext());
   return DecodeVariableLocation(
       binary_ ? binary_->GetSections() : GetDwarfSections(unit->getContext()), unit, form, source,
-      GetSkeletonLLVMUnit());
+      binary_.get(), GetSkeletonUnit());
 }
 
 DwarfSymbolFactory::ArraySubrange DwarfSymbolFactory::ReadArraySubrange(
@@ -282,19 +283,21 @@ fxl::RefPtr<CompileUnit> DwarfSymbolFactory::GetCompileUnitForDie(DwarfDieRef di
   return fxl::RefPtr<CompileUnit>();
 }
 
-llvm::DWARFUnit* DwarfSymbolFactory::GetSkeletonLLVMUnit() const {
+UnitContextSource DwarfSymbolFactory::GetSkeletonUnit() const {
   if (delegate_) {
-    if (CompileUnit* skeleton = delegate_->GetSkeletonCompileUnit())
-      return skeleton->dwarf_unit()->GetLLVMUnit();
+    if (CompileUnit* skeleton = delegate_->GetSkeletonCompileUnit()) {
+      auto* unit = skeleton->dwarf_unit();
+      return {unit->GetLLVMUnit(), unit->GetBinary()};
+    }
   }
-  return nullptr;
+  return {};
 }
 
 DwarfDieDecoder DwarfSymbolFactory::MakeDecoder(std::span<const DwarfAttr> attributes) const {
   // A .dwo unit uses the address table in the main binary.
   if (binary_)
-    return DwarfDieDecoder(*binary_.get(), attributes, GetSkeletonLLVMUnit());
-  return DwarfDieDecoder(GetLLVMContext(), attributes, GetSkeletonLLVMUnit());
+    return DwarfDieDecoder(*binary_.get(), attributes, GetSkeletonUnit());
+  return DwarfDieDecoder(GetLLVMContext(), attributes, GetSkeletonUnit().unit);
 }
 
 fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeSymbol(const llvm::DWARFDie& die) const {
@@ -448,10 +451,11 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeFunction(const llvm::DWARFDie& die
   function->set_code_ranges(GetCodeRanges(decoder));
   if (decl_file) {
     // The file name comes from the unit of the DIE that has DW_AT_decl_file.
-    function->set_decl_line(MakeFileLine(decoder.GetValue(DwarfAttr::kDeclFile)->unit, decl_file,
+    function->set_decl_line(MakeFileLine(binary_.get(),
+                                         decoder.GetValue(DwarfAttr::kDeclFile)->unit, decl_file,
                                          decl_line, delegate_->GetBuildDirForSymbolFactory()));
   }
-  function->set_call_line(MakeFileLine(die.getDwarfUnit(), call_file, call_line,
+  function->set_call_line(MakeFileLine(binary_.get(), die.getDwarfUnit(), call_file, call_line,
                                        delegate_->GetBuildDirForSymbolFactory()));
   if (return_type)
     function->set_return_type(MakeLazy(return_type));
@@ -814,7 +818,7 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeDataMember(const llvm::DWARFDie& d
     result->set_data_bit_offset(static_cast<uint32_t>(*data_bit_offset));
   result->set_const_value(std::move(const_value));
   if (decl_file) {
-    result->set_decl_line(MakeFileLine(die.getDwarfUnit(), decl_file, decl_line,
+    result->set_decl_line(MakeFileLine(binary_.get(), die.getDwarfUnit(), decl_file, decl_line,
                                        delegate_->GetBuildDirForSymbolFactory()));
   }
   return result;
@@ -1268,16 +1272,13 @@ AddressRanges DwarfSymbolFactory::GetCodeRanges(const DwarfDieDecoder& decoder) 
     return {};
 
   auto& unit = *value->unit;
-  auto sections = binary_ && binary_->GetLLVMContext() == &unit.getContext()
-                      ? binary_->GetSections()
-                      : GetDwarfSections(unit.getContext());
-  auto context = ReadUnitContext(sections, unit, GetSkeletonLLVMUnit());
+  auto context = GetUnitContext(unit, binary_.get(), GetSkeletonUnit());
   if (context.has_error())
     return {};
 
   auto decoded = form == DwarfForm::kRnglistx
-                     ? GetCodeRangesFromRangelistXIndex(context.value(), *offset)
-                     : RangeListReader::ReadFromOffset(context.value(), *offset);
+                     ? GetCodeRangesFromRangelistXIndex(*context.value(), *offset)
+                     : RangeListReader::ReadFromOffset(*context.value(), *offset);
   if (decoded.has_error())
     return {};
 

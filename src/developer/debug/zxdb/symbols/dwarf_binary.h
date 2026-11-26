@@ -13,6 +13,7 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_sections.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/symbol_context.h"
 #include "src/developer/debug/zxdb/symbols/unit_index.h"
@@ -89,6 +90,10 @@ class DwarfBinary {
   // exists. A view is empty when its section is absent.
   virtual const DwarfSections& GetSections() const = 0;
 
+  // Returns cached metadata for a unit of this binary. Call on its LLVM context thread.
+  virtual UnitContextResult GetUnitContext(llvm::DWARFUnit& unit,
+                                           UnitContextSource skeleton = {}) const = 0;
+
   // Returns the extent of the mapped segments in memory.
   virtual uint64_t GetMappedLength() const = 0;
 
@@ -152,8 +157,8 @@ class DwarfBinary {
   // IsStrippedSequenceStart().
   virtual uint64_t GetFirstCodeAddress() const = 0;
 
-  // Purges cached per-unit DIE arrays, line tables, type signature maps, and unit wrappers so
-  // transient parse structures can be reclaimed and re-populated lazily on demand.
+  // Purges cached DIE arrays, line tables, type signature maps, unit wrappers, unit contexts,
+  // and abbreviation tables so transient parse structures can be reclaimed and rebuilt on demand.
   virtual void ClearLLVMCache() = 0;
 };
 

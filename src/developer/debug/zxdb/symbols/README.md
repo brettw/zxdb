@@ -139,6 +139,19 @@ Callers and implementations must preserve these invariants:
   `UnitContext` reads root DIE metadata for string offsets, indexed addresses,
   location lists, range lists, and compilation directories. LLVM supplies the
   DIE tree and the line table offset.
+- Each binary caches immutable unit contexts by LLVM unit identity. A split
+  unit also uses its skeleton identity when it has one. The split unit gets
+  the skeleton context from the skeleton binary's cache when possible. The
+  skeleton binary keeps its section bytes alive for the split binary.
+- The binary shares parsed abbreviation tables by section kind, offset, and
+  contribution end. It keeps parse errors in both caches because the section
+  bytes are immutable. A foreign LLVM context can use the byte reader with
+  its own section views. Callers supply the binary explicitly to the line and
+  location readers.
+- Only the thread that owns the LLVM context uses the unit context and
+  abbreviation caches. A DWO index worker owns its binary until it gives the
+  binary to the module. Source file workers use section views prepared before
+  they start. Debug builds check for overlapping cache access.
 - The address-to-unit map uses `.debug_aranges` first. It uses root DIE ranges
   for units without a parsed set and clips overlaps at the start of the later
   range. The map and the symbol factory omit ranges that start at address
@@ -184,6 +197,9 @@ Using `zxdb/symbols` produces these disk, cache, and IPC side effects:
   `DwarfBinary::GetLineFileTable()` usually parses only the line table header.
   Both share the file tables in the binary's `LineTableCache`.
   `DwarfBinary::ClearLLVMCache()` clears the cache.
+- `DwarfBinary::ClearLLVMCache()` also clears the unit context and abbreviation
+  caches. A previously returned context stays valid while its section bytes
+  stay alive.
 - `Index::CreateIndex()` starts worker threads for the source file index when
   the binary has 256 KB or more of line tables: one, plus one for each 2 MB,
   up to six.

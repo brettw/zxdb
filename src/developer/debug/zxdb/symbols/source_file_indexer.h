@@ -59,7 +59,8 @@ struct LineTableJob {
 // Adds a job for the unit's line table, if it has one. Call it on the thread that owns the
 // context. first_code_address is DwarfBinary::GetFirstCodeAddress().
 void AddLineTableJob(const DwarfSections& sections, UnitIndex unit_index, llvm::DWARFUnit& unit,
-                     uint64_t first_code_address, std::vector<LineTableJob>* jobs);
+                     uint64_t first_code_address, std::vector<LineTableJob>* jobs,
+                     const DwarfBinary* binary);
 
 // Finds the line table of every unit of the binary. Call it on the thread that owns the binary's
 // DWARFContext.

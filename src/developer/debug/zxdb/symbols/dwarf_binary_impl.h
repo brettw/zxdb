@@ -5,6 +5,7 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_BINARY_IMPL_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_BINARY_IMPL_H_
 
+#include <atomic>
 #include <map>
 #include <optional>
 
@@ -60,6 +61,8 @@ class DwarfBinaryImpl final : public DwarfBinary {
   llvm::object::ObjectFile* GetLLVMObjectFile() override;
   llvm::DWARFContext* GetLLVMContext() const override;
   const DwarfSections& GetSections() const override;
+  UnitContextResult GetUnitContext(llvm::DWARFUnit& unit,
+                                   UnitContextSource skeleton = {}) const override;
   uint64_t GetMappedLength() const override;
   const std::map<std::string, ElfTableSymbol>& GetELFSymbols() const override;
   const std::map<std::string, uint64_t> GetPLTSymbols() const override;
@@ -88,6 +91,8 @@ class DwarfBinaryImpl final : public DwarfBinary {
   fxl::RefPtr<DwarfUnit> CreateUncachedUnit(llvm::DWARFUnit* llvm_unit);
 
  private:
+  friend class UnitContextCacheTest;
+
   struct IndexedUnit {
     const UnitHeader& header;
     UnitSection section;
@@ -126,6 +131,13 @@ class DwarfBinaryImpl final : public DwarfBinary {
 
   // Holds the mapping between LLVM units and our cached unit wrappers that reference them.
   mutable std::map<const llvm::DWARFUnit*, fxl::RefPtr<DwarfUnit>> unit_map_;
+
+  // Like unit_map_, this is used on the LLVM context's owning thread. Source file workers
+  // use section views. Each DWO index worker owns its binary until it hands it to the module.
+  mutable UnitContextCache unit_contexts_;
+#ifndef NDEBUG
+  mutable std::atomic_flag unit_context_cache_active_;
+#endif
 
   // Maps 64-bit type unit signatures to their DIE references. Computed lazily by
   // EnsureSignatureMap() by scanning all type units in the normal and DWO unit lists.
