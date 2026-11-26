@@ -47,18 +47,6 @@ std::optional<DwarfDieRef> ResolveEntryDieRef(const DebugNamesReader& names,
 
 }  // namespace
 
-bool IsDwarf32DebugNamesTable(std::span<const uint8_t> section, uint64_t offset) {
-  // A 64-bit table starts with the escape value 0xffffffff in place of its 32-bit unit length. The
-  // escape value is the same in both byte orders.
-  if (offset > section.size() || section.size() - offset < 4)
-    return false;
-  for (size_t i = 0; i < 4; i++) {
-    if (section[offset + i] != 0xff)
-      return true;
-  }
-  return false;
-}
-
 std::vector<DebugNamesEntry> FindDebugNamesEntries(const DebugNamesReader& debug_names,
                                                    std::string_view name) {
   std::vector<DebugNamesEntry> results;

@@ -210,20 +210,30 @@ TEST(DwarfBinaryImpl, Dwarf4TypeUnits) {
   ASSERT_TRUE(setup.Init().ok());
   DwarfBinary& binary = *setup.symbols()->binary();
 
-  // The fixture has one compilation unit. Its TypeUnitOuter and TypeUnitInner each get a
-  // type unit.
+  // readelf -S build/test_data/zxdb/type_unit/gcc_dwarf4.so shows the .debug_types section.
+  // readelf --debug-dump=info build/test_data/zxdb/type_unit/gcc_dwarf4.so shows the unit offsets
+  // and the signatures and Type Offsets for TypeUnitOuter and TypeUnitInner, defined in
+  // test_data/type_unit/type_unit_fixture.cc. The section-relative DIE offset is the unit offset
+  // plus the Type Offset.
   ASSERT_EQ(3u, binary.GetNormalUnitCount());
 
-  // The first unit in each section starts at offset zero.
   auto info = binary.GetUnitAtIndex(UnitIndex(false, 0));
   auto first_type = binary.GetUnitAtIndex(UnitIndex(false, 1));
   auto second_type = binary.GetUnitAtIndex(UnitIndex(false, 2));
   ASSERT_TRUE(info);
   ASSERT_TRUE(first_type);
   ASSERT_TRUE(second_type);
+  EXPECT_EQ(0u, info->GetOffset());
+  EXPECT_EQ(0u, first_type->GetOffset());
+  EXPECT_EQ(0x5du, second_type->GetOffset());
   EXPECT_EQ(DwarfDieRef::Main(0), info->GetDieRef());
   EXPECT_EQ(DwarfDieRef::Type(0), first_type->GetDieRef());
-  EXPECT_EQ(DwarfDieRef::Section::kType, second_type->GetDieRef().section());
+  EXPECT_EQ(DwarfDieRef::Type(0x5d), second_type->GetDieRef());
+
+  // TypeUnitOuter is at 0x0 + 0x25, and TypeUnitInner is at 0x5d + 0x25.
+  EXPECT_EQ(DwarfDieRef::Type(0x25), binary.GetDieRefForSignature(0xde3dca152f8e7c98));
+  EXPECT_EQ(DwarfDieRef::Type(0x82), binary.GetDieRefForSignature(0xc9382c36fccd19d7));
+  EXPECT_FALSE(binary.GetDieRefForSignature(0).is_valid());  // Absent from the fixture.
 }
 
 TEST(DwarfBinaryImpl, Dwarf5TypeUnits) {
@@ -235,22 +245,30 @@ TEST(DwarfBinaryImpl, Dwarf5TypeUnits) {
   ASSERT_TRUE(setup.Init().ok());
   DwarfBinary& binary = *setup.symbols()->binary();
 
-  // The same fixture has one compilation unit and two type units, all in .debug_info.
+  // readelf --debug-dump=info build/test_data/zxdb/type_unit/gcc_dwarf5.so shows all three units
+  // in .debug_info. It gives the unit offsets and the signatures and Type Offsets for
+  // TypeUnitOuter and TypeUnitInner, defined in test_data/type_unit/type_unit_fixture.cc.
+  // The section-relative DIE offset is the unit offset plus the Type Offset.
+  constexpr uint64_t kUnitOffsets[] = {0x0, 0x5e, 0xa5};
   ASSERT_EQ(3u, binary.GetNormalUnitCount());
   uint32_t compile_count = 0;
   uint32_t type_count = 0;
   for (uint32_t i = 0; i < binary.GetNormalUnitCount(); ++i) {
     auto unit = binary.GetUnitAtIndex(UnitIndex(false, i));
     ASSERT_TRUE(unit);
-    if (i == 0)
-      EXPECT_EQ(DwarfDieRef::Main(0), unit->GetDieRef());
-    EXPECT_EQ(DwarfDieRef::Section::kMain, unit->GetDieRef().section());
+    EXPECT_EQ(kUnitOffsets[i], unit->GetOffset());
+    EXPECT_EQ(DwarfDieRef::Main(kUnitOffsets[i]), unit->GetDieRef());
     auto tag = static_cast<DwarfTag>(unit->GetUnitDie().getTag());
     compile_count += tag == DwarfTag::kCompileUnit;
     type_count += tag == DwarfTag::kTypeUnit;
   }
   EXPECT_EQ(1u, compile_count);
   EXPECT_EQ(2u, type_count);
+
+  // TypeUnitOuter is at 0x0 + 0x26, and TypeUnitInner is at 0x5e + 0x26.
+  EXPECT_EQ(DwarfDieRef::Main(0x26), binary.GetDieRefForSignature(0xde3dca152f8e7c98));
+  EXPECT_EQ(DwarfDieRef::Main(0x84), binary.GetDieRefForSignature(0xc9382c36fccd19d7));
+  EXPECT_FALSE(binary.GetDieRefForSignature(0).is_valid());  // Absent from the fixture.
 }
 
 // The checked-in test binary has a ".symtab" and a ".dynsym" section. The symbols of both are in

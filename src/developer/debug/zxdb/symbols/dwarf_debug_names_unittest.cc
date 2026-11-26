@@ -19,27 +19,6 @@ namespace zxdb {
 
 namespace {
 
-TEST(DwarfDebugNamesTest, IsDwarf32DebugNamesTable) {
-  const uint8_t kDwarf32[] = {0x10, 0x00, 0x00, 0x00, 0x05, 0x00};
-  EXPECT_TRUE(IsDwarf32DebugNamesTable(kDwarf32, 0));
-
-  // The escape value starts a 64-bit table in both byte orders.
-  const uint8_t kDwarf64[] = {0xff, 0xff, 0xff, 0xff, 0x10, 0, 0, 0, 0, 0, 0, 0};
-  EXPECT_FALSE(IsDwarf32DebugNamesTable(kDwarf64, 0));
-
-  // A table can start inside the section.
-  const uint8_t kSecond[] = {0x01, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff};
-  EXPECT_TRUE(IsDwarf32DebugNamesTable(kSecond, 0));
-  EXPECT_FALSE(IsDwarf32DebugNamesTable(kSecond, 4));
-
-  // No room for the unit length.
-  EXPECT_FALSE(IsDwarf32DebugNamesTable(kSecond, 5));
-  EXPECT_FALSE(IsDwarf32DebugNamesTable(kSecond, 8));
-  EXPECT_FALSE(IsDwarf32DebugNamesTable(kSecond, 9));
-  EXPECT_FALSE(IsDwarf32DebugNamesTable(kSecond, UINT64_MAX));
-  EXPECT_FALSE(IsDwarf32DebugNamesTable({}, 0));
-}
-
 TEST(DwarfDebugNamesTest, LookupBuiltBinary) {
   TestSymbolModule setup(TestSymbolModule::kBuilt);
   ASSERT_TRUE(setup.Init().ok());
