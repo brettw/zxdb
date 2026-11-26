@@ -2,6 +2,7 @@ add_library(zxdb_dwarf STATIC
   abbrev_table.cc
   data_reader.cc
   form_value.cc
+  unit_context.cc
   unit_header.cc
 )
 target_link_libraries(zxdb_dwarf PUBLIC zxdb_common)

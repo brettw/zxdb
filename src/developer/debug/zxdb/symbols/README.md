@@ -125,7 +125,9 @@ Callers and implementations must preserve these invariants:
   from line rows, `DW_AT_decl_file`, and the file index compare equal.
 - The line table and location list parsers and the `.debug_names` fast scan
   read section bytes from `DwarfSections`. `dwarf_sections_llvm.cc` maps LLVM
-  sections to these views. LLVM still supplies values from the unit DIE.
+  sections to these views. `UnitContext` reads unit DIE metadata for string
+  offsets, indexed addresses, location lists, and compilation directories.
+  LLVM supplies the DIE tree and the line table offset.
 - `IsStrippedSequenceStart()` is the only rule for removed code: a sequence
   that starts below `DwarfBinary::GetFirstCodeAddress()`. This matches LLDB.
   `LineTable` drops those sequences, and the file index ignores their files.
@@ -139,8 +141,8 @@ Callers and implementations must preserve these invariants:
   such as `getUnitDIE()` and `getLineTableForUnit()` belong on the thread
   that owns the `DWARFContext`. Before this thread starts the workers, it
   selects each unit's line and string sections from `DwarfSections` and
-  collects its `LineStringSections`. This includes the string offsets base
-  from LLVM for `DW_FORM_strx`.
+  collects its `LineStringSections`. This includes the string offsets base,
+  entry size, and contribution bounds from `UnitContext` for `DW_FORM_strx`.
 - `DW_LNE_define_file` can add files that the line table header doesn't have.
   File lookups go through `LineTableCache`, which decodes the program when an
   index is past the header's entries.

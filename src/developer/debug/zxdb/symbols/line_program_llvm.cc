@@ -19,10 +19,14 @@ LineStringSections GetLineStringSections(const DwarfSections& sections, llvm::DW
   result.line_str = AsStringView(sections.line_str);
   result.str = AsStringView(GetUnitStrSection(sections, unit));
   result.str_offsets = AsStringView(GetUnitStrOffsetsSection(sections, unit));
-  // This extracts the unit DIE, which has the string offsets base.
-  if (const auto& contribution = unit.getStringOffsetsTableContribution()) {
-    result.str_offsets_base = contribution->Base;
-    result.str_offset_size = contribution->getDwarfOffsetByteSize();
+  if (unit.getVersion() < 5 && !unit.isDWOUnit())
+    return result;
+  if (auto context = ReadUnitContext(sections, unit)) {
+    if (auto contribution = context.value().string_offsets()) {
+      result.str_offsets = result.str_offsets.substr(0, contribution->end);
+      result.str_offsets_base = contribution->base;
+      result.str_offset_size = contribution->entry_size;
+    }
   }
   return result;
 }

@@ -10,6 +10,7 @@
 #include "src/developer/debug/zxdb/common/ref_ptr_to.h"
 #include "src/developer/debug/zxdb/symbols/address_range_map_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/lazy_symbol.h"
@@ -64,11 +65,9 @@ std::string DwarfUnitImpl::GetCompilationDir() const {
   if (!binary_)
     return std::string();
 
-  // getCompilationDir() can return null if unset so be careful not to crash.
-  const char* comp_dir = unit_->getCompilationDir();
-  if (!comp_dir)
-    return std::string();
-  return std::string(comp_dir);
+  auto context = ReadUnitContext(binary_->GetSections(), *unit_);
+  return context ? std::string(context.value().compilation_dir().value_or(std::string_view()))
+                 : std::string();
 }
 
 const LineTable& DwarfUnitImpl::GetLineTable() const {

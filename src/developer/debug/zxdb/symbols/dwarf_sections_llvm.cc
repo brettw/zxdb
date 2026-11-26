@@ -4,6 +4,8 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 
+#include <iterator>
+
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFObject.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
@@ -27,6 +29,22 @@ std::span<const uint8_t> GetSingleSection(const llvm::DWARFObject& object,
   // Relocatable objects can have multiple COMDAT sections of the same type. The byte reader
   // doesn't support these objects.
   return count == 1 ? result : std::span<const uint8_t>();
+}
+
+const llvm::DWARFUnitIndex::Entry* GetPackageEntry(llvm::DWARFUnit& unit,
+                                                   const UnitHeader& header) {
+  if (!unit.isDWOUnit())
+    return nullptr;
+
+  // Match LLVM's split-unit lookup by signature, then by section offset.
+  const auto& index =
+      unit.isTypeUnit() ? unit.getContext().getTUIndex() : unit.getContext().getCUIndex();
+  auto signature = unit.isTypeUnit() ? header.type_signature : header.dwo_id;
+  if (signature && index) {
+    if (auto* entry = index.getFromHash(*signature))
+      return entry;
+  }
+  return index.getFromOffset(header.offset);
 }
 
 }  // namespace
@@ -77,6 +95,77 @@ std::span<const uint8_t> GetUnitStrSection(const DwarfSections& sections,
 std::span<const uint8_t> GetUnitStrOffsetsSection(const DwarfSections& sections,
                                                   const llvm::DWARFUnit& unit) {
   return unit.isDWOUnit() ? sections.str_offsets_dwo : sections.str_offsets;
+}
+
+ErrOr<UnitContext> ReadUnitContext(const DwarfSections& sections, llvm::DWARFUnit& unit,
+                                   llvm::DWARFUnit* skeleton) {
+  auto info = AsBytes(unit.getInfoSection().Data);
+  bool is_dwo = unit.isDWOUnit();
+  UnitSection kind =
+      unit.isTypeUnit() && unit.getVersion() < 5 ? UnitSection::kTypes : UnitSection::kInfo;
+  auto header = ReadUnitHeader(info, unit.getOffset(), sections.little_endian, kind);
+  if (header.has_error())
+    return header.err();
+
+  // Use the section of this LLVM unit even when the object has several sections of this kind.
+  DwarfSections unit_sections = sections;
+  if (kind == UnitSection::kTypes)
+    (is_dwo ? unit_sections.types_dwo : unit_sections.types) = info;
+  else
+    (is_dwo ? unit_sections.info_dwo : unit_sections.info) = info;
+
+  UnitContext::Options options;
+  options.is_dwo = is_dwo;
+  if (const auto* entry = GetPackageEntry(unit, header.value())) {
+    auto contribution =
+        [entry](llvm::DWARFSectionKind section) -> std::optional<UnitContext::Contribution> {
+      if (const auto* part = entry->getContribution(section))
+        return UnitContext::Contribution{part->getOffset(), part->getLength()};
+      return std::nullopt;
+    };
+    // The package index gives the bounds of this unit's abbreviation contribution.
+    auto abbrev = contribution(llvm::DW_SECT_ABBREV);
+    if (!abbrev || abbrev->offset > sections.abbrev_dwo.size() ||
+        abbrev->size > sections.abbrev_dwo.size() - abbrev->offset) {
+      return Err("Invalid DWARF package abbreviation contribution.");
+    }
+    header.value().abbrev_offset = abbrev->offset;
+    unit_sections.abbrev_dwo = sections.abbrev_dwo.first(abbrev->offset + abbrev->size);
+    options.package = UnitContext::PackageContributions{
+        contribution(llvm::DW_SECT_STR_OFFSETS),
+        contribution(llvm::DW_SECT_LOCLISTS),
+        contribution(llvm::DW_SECT_RNGLISTS),
+    };
+  }
+
+  std::optional<UnitContext> skeleton_context;
+  if (is_dwo) {
+    if (!skeleton)
+      skeleton = unit.getLinkedUnit();
+    llvm::DWARFUnit* address_table = skeleton;
+    if (!address_table) {
+      // LLVM's address lookup uses the sole main info unit when there is no explicit link.
+      auto main_units = unit.getContext().info_section_units();
+      if (main_units.begin() != main_units.end() &&
+          std::next(main_units.begin()) == main_units.end()) {
+        address_table = main_units.begin()->get();
+      }
+    }
+    if (address_table && !address_table->isDWOUnit()) {
+      auto context = ReadUnitContext(&address_table->getContext() == &unit.getContext()
+                                         ? sections
+                                         : GetDwarfSections(address_table->getContext()),
+                                     *address_table);
+      if (context.ok()) {
+        skeleton_context = context.take_value();
+        if (skeleton)
+          options.skeleton = &*skeleton_context;
+        else
+          options.address_table = &*skeleton_context;
+      }
+    }
+  }
+  return UnitContext::Parse(unit_sections, header.value(), kind, options);
 }
 
 }  // namespace zxdb

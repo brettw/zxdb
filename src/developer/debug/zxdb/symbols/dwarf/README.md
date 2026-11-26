@@ -23,6 +23,11 @@
   with unit and section data.
 - `SkipForm()` moves past one value and returns false if the form or its
   bytes are invalid. It needs the form code and the unit's form parameters.
+- `UnitContext::Parse()` reads the first DIE of a unit. The context gives the
+  table bases, compilation directory, base address, low PC, range list
+  reference, and line table offset. `ResolveString()` and `ResolveAddress()`
+  resolve forms that use the unit's sections and tables. `ReadAddress()` and
+  `ReadLoclistOffset()` take table indices.
 - `DwarfSectionBuilder` and `DwarfStringSectionBuilder` write section bytes
   for tests. `DwarfSectionBuilder` writes unit headers and abbreviation
   declarations. It can write raw unit lengths for error tests. The build
@@ -67,6 +72,22 @@
   DWARF 5 errata.
 - Blocks, inline strings, and 16-byte constants borrow the reader's input.
   Keep the input alive while using these values.
+- A `UnitContext` bounds the root DIE to its unit. It keeps the first value
+  for each attribute. It resolves indexed forms after it reads the bases.
+  Errors in section lookups affect only the values that use those sections.
+- A split unit uses its skeleton's address table and base address. For
+  DWARF 4 split units, the skeleton can supply GNU address and range bases.
+  The GNU range base applies only to the split unit. A DWARF 4 split unit
+  uses its own headerless string offsets table. A DWARF 5 split unit uses
+  its own string, range, and location list contributions.
+- Address indices must fit in the address section. String indices must fit
+  in the string offsets contribution. A location list index must fit in the
+  offset array, and its target must follow that array in the same
+  contribution. Package contribution bounds come from the caller.
+- A parsed context has no lazy state. It borrows the section bytes, including
+  the skeleton's address section when applicable. Readers can share the
+  context across threads while the section bytes stay alive. The reader
+  expects section bytes with ELF relocations already applied.
 
 ## Side Effects
 
@@ -75,4 +96,4 @@ Reads change only the reader's cursor and error state.
 ## Verification
 
 - Build with `cmake --build build --target zxdb_dwarf zxdb_tests`.
-- Run `FUCHSIA_ANALYTICS_DISABLED=1 ./build/zxdb_tests --gtest_filter='AbbrevTable.*:DataReader.*:DwarfSectionBuilder.*:FormValue.*:Dwarf2To5/FormEncodingTest.*:UnitHeader.*:UnitList.*'`.
+- Run `FUCHSIA_ANALYTICS_DISABLED=1 ./build/zxdb_tests --gtest_filter='AbbrevTable.*:DataReader.*:DwarfSectionBuilder.*:FormValue.*:Dwarf2To5/FormEncodingTest.*:UnitContext.*:UnitHeader.*:UnitList.*'`.

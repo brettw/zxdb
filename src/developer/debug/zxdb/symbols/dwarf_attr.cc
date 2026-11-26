@@ -166,6 +166,10 @@ const char* GetVendorAttrName(DwarfAttr attr) {
   switch (attr) {
     case DwarfAttr::kGnuDwoName:
       return "DW_AT_GNU_dwo_name";
+    case DwarfAttr::kGnuRangesBase:
+      return "DW_AT_GNU_ranges_base";
+    case DwarfAttr::kGnuAddrBase:
+      return "DW_AT_GNU_addr_base";
     default:
       return nullptr;
   }

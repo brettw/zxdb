@@ -9,7 +9,8 @@ edge case list current: add a test and an entry for each new edge case.
 
 zxdb parses each line table header and decodes the line program that follows
 it. The parser gets the section bytes and byte order from `DwarfSections`.
-LLVM supplies each unit's line table offset and string offsets contribution.
+LLVM supplies each unit's line table offset. `UnitContext` reads the string
+offsets contribution.
 DWO units use the `.dwo` line, string, and string offsets sections. All units
 use the main `.debug_line_str` section.
 
@@ -161,11 +162,10 @@ Key decisions:
   use any LLVM objects. Functions in `line_program_llvm.h` are restricted to
   the context thread. The parser header exposes no LLVM-unit entry points.
 - **String forms that need the unit.** `DW_FORM_strx` and similar forms read
-  the unit's string offsets table. LLVM sets the unit's string offsets base
-  again each time it extracts the unit DIE, so workers can't ask the unit.
-  `CollectLineTableJobs()` records the base, the entry size, and the string
-  sections in `LineStringSections` on the owning thread. Workers then read the
-  string offsets table themselves.
+  the unit's string offsets table. `CollectLineTableJobs()` records the base,
+  the entry size, and the string sections in `LineStringSections` on the
+  owning thread. The string offsets view ends at the contribution boundary.
+  Workers read the entries from this view.
 - **Path cache.** `LineFilePathResolver` caches normalized paths by the
   addresses of the directory and file name strings. In DWARF 5 the linker
   merges `.debug_line_str`, so a path is computed once for each thread. A

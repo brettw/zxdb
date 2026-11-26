@@ -30,7 +30,8 @@ struct DwarfSections;
 // On error this will return an empty VariableLocation.
 VariableLocation DecodeVariableLocation(const DwarfSections& sections, llvm::DWARFUnit* unit,
                                         const llvm::DWARFFormValue& form,
-                                        const UncachedLazySymbol& source);
+                                        const UncachedLazySymbol& source,
+                                        llvm::DWARFUnit* skeleton = nullptr);
 
 // Low-level decode for a DWARF 4 variable location description. The data should start at the
 // beginning of the location list to parse, and cover as much data as the location list could

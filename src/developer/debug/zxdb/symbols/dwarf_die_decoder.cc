@@ -180,11 +180,16 @@ std::optional<uint64_t> DwarfDieDecoder::DecodeAddress(const AttributeValue& val
   }
 
   llvm::DWARFUnit* table_unit = address_table_unit_ ? address_table_unit_ : value.unit;
-  std::optional<llvm::object::SectionedAddress> entry =
-      table_unit->getAddrOffsetSectionItem(static_cast<uint32_t>(index));
-  if (!entry || entry->Address == kTombstone)
+  auto context = ReadUnitContext(binary_ && binary_->GetLLVMContext() == &table_unit->getContext()
+                                     ? binary_->GetSections()
+                                     : GetDwarfSections(table_unit->getContext()),
+                                 *table_unit);
+  if (!context)
     return std::nullopt;
-  std::optional<uint64_t> address = CheckedAdd(entry->Address, offset);
+  auto entry = context.value().ReadAddress(index);
+  if (!entry || *entry == kTombstone)
+    return std::nullopt;
+  std::optional<uint64_t> address = CheckedAdd(*entry, offset);
   if (!address || *address == kTombstone)
     return std::nullopt;
   return address;

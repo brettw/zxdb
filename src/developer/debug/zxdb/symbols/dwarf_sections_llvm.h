@@ -6,6 +6,7 @@
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_SECTIONS_LLVM_H_
 
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_sections.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/unit_context.h"
 
 namespace llvm {
 class DWARFContext;
@@ -26,6 +27,11 @@ std::span<const uint8_t> GetUnitStrSection(const DwarfSections& sections,
                                            const llvm::DWARFUnit& unit);
 std::span<const uint8_t> GetUnitStrOffsetsSection(const DwarfSections& sections,
                                                   const llvm::DWARFUnit& unit);
+
+// Uses LLVM's section identity, DWP index, and split-unit link. The byte reader decodes
+// the unit header and root attributes. Call on the LLVM context thread.
+ErrOr<UnitContext> ReadUnitContext(const DwarfSections& sections, llvm::DWARFUnit& unit,
+                                   llvm::DWARFUnit* skeleton = nullptr);
 
 }  // namespace zxdb
 

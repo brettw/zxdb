@@ -61,11 +61,13 @@ void AppendAddressRange(uint64_t low, uint64_t high, AddressRanges::RangeVector*
 // are empty, returns an empty FileLine.
 FileLine MakeFileLine(llvm::DWARFUnit* unit, const std::optional<std::string>& file,
                       const std::optional<uint64_t>& line, std::string compilation_dir) {
-  if (compilation_dir.empty() && unit->getCompilationDir())
-    compilation_dir = unit->getCompilationDir();
-  if (file && !file->empty() && line && *line > 0)
-    return FileLine(*file, compilation_dir, static_cast<int>(*line));
-  return FileLine();
+  if (!file || file->empty() || !line || *line == 0)
+    return FileLine();
+  if (compilation_dir.empty()) {
+    if (auto context = ReadUnitContext(GetDwarfSections(unit->getContext()), *unit))
+      compilation_dir = context.value().compilation_dir().value_or(std::string_view());
+  }
+  return FileLine(*file, compilation_dir, static_cast<int>(*line));
 }
 
 // The attributes of an array subrange. Clang writes DW_AT_count, and GCC writes DW_AT_upper_bound.
@@ -114,11 +116,11 @@ VariableLocation DwarfSymbolFactory::DecodeLocation(const llvm::DWARFDie& die,
                                                     const llvm::DWARFFormValue& form) const {
   llvm::DWARFUnit* unit = die.getDwarfUnit();
   UncachedLazySymbol source = MakeUncachedLazy(die);
-  if (binary_) {
+  if (binary_)
     FX_DCHECK(&unit->getContext() == binary_->GetLLVMContext());
-    return DecodeVariableLocation(binary_->GetSections(), unit, form, source);
-  }
-  return DecodeVariableLocation(GetDwarfSections(unit->getContext()), unit, form, source);
+  return DecodeVariableLocation(
+      binary_ ? binary_->GetSections() : GetDwarfSections(unit->getContext()), unit, form, source,
+      GetSkeletonLLVMUnit());
 }
 
 DwarfSymbolFactory::ArraySubrange DwarfSymbolFactory::ReadArraySubrange(
@@ -287,18 +289,19 @@ fxl::RefPtr<CompileUnit> DwarfSymbolFactory::GetCompileUnitForDie(DwarfDieRef di
   return fxl::RefPtr<CompileUnit>();
 }
 
-DwarfDieDecoder DwarfSymbolFactory::MakeDecoder(std::span<const DwarfAttr> attributes) const {
-  // A .dwo unit has no address table. Its addresses are in the table of the skeleton unit in the
-  // main binary.
-  llvm::DWARFUnit* address_table_unit = nullptr;
+llvm::DWARFUnit* DwarfSymbolFactory::GetSkeletonLLVMUnit() const {
   if (delegate_) {
-    if (CompileUnit* skeleton_unit = delegate_->GetSkeletonCompileUnit())
-      address_table_unit = skeleton_unit->dwarf_unit()->GetLLVMUnit();
+    if (CompileUnit* skeleton = delegate_->GetSkeletonCompileUnit())
+      return skeleton->dwarf_unit()->GetLLVMUnit();
   }
+  return nullptr;
+}
 
+DwarfDieDecoder DwarfSymbolFactory::MakeDecoder(std::span<const DwarfAttr> attributes) const {
+  // A .dwo unit uses the address table in the main binary.
   if (binary_)
-    return DwarfDieDecoder(*binary_.get(), attributes, address_table_unit);
-  return DwarfDieDecoder(GetLLVMContext(), attributes, address_table_unit);
+    return DwarfDieDecoder(*binary_.get(), attributes, GetSkeletonLLVMUnit());
+  return DwarfDieDecoder(GetLLVMContext(), attributes, GetSkeletonLLVMUnit());
 }
 
 fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeSymbol(const llvm::DWARFDie& die) const {

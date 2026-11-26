@@ -416,6 +416,7 @@ void LineTableTestSections::Finish(uint8_t address_size, bool little_endian) {
 DwarfSections LineTableTestSections::sections() const {
   DwarfSections result;
   result.info = info_;
+  result.abbrev = AsBytes(buffers_.find("debug_abbrev")->second->getBuffer());
   result.str = str_.bytes();
   result.str_offsets = str_offsets_;
   result.line = line_;
