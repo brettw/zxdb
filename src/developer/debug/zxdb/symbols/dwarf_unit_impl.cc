@@ -82,6 +82,8 @@ const LineTable& DwarfUnitImpl::GetLineTable() const {
 
 uint64_t DwarfUnitImpl::GetDieCount() const { return unit_->getNumDIEs(); }
 
+void DwarfUnitImpl::ClearDieCache() const { unit_->clear(); }
+
 llvm::DWARFDie DwarfUnitImpl::GetLLVMDieAtIndex(uint64_t index) const {
   return unit_->getDIEAtIndex(index);
 }

@@ -16,20 +16,10 @@
 #include "src/developer/debug/zxdb/symbols/unit_index.h"
 #include "src/lib/fxl/macros.h"
 
-namespace llvm {
-
-class DWARFCompileUnit;
-class DWARFDie;
-
-namespace object {
-class ObjectFile;
-}  // namespace object
-
-}  // namespace llvm
-
 namespace zxdb {
 
 class DwarfBinary;
+class DwarfDie;
 class DwarfUnit;
 
 class Index {
@@ -94,7 +84,7 @@ class Index {
 
  private:
   void IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, bool force_slow_path);
-  void IndexSkeletonCompileUnit(const DwarfUnit& unit, const llvm::DWARFDie& unit_die);
+  void IndexSkeletonCompileUnit(const DwarfUnit& unit, DwarfDie unit_die);
 
   // Populates the file_name_index_ given a now-unchanging files_ map.
   void IndexFileNames();

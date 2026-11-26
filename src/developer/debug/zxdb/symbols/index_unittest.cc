@@ -15,6 +15,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "src/developer/debug/shared/string_util.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 #include "src/developer/debug/zxdb/symbols/line_table.h"
 #include "src/developer/debug/zxdb/symbols/module_symbols_impl.h"
 #include "src/developer/debug/zxdb/symbols/source_file_indexer.h"
@@ -285,6 +286,36 @@ TEST(Index, Fission) {
   EXPECT_EQ("main.dwo", index.dwo_refs()[1].dwo_name);
 }
 
+TEST(Index, UnitDieLookup) {
+  TestSymbolModule setup(TestSymbolModule::kCheckedIn);
+  ASSERT_TRUE(setup.Init("", false).ok());
+  DwarfBinary* binary = setup.symbols()->binary();
+  auto unit = binary->GetUnitAtIndex(UnitIndex(false, 0));
+  auto other = binary->GetUnitAtIndex(UnitIndex(false, 1));
+  ASSERT_TRUE(unit);
+  ASSERT_TRUE(other);
+
+  ASSERT_GT(unit->GetDieCount(), 1u);
+  DwarfDie root = unit->GetDieAtIndex(0);
+  ASSERT_TRUE(root);
+  EXPECT_EQ(0u, unit->GetIndexForDie(root));
+  DwarfDie child = root.first_child();
+  ASSERT_TRUE(child);
+  EXPECT_EQ(child, unit->GetDieAtIndex(1));
+  EXPECT_EQ(1u, unit->GetIndexForDie(child));
+  DwarfDieRef ref = unit->GetDieRef(child.offset());
+  EXPECT_EQ(child, unit->GetDieAtOffset(ref));
+  EXPECT_EQ(child, binary->GetDieAtOffset(ref));
+  EXPECT_FALSE(other->GetDieAtOffset(ref));
+  EXPECT_EQ(std::nullopt, other->GetIndexForDie(child));
+
+  EXPECT_EQ(std::nullopt, unit->GetIndexForDie({}));
+  EXPECT_FALSE(unit->GetDieAtOffset({}));
+  EXPECT_FALSE(binary->GetDieAtOffset({}));
+  EXPECT_FALSE(unit->GetDieAtOffset(DwarfDieRef::Main(0)));  // Unit header.
+  EXPECT_FALSE(binary->GetDieAtOffset(DwarfDieRef::Main(0)));
+}
+
 // Verifies that Index::CreateIndex evicts each compilation unit's decoded DIE array immediately
 // after indexing that unit rather than accumulating all units' DIE arrays in memory.
 TEST(Index, CreateIndexEvictsUnitCaches) {
@@ -297,23 +328,23 @@ TEST(Index, CreateIndexEvictsUnitCaches) {
   fxl::RefPtr<DwarfUnit> unit0 = binary->GetUnitAtIndex(UnitIndex(false, 0));
   ASSERT_TRUE(unit0);
 
-  // Extracting the full unit DIE tree populates the underlying LLVM unit's DieArray so child DIEs
-  // are visible even when querying getUnitDIE with ExtractUnitDIEOnly = true.
-  ASSERT_TRUE(unit0->GetUnitDie().isValid());
-  EXPECT_TRUE(unit0->GetLLVMUnit()->getUnitDIE(true).getFirstChild().isValid());
+  // Once the tree is loaded, a root-only lookup can see its children.
+  ASSERT_TRUE(DwarfDie(unit0->GetUnitDie()));
+  llvm::DWARFContext* context = binary->GetLLVMContext();
+  EXPECT_TRUE(DwarfDie(context->getUnitAtIndex(0)->getUnitDIE(true)).first_child());
 
   Index index;
   index.CreateIndex(*binary, IndexNode::SymbolRef::kMainBinary);
 
   // After CreateIndex completes (without an explicit ClearLLVMCache call), every unit's non-root
   // DIEs should have been evicted at the end of IndexCompileUnit.
-  for (const auto& llvm_unit : binary->GetLLVMContext()->normal_units()) {
+  for (const auto& llvm_unit : context->normal_units()) {
     ASSERT_TRUE(llvm_unit);
-    EXPECT_FALSE(llvm_unit->getUnitDIE(true).getFirstChild().isValid());
+    EXPECT_FALSE(DwarfDie(llvm_unit->getUnitDIE(true)).first_child());
   }
 
   // Subsequent on-demand queries on the unit should lazily re-extract the DIEs and line table.
-  EXPECT_TRUE(unit0->GetUnitDie().getFirstChild().isValid());
+  EXPECT_TRUE(DwarfDie(unit0->GetUnitDie()).first_child());
   EXPECT_GT(unit0->GetLineTable().files().size(), 0u);
 }
 
@@ -341,7 +372,7 @@ TEST(Index, ClearLLVMCacheEvictsUnitsAndLineTables) {
     fxl::RefPtr<DwarfUnit> unit1 = binary->GetUnitAtIndex(UnitIndex(false, 1));
     ASSERT_TRUE(unit1);
     weak_unit1 = unit1->GetWeakPtr();
-    ASSERT_TRUE(unit1->GetUnitDie().isValid());
+    ASSERT_TRUE(DwarfDie(unit1->GetUnitDie()));
     const LineTable& line_table = unit1->GetLineTable();
     initial_file_count = line_table.files().size();
     ASSERT_GT(initial_file_count, 1u);
@@ -358,7 +389,7 @@ TEST(Index, ClearLLVMCacheEvictsUnitsAndLineTables) {
   EXPECT_FALSE(weak_unit1);
   for (const auto& llvm_unit : binary->GetLLVMContext()->normal_units()) {
     ASSERT_TRUE(llvm_unit);
-    EXPECT_FALSE(llvm_unit->getUnitDIE(true).getFirstChild().isValid());
+    EXPECT_FALSE(DwarfDie(llvm_unit->getUnitDIE(true)).first_child());
   }
 
   // Re-querying unit 1 after cache eviction must allocate a fresh DwarfUnit wrapper and re-parse

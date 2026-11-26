@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program_test_util.h"
 
@@ -345,7 +346,7 @@ TEST_P(SourceFileIndexerStrxTest, ResolvesWithUnit) {
   // Index::CreateIndex() extracts and frees each unit's DIEs while the workers run. Do the same,
   // so FinishInto() must extract the unit DIE again for the string offsets table.
   for (size_t i = 0; i < 2; i++) {
-    ASSERT_TRUE(sections.unit(i)->getUnitDIE(false).isValid());
+    ASSERT_TRUE(DwarfDie(sections.unit(i)->getUnitDIE(false)));
     sections.unit(i)->clear();
   }
 

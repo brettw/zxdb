@@ -6,7 +6,6 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/DebugInfo/DWARF/DWARFDie.h"
 #include "src/developer/debug/zxdb/symbols/mock_symbol_factory.h"
 
 namespace zxdb {

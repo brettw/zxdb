@@ -40,6 +40,7 @@ class DwarfUnitImpl : public DwarfUnit {
   std::string GetCompilationDir() const override;
   const LineTable& GetLineTable() const override;
   uint64_t GetDieCount() const override;
+  void ClearDieCache() const override;
   llvm::DWARFDie GetLLVMDieAtIndex(uint64_t index) const override;
   llvm::DWARFDie GetLLVMDieAtOffset(DwarfDieRef die_ref) const override;
   uint64_t GetIndexForLLVMDie(const llvm::DWARFDie& die) const override;

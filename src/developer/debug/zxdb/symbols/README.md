@@ -65,6 +65,9 @@ Public headers expose these symbol classes, factories, and evaluators:
 - `DwarfDie` is a handle to an entry in a unit's DIE array. Use it to read
   the tag, walk the tree, or iterate over the attribute specifications. Use
   the handle only while the unit keeps its DIE array.
+- The index scans each unit in array order. It uses each `DwarfDie` and its
+  parent index to track scope. The index stores `DwarfDieRef` values so it
+  can release the unit's DIE array after indexing.
 - `DwarfDieDecoder::Decode()` takes a `DwarfDie`. `GetValue()` returns an
   `AttributeValue` with a zxdb `FormValue`, the `DwarfDie` that supplied it,
   and that DIE's unit. The decoder converts the values that LLVM reads and

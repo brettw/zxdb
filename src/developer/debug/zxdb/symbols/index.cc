@@ -4,16 +4,16 @@
 
 #include "src/developer/debug/zxdb/symbols/index.h"
 
-#include <filesystem>
+#include <algorithm>
+#include <initializer_list>
 #include <string_view>
 #include <variant>
 
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
-#include "llvm/DebugInfo/DWARF/DWARFDebugInfoEntry.h"
 #include "src/developer/debug/shared/string_util.h"
 #include "src/developer/debug/zxdb/common/adapters.h"
 #include "src/developer/debug/zxdb/common/file_util.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_scanner.h"
@@ -80,7 +80,7 @@ class NamedSymbolRef : public IndexNode::SymbolRef {
   //
   // When walking the dependency path, the abstract origin (if any) encodes the lexical scope.
   // As an example, DW_TAG_inlined_subroutine DIEs are inside of the function they're inlined into
-  // (the calling function will be die.getParent()). These will then have an abstract origin of a
+  // (the calling function will be die.parent()). These will then have an abstract origin of a
   // DIE outside of the function containing the common info for all inlined instances.
   //
   // When there's no separate declaration, this abstract origin will be the scope that the function
@@ -129,34 +129,26 @@ class NamedSymbolRef : public IndexNode::SymbolRef {
 
 // A unit-level declaration can lack enclosing scopes. A linkage name can also be the only
 // name available. Both spellings must refer to the definition, even when a separate DIE names it.
-void IndexFunctionNames(FunctionNameIndex& names, const NamedSymbolRef& ref,
-                        llvm::DWARFDie definition, llvm::DWARFDie origin) {
+void IndexFunctionNames(FunctionNameIndex& names, const NamedSymbolRef& ref, DwarfDie definition,
+                        DwarfDie origin) {
   auto declaration = origin ? origin : definition;
-  if (declaration.getParent() == declaration.getDwarfUnit()->getUnitDIE()) {
-    if (auto name = definition.getShortName(); name && std::string_view(name).contains("::"))
+  // The unit's root is the first entry in its DIE array.
+  if (declaration.parent_index() == 0) {
+    if (auto name = definition.short_name(); name && std::string_view(name).contains("::"))
       names.AddQualifiedName(name, ref);
-  } else if (!ref.name().empty() || definition.getShortName()) {
+  } else if (!ref.name().empty() || definition.short_name()) {
     return;  // The enclosing declarations supply the scope.
   }
-  if (auto linkage = definition.getLinkageName())
+  if (auto linkage = definition.linkage_name())
     names.AddLinkageName(linkage, ref, ref.name());
 }
 
-// Returns true if the given abbreviation defines a PC range.
-bool AbbrevHasCode(const llvm::DWARFAbbreviationDeclaration* abbrev) {
-  for (const auto spec : abbrev->attributes()) {
-    DwarfAttr attr = static_cast<DwarfAttr>(spec.Attr);
-    if (attr == DwarfAttr::kLowPc || attr == DwarfAttr::kHighPc || attr == DwarfAttr::kRanges)
-      return true;
-  }
-  return false;
-}
-
-// Returns true if the given abbreviation defines a "location".
-bool AbbrevHasLocation(const llvm::DWARFAbbreviationDeclaration* abbrev) {
-  for (const auto spec : abbrev->attributes()) {
-    if (static_cast<DwarfAttr>(spec.Attr) == DwarfAttr::kLocation)
-      return true;
+bool HasAnyAttribute(DwarfDie die, std::initializer_list<DwarfAttr> attrs) {
+  if (auto specs = die.attributes()) {
+    for (const auto spec : *specs) {
+      if (std::ranges::find(attrs, static_cast<DwarfAttr>(spec.attribute)) != attrs.end())
+        return true;
+    }
   }
   return false;
 }
@@ -221,7 +213,7 @@ class UnitIndexer {
   //
   // The kVar case is also returned for collection members. These need to be treated as variables
   // when they have const data, but not otherwise, and this function does not decode the attributes.
-  IndexNode::Kind GetKindForDie(const llvm::DWARFDebugInfoEntry* die) const;
+  IndexNode::Kind GetKindForDie(DwarfDie die) const;
 
   // Computes in the name and type for a DIE entry that wasn't filled in in the first pass (see
   // class-level comment). Returns empty string if there is no name (this is important for the
@@ -242,16 +234,8 @@ class UnitIndexer {
   //
   // This is used for the uncommon case of cross-unit references, where the declaration might be
   // in a different unit from the implementation. This means that the scanner's parent tree
-  // doesn't cover the object we want. This walks the tree using DWARFDie.getParent() which is
-  // conceptually simpler but requires a binary search at each step.
+  // doesn't cover the object we want. Walk the parent chain directly in that unit.
   void AddStandaloneEntryToIndex(uint32_t index_me, IndexNode* root);
-
-  // Given the index of a NamedSymbolRef known to have an abstract origin, fills in the index of the
-  // abstract origin to the given output variable if it exists in the same unit and returns true.
-  //
-  // If it doesn't exist or is in a different unit, returns false. Being in the same unit is
-  // required to stay in the index fast path.
-  bool GetAbstractOriginIndex(uint32_t source, uint32_t* abstract_origin_index) const;
 
   const DwarfUnit& unit_;
   int32_t dwo_index_ = IndexNode::SymbolRef::kMainBinary;
@@ -286,7 +270,7 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
   decoder.set_follow_specifications(false);
 
   for (; !scanner_.done(); scanner_.Advance()) {
-    const llvm::DWARFDebugInfoEntry* die = scanner_.Prepare();
+    DwarfDie die = scanner_.Prepare();
 
     // Check whether we should consider this before decoding since decoding is slow.
     IndexNode::Kind kind = GetKindForDie(die);
@@ -294,21 +278,20 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
       continue;
 
     if (kind == IndexNode::Kind::kTemplateParameter) {
-      uint32_t parent_idx = scanner_.GetParentIndex(scanner_.die_index());
-      if (parent_idx == DwarfDieScanner::kNoParent)
+      auto parent_idx = die.parent_index();
+      if (!parent_idx)
         continue;
-      const auto& parent = indexable_[parent_idx];
+      const auto& parent = indexable_[*parent_idx];
       // Names that already contain template arguments need no parameter decoding.
       if (!parent.has_modified_template_name() && debug::StringContains(parent.name(), "<"))
         continue;
     }
 
     // This DIE is of the type we want to index so decode.
-    if (!decoder.Decode(DwarfDie(llvm::DWARFDie(unit_.GetLLVMUnit(), die))))
+    if (!decoder.Decode(die))
       continue;
 
-    if (kind == IndexNode::Kind::kVar &&
-        static_cast<DwarfTag>(die->getTag()) == DwarfTag::kMember &&
+    if (kind == IndexNode::Kind::kVar && die.tag() == DwarfTag::kMember &&
         !decoder.Has(DwarfAttr::kConstValue)) {
       // An abstract origin can supply the constant value, so confirm its presence after decoding.
       //
@@ -326,22 +309,22 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
       // This is a template type parameter. We don't need to index this, but we do need to fixup the
       // name of the parent DIE to reflect the template types. There can be any number of these for
       // a type.
-      uint32_t parent_idx = scanner_.GetParentIndex(scanner_.die_index());
-      if (parent_idx == DwarfDieScanner::kNoParent)
+      auto parent_idx = die.parent_index();
+      if (!parent_idx)
         continue;
 
-      NamedSymbolRef& parent = indexable_[parent_idx];
+      NamedSymbolRef& parent = indexable_[*parent_idx];
 
       std::string fixup_template_name(parent.name());
 
       // Unfortunately, we need to decode again here to get the actual type instantiation. This
       // should be relatively quick and there should still be an overall speedup when using
       // -gsimple-template-names due to the drastically reduced symbol size.
-      if (!type_decoder_.Decode(DwarfDie(llvm::DWARFDie(unit_.GetLLVMUnit(), die))))
+      if (!type_decoder_.Decode(die))
         continue;
 
-      if (llvm::DWARFDie type_die = type_decoder_.GetReference(DwarfAttr::kType).llvm_die()) {
-        AddTemplateParameterToName(fixup_template_name, type_die.getShortName());
+      if (DwarfDie type_die = type_decoder_.GetReference(DwarfAttr::kType)) {
+        AddTemplateParameterToName(fixup_template_name, type_die.short_name());
         parent.set_name(std::move(fixup_template_name));
         parent.set_has_modified_template_name();
       }
@@ -351,8 +334,8 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
 
     // Compute the offset of a separate declaration if this DIE has one. This can be unit-relative
     // or .debug_info-relative (global).
-    llvm::DWARFDie decl = decoder.GetReference(DwarfAttr::kSpecification).llvm_die();
-    uint64_t decl_offset = decl ? decl.getOffset() : 0;
+    DwarfDie decl = decoder.GetReference(DwarfAttr::kSpecification);
+    uint64_t decl_offset = decl ? decl.offset() : 0;
 
     FX_DCHECK(scanner_.die_index() < indexable_.size());
     std::optional<bool> is_declaration = decoder.GetBool(DwarfAttr::kDeclaration);
@@ -361,20 +344,19 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
 
     std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
     indexable_[scanner_.die_index()] =
-        NamedSymbolRef(ref_kind, dwo_index_, unit_.GetDieRef(die->getOffset()), kind,
-                       name ? *name : "", decl_offset, decoder.Has(DwarfAttr::kAbstractOrigin));
+        NamedSymbolRef(ref_kind, dwo_index_, unit_.GetDieRef(die.offset()), kind, name ? *name : "",
+                       decl_offset, decoder.Has(DwarfAttr::kAbstractOrigin));
 
     if (kind == IndexNode::Kind::kFunction) {
-      IndexFunctionNames(*names, indexable_[scanner_.die_index()],
-                         llvm::DWARFDie(unit_.GetLLVMUnit(), die),
-                         decl ? decl : decoder.GetReference(DwarfAttr::kAbstractOrigin).llvm_die());
+      IndexFunctionNames(*names, indexable_[scanner_.die_index()], die,
+                         decl ? decl : decoder.GetReference(DwarfAttr::kAbstractOrigin));
     }
 
     // Check for "main" function annotation.
     std::optional<bool> is_main_subprogram = decoder.GetBool(DwarfAttr::kMainSubprogram);
     if (kind == IndexNode::Kind::kFunction && is_main_subprogram && *is_main_subprogram)
       main_functions->emplace_back(IndexNode::SymbolRef::kDwarf, dwo_index_,
-                                   unit_.GetDieRef(die->getOffset()));
+                                   unit_.GetDieRef(die.offset()));
   }
 }
 
@@ -394,15 +376,11 @@ void UnitIndexer::Index(IndexNode* root) {
   }
 }
 
-IndexNode::Kind UnitIndexer::GetKindForDie(const llvm::DWARFDebugInfoEntry* die) const {
-  const llvm::DWARFAbbreviationDeclaration* abbrev = die->getAbbreviationDeclarationPtr();
-  if (!abbrev)
-    return IndexNode::Kind::kNone;  // Corrupt.
-
-  switch (static_cast<DwarfTag>(abbrev->getTag())) {
+IndexNode::Kind UnitIndexer::GetKindForDie(DwarfDie die) const {
+  switch (die.tag()) {
     case DwarfTag::kSubprogram:
     case DwarfTag::kInlinedSubroutine:
-      if (AbbrevHasCode(abbrev))
+      if (HasAnyAttribute(die, {DwarfAttr::kLowPc, DwarfAttr::kHighPc, DwarfAttr::kRanges}))
         return IndexNode::Kind::kFunction;
       return IndexNode::Kind::kNone;  // Skip functions with no code.
 
@@ -421,7 +399,7 @@ IndexNode::Kind UnitIndexer::GetKindForDie(const llvm::DWARFDebugInfoEntry* die)
       return IndexNode::Kind::kType;
 
     case DwarfTag::kVariable:
-      if (!scanner_.is_inside_function() && AbbrevHasLocation(abbrev)) {
+      if (!scanner_.is_inside_function() && HasAnyAttribute(die, {DwarfAttr::kLocation})) {
         // Found variable storage outside of a function (variables inside functions are local so
         // don't get added to the global index).
         // TODO(bug 36671): index function-static variables.
@@ -431,11 +409,8 @@ IndexNode::Kind UnitIndexer::GetKindForDie(const llvm::DWARFDebugInfoEntry* die)
 
     case DwarfTag::kMember:
       // Ordinary instance members are not part of the global symbol index.
-      for (const auto& spec : abbrev->attributes()) {
-        DwarfAttr attr = static_cast<DwarfAttr>(spec.Attr);
-        if (attr == DwarfAttr::kConstValue || attr == DwarfAttr::kAbstractOrigin)
-          return IndexNode::Kind::kVar;
-      }
+      if (HasAnyAttribute(die, {DwarfAttr::kConstValue, DwarfAttr::kAbstractOrigin}))
+        return IndexNode::Kind::kVar;
       return IndexNode::Kind::kNone;
 
     case DwarfTag::kTemplateTypeParameter:
@@ -449,7 +424,7 @@ IndexNode::Kind UnitIndexer::GetKindForDie(const llvm::DWARFDebugInfoEntry* die)
 }
 
 const char* UnitIndexer::GetDieName(uint32_t index) {
-  if (name_decoder_.Decode(DwarfDie(unit_.GetLLVMDieAtIndex(index)))) {
+  if (name_decoder_.Decode(unit_.GetDieAtIndex(index))) {
     if (std::optional<const char*> name = name_decoder_.GetCString(DwarfAttr::kName))
       return *name;
   }
@@ -468,16 +443,16 @@ void UnitIndexer::AddEntryToIndex(uint32_t index_me, IndexNode* root) {
     // The actual name comes from the declaration so start from that index.
     //
     // 99% of all declarations are within the same unit so look up in the current unit first. If
-    // the current unit doesn't cover the offset, getDIEForOffset will return a null DIE.
-    llvm::DWARFDie die =
-        unit_.GetLLVMDieAtOffset(DwarfDieRef::Main(indexable_[index_me].decl_offset()));
-    if (!die) {
+    // the current unit doesn't cover the offset, GetDieAtOffset returns an invalid handle.
+    auto decl_index = unit_.GetIndexForDie(
+        unit_.GetDieAtOffset(DwarfDieRef::Main(indexable_[index_me].decl_offset())));
+    if (!decl_index) {
       // DIE not found in this unit, try adding it to the index using the slow path which allows
       // cross-unit references.
       AddStandaloneEntryToIndex(index_me, root);
       return;
     }
-    cur = unit_.GetIndexForLLVMDie(die);
+    cur = *decl_index;
 
     if (indexable_[index_me].name().empty()) {
       // When there's no name, take the name from the declaration.
@@ -503,12 +478,14 @@ void UnitIndexer::AddEntryToIndex(uint32_t index_me, IndexNode* root) {
   // Move to the abstract origin if present to start walking the scopes. The abstract origin (if
   // any) encodes the lexical scope (see has_abstract_origin() declaration above).
   if (indexable_[cur].has_abstract_origin()) {
-    if (!GetAbstractOriginIndex(cur, &cur)) {
-      // Fall back to the slow path. This will be all error cases as well as when the abstract
-      // origin is in a different complication unit (I have not seen this in practice).
+    DwarfDie origin = GetAbstractOrigin(unit_.GetDieAtIndex(cur));
+    auto origin_index = unit_.GetIndexForDie(origin);
+    if (!origin_index) {
+      // The slow path handles an absent origin or an origin in another unit.
       AddStandaloneEntryToIndex(index_me, root);
       return;
     }
+    cur = *origin_index;
   }
 
   // Goes to the parent. The first item was added above, the loop below will add going up the
@@ -562,22 +539,22 @@ void UnitIndexer::AddStandaloneEntryToIndex(uint32_t index_me, IndexNode* index_
 
   // Compute the name (avoiding GetDieName()) and the DIE to start indexing from.
   std::string name(named_ref.name());
-  llvm::DWARFDie die;
+  DwarfDie die;
   if (named_ref.decl_offset()) {
     // When there's a separate declaration, its parent encodes the scope information.
-    die = unit_.GetBinary()->GetLLVMDieAtOffset(DwarfDieRef::Main(named_ref.decl_offset()));
+    die = unit_.GetBinary()->GetDieAtOffset(DwarfDieRef::Main(named_ref.decl_offset()));
     if (!die)
       return;  // Invalid decl offset, skip indexing.
     if (name.empty()) {
       // The declaration can fill in the name if the name is not present on the implementation
       // (normally it's not there).
-      const char* n = die.getName(llvm::DINameKind::ShortName);
+      const char* n = die.short_name();
       name = n ? n : "";
     }
   } else {
     // When there's no declaration, the name will already have been filled in (if present) to the
     // named_ref.
-    die = unit_.GetBinary()->GetLLVMDieAtOffset(named_ref.die_ref());
+    die = unit_.GetBinary()->GetDieAtOffset(named_ref.die_ref());
   }
 
   if (name.empty())
@@ -587,7 +564,7 @@ void UnitIndexer::AddStandaloneEntryToIndex(uint32_t index_me, IndexNode* index_
 
   // When walking the dependency path, the abstract origin (if any) encodes the lexical scope
   // (see has_abstract_origin() declaration above).
-  if (llvm::DWARFDie ao = GetAbstractOrigin(DwarfDie(die)).llvm_die())
+  if (DwarfDie ao = GetAbstractOrigin(die))
     die = ao;
 
   // Stores the reverse path to the node we're inserting. This includes all scopes like namespaces
@@ -602,15 +579,15 @@ void UnitIndexer::AddStandaloneEntryToIndex(uint32_t index_me, IndexNode* index_
   std::vector<NameKind> path;
 
   // Walk the path upward saving the path. Don't include the leaf DIE.
-  while ((die = die.getParent())) {
+  while ((die = die.parent())) {
     if (path.size() > kMaxParentPath)
       return;  // Too deep nesting, give up.
 
-    auto kind = GetKindForDie(die.getDebugInfoEntry());
+    auto kind = GetKindForDie(die);
     if (kind == IndexNode::Kind::kNone)
       break;  // Hit the top of what we want to index (like the unit).
 
-    const char* n = die.getName(llvm::DINameKind::ShortName);
+    const char* n = die.short_name();
     path.emplace_back(n ? n : "", kind);
   }
 
@@ -621,21 +598,6 @@ void UnitIndexer::AddStandaloneEntryToIndex(uint32_t index_me, IndexNode* index_
 
   // Add the leaf item (holding the DIE reference) to the index.
   cur_index->AddChild(named_ref.kind(), named_ref.name(), named_ref);
-}
-
-bool UnitIndexer::GetAbstractOriginIndex(uint32_t source, uint32_t* abstract_origin_index) const {
-  llvm::DWARFDie die = unit_.GetLLVMDieAtOffset(indexable_[source].die_ref());
-  if (!die)
-    return false;  // Internal error, maybe symbols corrupt.
-
-  llvm::DWARFDie ao = GetAbstractOrigin(DwarfDie(die)).llvm_die();
-  if (!ao)
-    return false;  // Symbols corrupt.
-  if (ao.getDwarfUnit() != unit_.GetLLVMUnit())
-    return false;  // Different compilation unit.
-
-  *abstract_origin_index = unit_.GetIndexForLLVMDie(ao);
-  return true;
 }
 
 void RecursiveFindExact(const IndexNode* node, const Identifier& input, size_t input_index,
@@ -740,11 +702,11 @@ const std::vector<UnitIndex>* Index::FindFileUnitIndices(const std::string& name
 size_t Index::CountSymbolsIndexed() const { return RecursiveCountDies(root_); }
 
 void Index::IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, bool force_slow_path) {
-  llvm::DWARFDie unit_die = unit.GetUnitDie();
-  if (!unit_die.isValid())
+  DwarfDie unit_die(unit.GetUnitDie());
+  if (!unit_die.is_valid())
     return;
 
-  if (static_cast<DwarfTag>(unit_die.getTag()) == DwarfTag::kSkeletonUnit) {
+  if (unit_die.tag() == DwarfTag::kSkeletonUnit) {
     IndexSkeletonCompileUnit(unit, unit_die);
   } else {
     // Normal compilation unit.
@@ -757,19 +719,18 @@ void Index::IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, bool forc
 
   // Evict the unit's DIE array immediately after indexing so transient parse structures do not
   // accumulate across all compilation units during indexing.
-  unit_die = llvm::DWARFDie();
-  if (llvm::DWARFUnit* llvm_unit = unit.GetLLVMUnit())
-    llvm_unit->clear();
+  unit_die = DwarfDie();
+  unit.ClearDieCache();
 }
 
 // Skeleton units are units in the main binary that reference a .dwo file containing the symbols
 // for just that compilation unit. The skeleton unit has the addr_base which defines how addresses
 // are relocated from the link-independent .dwo file, as well as the line table.
-void Index::IndexSkeletonCompileUnit(const DwarfUnit& unit, const llvm::DWARFDie& unit_die) {
+void Index::IndexSkeletonCompileUnit(const DwarfUnit& unit, DwarfDie unit_die) {
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kDwoName, DwarfAttr::kGnuDwoName,
                                          DwarfAttr::kCompDir, DwarfAttr::kAddrBase};
   DwarfDieDecoder unit_decoder(*unit.GetBinary(), kAttrs);
-  if (!unit_decoder.Decode(DwarfDie(unit_die)))
+  if (!unit_decoder.Decode(unit_die))
     return;
 
   std::optional<const char*> dwo_name = unit_decoder.GetCString(DwarfAttr::kDwoName);
@@ -780,7 +741,7 @@ void Index::IndexSkeletonCompileUnit(const DwarfUnit& unit, const llvm::DWARFDie
     return;  // Need a name for the .dwo file to work, plus an address.
 
   SkeletonUnit& skeleton = dwo_refs_.emplace_back();
-  skeleton.skeleton_die_offset = unit_die.getDebugInfoEntry()->getOffset();
+  skeleton.skeleton_die_offset = unit_die.offset();
   skeleton.dwo_name = dwo_name ? *dwo_name : *gnu_dwo_name;
 
   skeleton.comp_dir = comp_dir ? *comp_dir : "";

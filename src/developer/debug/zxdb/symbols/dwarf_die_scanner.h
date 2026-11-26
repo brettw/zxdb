@@ -5,17 +5,11 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_DIE_SCANNER_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_DIE_SCANNER_H_
 
-#include <lib/syslog/cpp/macros.h>
 #include <stdint.h>
 
-#include <utility>
 #include <vector>
 
-namespace llvm {
-
-class DWARFDebugInfoEntry;
-
-}  // namespace llvm
+#include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 
 namespace zxdb {
 
@@ -35,9 +29,8 @@ class DwarfUnit;
 // In the second phase, the scanner can provide extra information for a DIE in the unit in constant
 // time.
 //
-// This class exists because in LLVM, getting the parent of a DIE used to require an inefficient
-// linear search. Since LLVM provides a direct way to get parent index, the necessity of this class
-// is largely elimiated.
+// The scan tracks which entries are inside a function. The second pass reads parent indices
+// directly from the unit's DIE array.
 class DwarfDieScanner {
  public:
   static constexpr uint32_t kNoParent = static_cast<uint32_t>(-1);
@@ -49,7 +42,7 @@ class DwarfDieScanner {
 
   // Call at the beginning of each iteration (when !done()) to get the current DIE. This is required
   // to be called before Advance() as it sets some internal state.
-  const llvm::DWARFDebugInfoEntry* Prepare();
+  DwarfDie Prepare();
 
   // Advances to the next DIE.
   void Advance();
@@ -87,8 +80,6 @@ class DwarfDieScanner {
 
   uint64_t die_count_ = 0;
   uint64_t die_index_ = 0;
-
-  const llvm::DWARFDebugInfoEntry* cur_die_ = nullptr;
 
   std::vector<StackEntry> tree_stack_;
 };

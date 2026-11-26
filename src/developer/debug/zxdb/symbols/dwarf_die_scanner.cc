@@ -20,20 +20,20 @@ DwarfDieScanner::DwarfDieScanner(const DwarfUnit& unit) : unit_(unit) {
 
 DwarfDieScanner::~DwarfDieScanner() = default;
 
-const llvm::DWARFDebugInfoEntry* DwarfDieScanner::Prepare() {
+DwarfDie DwarfDieScanner::Prepare() {
   if (done())
-    return nullptr;
+    return {};
 
-  cur_die_ = unit_.GetLLVMDieAtIndex(die_index_).getDebugInfoEntry();
+  DwarfDie die = unit_.GetDieAtIndex(die_index_);
 
-  uint32_t parent_idx = cur_die_->getParentIdx().value_or(kNoParent);
+  uint32_t parent_idx = die.parent_index().value_or(kNoParent);
 
   while (!tree_stack_.empty() && tree_stack_.back().index != parent_idx)
     tree_stack_.pop_back();
   tree_stack_.emplace_back(die_index_, false);
 
   // Fix up the inside function flag.
-  switch (static_cast<DwarfTag>(cur_die_->getTag())) {
+  switch (die.tag()) {
     case DwarfTag::kLexicalBlock:
     case DwarfTag::kVariable:
       // Inherits from previous. For a block and a variable there should always be the parent,
@@ -50,7 +50,7 @@ const llvm::DWARFDebugInfoEntry* DwarfDieScanner::Prepare() {
       break;
   }
 
-  return cur_die_;
+  return die;
 }
 
 void DwarfDieScanner::Advance() {
@@ -60,7 +60,7 @@ void DwarfDieScanner::Advance() {
 }
 
 uint32_t DwarfDieScanner::GetParentIndex(uint32_t index) const {
-  return unit_.GetLLVMDieAtIndex(index).getDebugInfoEntry()->getParentIdx().value_or(kNoParent);
+  return unit_.GetDieAtIndex(index).parent_index().value_or(kNoParent);
 }
 
 }  // namespace zxdb
