@@ -41,6 +41,8 @@ Public headers expose these symbol classes, factories, and evaluators:
   `zxdb::SymbolFactory`, `zxdb::DwarfSymbolFactory`: Lazy DIE reference wrappers
   and factories that decode `DwarfDieRef` entries into `Symbol` objects on
   demand (`lazy_symbol.h`, `symbol_factory.h`, `dwarf_symbol_factory.h`).
+  `DwarfSymbolFactory` uses `DwarfDie` to decode an entry. It stores a
+  `DwarfDieRef` in each lazy symbol so it can find the entry again.
 - `zxdb::SystemSymbols`, `zxdb::TargetSymbols`, `zxdb::ProcessSymbols`,
   `zxdb::ModuleSymbols`, `zxdb::ModuleSymbolsImpl`, `zxdb::LoadedModuleSymbols`:
   Symbol containers from global `BuildIDIndex` caches down to loaded modules

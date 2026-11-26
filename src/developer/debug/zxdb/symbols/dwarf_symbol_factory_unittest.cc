@@ -17,6 +17,7 @@
 #include "src/developer/debug/zxdb/symbols/compile_unit.h"
 #include "src/developer/debug/zxdb/symbols/data_member.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_op.h"
@@ -666,19 +667,19 @@ TEST(DwarfSymbolFactory, TypeUnitReference) {
 
     // Check that the fixture has the reference form that this test is for.
     llvm::DWARFContext* context = setup.symbols()->binary()->GetLLVMContext();
-    llvm::DWARFDie var_die;
+    DwarfDie var_die;
     for (const std::unique_ptr<llvm::DWARFUnit>& unit : context->info_section_units()) {
       if (unit->isTypeUnit())
         continue;
-      var_die =
-          GetFirstDieOfTagAndName(context, unit.get(), DwarfTag::kVariable, "type_unit_outer");
+      var_die = DwarfDie(
+          GetFirstDieOfTagAndName(context, unit.get(), DwarfTag::kVariable, "type_unit_outer"));
       if (var_die)
         break;
     }
     ASSERT_TRUE(var_die);
     static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kType};
     DwarfDieDecoder decoder(context, kAttrs);
-    ASSERT_TRUE(decoder.Decode(DwarfDie(var_die)));
+    ASSERT_TRUE(decoder.Decode(var_die));
     const DwarfDieDecoder::AttributeValue* type_value = decoder.GetValue(DwarfAttr::kType);
     ASSERT_TRUE(type_value);
     ASSERT_EQ(DwarfForm::kRefSig8, type_value->form.form);
@@ -725,12 +726,12 @@ TEST(DwarfSymbolFactory, AddrxOffsetLowPc) {
     SCOPED_TRACE(name);
 
     // Count the functions whose fixture uses the form that this test is for.
-    llvm::DWARFDie die =
-        GetFirstDieOfTagAndName(context, context->getUnitAtIndex(0), DwarfTag::kSubprogram, name);
+    DwarfDie die(
+        GetFirstDieOfTagAndName(context, context->getUnitAtIndex(0), DwarfTag::kSubprogram, name));
     ASSERT_TRUE(die);
     static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kLowPc};
     DwarfDieDecoder decoder(context, kAttrs);
-    ASSERT_TRUE(decoder.Decode(DwarfDie(die)));
+    ASSERT_TRUE(decoder.Decode(die));
     const DwarfDieDecoder::AttributeValue* low_pc = decoder.GetValue(DwarfAttr::kLowPc);
     ASSERT_TRUE(low_pc);
     if (low_pc->form.form == DwarfForm::kLlvmAddrxOffset)
@@ -765,12 +766,12 @@ class AssemblyFixture {
 
   // Returns the symbol for the child with the given index of the given unit.
   fxl::RefPtr<Symbol> UnitChild(unsigned unit, size_t index) {
-    llvm::DWARFDie die = context_->getUnitAtIndex(unit)->getUnitDIE(false).getFirstChild();
+    DwarfDie die = DwarfDie(context_->getUnitAtIndex(unit)->getUnitDIE(false)).first_child();
     for (size_t i = 0; i < index && die; i++)
-      die = die.getSibling();
+      die = die.sibling();
     if (!die)
       return nullptr;
-    return setup_.symbols()->GetSymbolFactory()->CreateSymbol(DwarfDieRef::Main(die.getOffset()));
+    return setup_.symbols()->GetSymbolFactory()->CreateSymbol(DwarfDieRef::Main(die.offset()));
   }
 
  private:
@@ -1082,11 +1083,11 @@ TEST(DwarfSymbolFactory, InlinedParameterOrder) {
 
     // Find whether the fixture has the case this test is for: the concrete instance has fewer
     // parameter entries than the function.
-    llvm::DWARFDie die = context->getDIEForOffset(inlined->GetLazySymbol().die_ref().offset());
+    DwarfDie die(context->getDIEForOffset(inlined->GetLazySymbol().die_ref().offset()));
     ASSERT_TRUE(die);
     size_t concrete_parameters = 0;
-    for (const llvm::DWARFDie& child : die) {
-      if (static_cast<DwarfTag>(child.getTag()) == DwarfTag::kFormalParameter)
+    for (DwarfDie child : die.children()) {
+      if (child.tag() == DwarfTag::kFormalParameter)
         concrete_parameters++;
     }
     if (concrete_parameters < c.expected.size())
