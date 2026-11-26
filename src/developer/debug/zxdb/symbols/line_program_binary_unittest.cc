@@ -108,7 +108,7 @@ void CheckUnit(const DwarfSections& sections, llvm::DWARFUnit& unit, uint64_t fi
   // The file scan uses a separate parse without the unit, like the indexer.
   ErrOr<LineProgram> scan_program = LineProgram::Parse(
       AsStringView(GetUnitLineSection(sections, unit)), *GetUnitLineTableOffset(unit),
-      sections.little_endian, GetLineStringSections(sections, unit));
+      sections.endian, GetLineStringSections(sections, unit));
   ASSERT_TRUE(scan_program.ok());
   auto scan = scan_program.value().ScanFiles(first_code_address);
   EXPECT_EQ(LineProgramStatus::kOk, scan.status);

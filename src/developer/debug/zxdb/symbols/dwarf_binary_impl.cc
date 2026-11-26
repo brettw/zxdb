@@ -260,12 +260,10 @@ Err DwarfBinaryImpl::Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
                                         llvm::DWARFContext::ProcessDebugRelocations::Process,
                                         nullptr, "", &LLVMErrorHandler);
   sections_ = GetDwarfSections(*context_);
-  info_units_ = UnitList::Parse(sections_.info, sections_.little_endian, UnitSection::kInfo);
-  types_units_ = UnitList::Parse(sections_.types, sections_.little_endian, UnitSection::kTypes);
-  info_dwo_units_ =
-      UnitList::Parse(sections_.info_dwo, sections_.little_endian, UnitSection::kInfo);
-  types_dwo_units_ =
-      UnitList::Parse(sections_.types_dwo, sections_.little_endian, UnitSection::kTypes);
+  info_units_ = UnitList::Parse(sections_.info, sections_.endian, UnitSection::kInfo);
+  types_units_ = UnitList::Parse(sections_.types, sections_.endian, UnitSection::kTypes);
+  info_dwo_units_ = UnitList::Parse(sections_.info_dwo, sections_.endian, UnitSection::kInfo);
+  types_dwo_units_ = UnitList::Parse(sections_.types_dwo, sections_.endian, UnitSection::kTypes);
 
   return Err();
 }
@@ -392,7 +390,7 @@ std::optional<uint64_t> DwarfBinaryImpl::GetDebugAddrEntry(uint64_t addr_base,
     return std::nullopt;
 
   const DwarfSections& sections = GetSections();
-  DataReader reader(sections.addr, sections.little_endian);
+  DataReader reader(sections.addr, sections.endian);
   reader.Seek(addr_base + entry_offset);
   uint64_t result = reader.Address(kEntrySize);
   if (!reader.ok())

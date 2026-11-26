@@ -18,6 +18,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "src/developer/debug/zxdb/common/endian.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_sections.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/unit_header.h"
@@ -59,9 +60,9 @@ class LineTableBuilder {
 
   explicit LineTableBuilder(uint16_t version, Format format = Format::kDwarf32);
 
-  // Writes big-endian data. Call it before adding opcodes. LineTableTestSections::Finish() must
-  // use the same byte order.
-  void set_big_endian(bool big_endian);
+  // Sets the byte order before adding opcodes. LineTableTestSections::Finish() must use the
+  // same byte order.
+  void set_endian(Endian endian);
 
   // Header parameters.
   void set_address_size(uint8_t s) { address_size_ = s; }  // DWARF 5 header field.
@@ -150,7 +151,7 @@ class LineTableBuilder {
 
   uint16_t version_;
   Format format_;
-  bool big_endian_ = false;
+  Endian endian_ = Endian::kLittle;
   uint8_t address_size_ = 8;
   uint8_t min_inst_length_ = 1;
   uint8_t max_ops_per_inst_ = 1;
@@ -197,7 +198,7 @@ class LineTableTestSections {
                       const std::vector<uint64_t>& decl_files);
 
   // Creates the context. Call once, after all tables are added.
-  void Finish(uint8_t address_size = 8, bool little_endian = true);
+  void Finish(Endian endian, uint8_t address_size = 8);
 
   const llvm::DWARFContext& context() const { return *context_; }
   llvm::DWARFContext& mutable_context() { return *context_; }
@@ -222,7 +223,7 @@ class LineTableTestSections {
   std::vector<uint8_t> info_;
   std::vector<std::string> indexed_strings_;  // Strings for kStrx1, by index.
   std::vector<uint8_t> str_offsets_;
-  bool little_endian_ = true;
+  Endian endian_ = Endian::kLittle;
 
   // The context references these buffers, so they must outlive it.
   llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers_;

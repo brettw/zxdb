@@ -26,13 +26,13 @@ AbbrevTable::AttributeSpec Attr(DwarfAttr attr, DwarfForm form) {
 struct UnitBytes {
   template <typename Write>
   void WriteUnit(std::initializer_list<AbbrevTable::AttributeSpec> attributes, Write write) {
-    DwarfSectionBuilder abbrev_builder(abbrev, little_endian);
+    DwarfSectionBuilder abbrev_builder(abbrev, endian);
     options.abbrev_offset = abbrev.size();
     abbrev_builder.AbbrevDeclaration(1, static_cast<uint64_t>(tag), false, attributes);
     abbrev_builder.EndAbbrevTable();
 
     unit_offset = info.size();
-    DwarfSectionBuilder info_builder(info, little_endian);
+    DwarfSectionBuilder info_builder(info, endian);
     auto marker = info_builder.BeginUnit(options);
     info_builder.Uleb(1);
     write(info_builder);
@@ -41,7 +41,7 @@ struct UnitBytes {
 
   DwarfSections sections() const {
     DwarfSections result;
-    result.little_endian = little_endian;
+    result.endian = endian;
     if (is_dwo) {
       (options.section == UnitSection::kTypes ? result.types_dwo : result.info_dwo) = info;
       result.abbrev_dwo = abbrev;
@@ -63,7 +63,7 @@ struct UnitBytes {
   }
 
   ErrOr<UnitContext> Parse(UnitContext::Options parse_options = {}) const {
-    auto header = ReadUnitHeader(info, unit_offset, little_endian, options.section);
+    auto header = ReadUnitHeader(info, unit_offset, endian, options.section);
     if (!header)
       return header.err();
     parse_options.is_dwo = is_dwo;
@@ -73,7 +73,7 @@ struct UnitBytes {
   DwarfSectionBuilder::UnitHeaderOptions options;
   DwarfTag tag = DwarfTag::kCompileUnit;
   bool is_dwo = false;
-  bool little_endian = true;
+  Endian endian = Endian::kLittle;
   uint64_t unit_offset = 0;
   std::vector<uint8_t> info, abbrev, str, line_str, str_offsets, addr, rnglists, loclists;
 };
@@ -130,24 +130,26 @@ TEST(UnitContext, NoAttributes) {
 
 TEST(UnitContext, IndexedAttributesAndBases) {
   for (uint8_t width : {4, 8}) {
-    for (bool little_endian : {true, false}) {
-      SCOPED_TRACE(testing::Message() << "width " << +width << ", little endian " << little_endian);
+    for (Endian endian : {Endian::kLittle, Endian::kBig}) {
+      SCOPED_TRACE(testing::Message()
+                   << "width " << +width << ", "
+                   << (endian == Endian::kLittle ? "little endian" : "big endian"));
       UnitBytes unit;
       unit.options.offset_size = width;
       unit.options.address_size = 4;
-      unit.little_endian = little_endian;
+      unit.endian = endian;
 
       AppendCString(unit.str, "");
       AppendCString(unit.str, "/directory");
       AppendCString(unit.line_str, "/line-directory");
-      WriteStringOffsets(DwarfSectionBuilder(unit.str_offsets, little_endian), width, {0, 1});
+      WriteStringOffsets(DwarfSectionBuilder(unit.str_offsets, endian), width, {0, 1});
       uint64_t str_end = unit.str_offsets.size();
-      WriteStringOffsets(DwarfSectionBuilder(unit.str_offsets, little_endian), width, {1});
+      WriteStringOffsets(DwarfSectionBuilder(unit.str_offsets, endian), width, {1});
       const uint64_t str_base = width == 4 ? 8 : 16;
       const uint64_t loc_base = width == 4 ? 12 : 20;
       const uint64_t addr_base = width == 4 ? 8 : 16;
 
-      DwarfSectionBuilder addresses(unit.addr, little_endian);
+      DwarfSectionBuilder addresses(unit.addr, endian);
       auto addr_length = addresses.BeginInitialLength(width);
       addresses.Fixed(5, 2);
       addresses.Fixed(unit.options.address_size, 1);
@@ -156,8 +158,8 @@ TEST(UnitContext, IndexedAttributesAndBases) {
       addresses.Address(0x12345678, unit.options.address_size);
       addresses.EndInitialLength(addr_length);
 
-      WriteListTable(DwarfSectionBuilder(unit.loclists, little_endian), width, 4, 1, {width});
-      WriteListTable(DwarfSectionBuilder(unit.rnglists, little_endian), width, 4, 1, {width});
+      WriteListTable(DwarfSectionBuilder(unit.loclists, endian), width, 4, 1, {width});
+      WriteListTable(DwarfSectionBuilder(unit.rnglists, endian), width, 4, 1, {width});
       unit.WriteUnit(
           {Attr(DwarfAttr::kCompDir, DwarfForm::kStrx2), Attr(DwarfAttr::kLowPc, DwarfForm::kAddrx),
            Attr(DwarfAttr::kEntryPc, DwarfForm::kAddr),
@@ -261,7 +263,7 @@ TEST(UnitContext, LegacySectionOffsets) {
 TEST(UnitContext, Dwarf4SplitUnit) {
   UnitBytes skeleton;
   skeleton.options.version = 4;
-  DwarfSectionBuilder(skeleton.addr).Address(0xabcd, 8);
+  DwarfSectionBuilder(skeleton.addr, Endian::kLittle).Address(0xabcd, 8);
   skeleton.WriteUnit({Attr(DwarfAttr::kGnuAddrBase, DwarfForm::kSecOffset),
                       Attr(DwarfAttr::kGnuRangesBase, DwarfForm::kSecOffset),
                       Attr(DwarfAttr::kLowPc, DwarfForm::kAddr)},
@@ -280,7 +282,7 @@ TEST(UnitContext, Dwarf4SplitUnit) {
   dwo.options.version = 4;
   dwo.options.offset_size = 8;
   AppendCString(dwo.str, "split-dir");
-  DwarfSectionBuilder(dwo.str_offsets).Offset(0, 8);
+  DwarfSectionBuilder(dwo.str_offsets, Endian::kLittle).Offset(0, 8);
   dwo.WriteUnit({Attr(DwarfAttr::kCompDir, DwarfForm::kGnuStrIndex),
                  Attr(DwarfAttr::kLowPc, DwarfForm::kGnuAddrIndex),
                  Attr(DwarfAttr::kRanges, DwarfForm::kSecOffset)},
@@ -334,8 +336,8 @@ TEST(UnitContext, Dwarf5SplitUnit) {
                        die.Offset(700, 4);
                        die.Address(0x9988, 8);
                      });
-  DwarfSectionBuilder(skeleton.addr).Address(0, 8);
-  DwarfSectionBuilder(skeleton.addr).Address(0x11223344, 8);
+  DwarfSectionBuilder(skeleton.addr, Endian::kLittle).Address(0, 8);
+  DwarfSectionBuilder(skeleton.addr, Endian::kLittle).Address(0x11223344, 8);
   auto main = skeleton.Parse();
   ASSERT_TRUE(main.ok()) << main.err().msg();
 
@@ -350,9 +352,9 @@ TEST(UnitContext, Dwarf5SplitUnit) {
       });
   AppendCString(dwo.str, "split");
   // The string-offset contribution can use a different format than the unit.
-  WriteStringOffsets(DwarfSectionBuilder(dwo.str_offsets), 8, {0});
-  WriteListTable(DwarfSectionBuilder(dwo.loclists), 4, 8, 1, {4});
-  WriteListTable(DwarfSectionBuilder(dwo.rnglists), 4, 8, 1, {4});
+  WriteStringOffsets(DwarfSectionBuilder(dwo.str_offsets, Endian::kLittle), 8, {0});
+  WriteListTable(DwarfSectionBuilder(dwo.loclists, Endian::kLittle), 4, 8, 1, {4});
+  WriteListTable(DwarfSectionBuilder(dwo.rnglists, Endian::kLittle), 4, 8, 1, {4});
 
   auto split = dwo.Parse({.skeleton = &main.value()});
   ASSERT_TRUE(split.ok()) << split.err().msg();
@@ -384,9 +386,9 @@ TEST(UnitContext, PackageContributions) {
   dwo.str_offsets.resize(4);
   dwo.rnglists.resize(10);
   dwo.loclists.resize(20);
-  WriteStringOffsets(DwarfSectionBuilder(dwo.str_offsets), 4, {0});
-  WriteListTable(DwarfSectionBuilder(dwo.rnglists), 4, 8, 1, {4});
-  WriteListTable(DwarfSectionBuilder(dwo.loclists), 4, 8, 1, {4});
+  WriteStringOffsets(DwarfSectionBuilder(dwo.str_offsets, Endian::kLittle), 4, {0});
+  WriteListTable(DwarfSectionBuilder(dwo.rnglists, Endian::kLittle), 4, 8, 1, {4});
+  WriteListTable(DwarfSectionBuilder(dwo.loclists, Endian::kLittle), 4, 8, 1, {4});
   UnitContext::PackageContributions package{
       UnitContext::Contribution{4, 12},
       UnitContext::Contribution{20, 17},
@@ -477,7 +479,7 @@ TEST(UnitContext, MalformedRoot) {
   EXPECT_TRUE(unknown_form.Parse().has_error());
 
   UnitBytes no_root;
-  DwarfSectionBuilder builder(no_root.info);
+  DwarfSectionBuilder builder(no_root.info, Endian::kLittle);
   builder.EndUnit(builder.BeginUnit(no_root.options));
   EXPECT_TRUE(no_root.Parse().has_error());
 }
@@ -498,10 +500,10 @@ TEST(UnitContext, MalformedTablesStayLocal) {
                    die.Address(0x1234, 8);
                  });
   AppendCString(unit.str, "dir");
-  WriteStringOffsets(DwarfSectionBuilder(unit.str_offsets), 8, {0});
+  WriteStringOffsets(DwarfSectionBuilder(unit.str_offsets, Endian::kLittle), 8, {0});
   unit.str_offsets.pop_back();
   // A count that would require more space than the contribution can hold.
-  WriteListTable(DwarfSectionBuilder(unit.loclists), 8, 8, UINT32_MAX, {8});
+  WriteListTable(DwarfSectionBuilder(unit.loclists, Endian::kLittle), 8, 8, UINT32_MAX, {8});
 
   auto context = unit.Parse();
   ASSERT_TRUE(context.ok()) << context.err().msg();
@@ -517,7 +519,7 @@ TEST(UnitContext, MalformedTablesStayLocal) {
   // A list offset must point past the offset array and stay in the contribution.
   for (uint64_t relative : {uint64_t{0}, uint64_t{9}, UINT64_MAX}) {
     unit.loclists.clear();
-    WriteListTable(DwarfSectionBuilder(unit.loclists), 8, 8, 1, {relative});
+    WriteListTable(DwarfSectionBuilder(unit.loclists, Endian::kLittle), 8, 8, 1, {relative});
     auto bad_offset = unit.Parse();
     ASSERT_TRUE(bad_offset.ok()) << bad_offset.err().msg();
     EXPECT_EQ(std::nullopt, bad_offset.value().ReadLoclistOffset(0));

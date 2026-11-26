@@ -78,13 +78,13 @@ std::vector<uint32_t> GetLiveRowFiles(std::span<const LineRow> rows, size_t file
 LineTableBuilder::LineTableBuilder(uint16_t version, Format format)
     : version_(version), format_(format) {}
 
-void LineTableBuilder::set_big_endian(bool big_endian) {
+void LineTableBuilder::set_endian(Endian endian) {
   FX_CHECK(program_.empty());
-  big_endian_ = big_endian;
+  endian_ = endian;
 }
 
 void LineTableBuilder::Put(std::vector<uint8_t>& out, uint64_t value, size_t size) const {
-  AppendInteger(out, value, size, !big_endian_);
+  AppendInteger(out, value, size, endian_);
 }
 
 uint64_t LineTableBuilder::AddDirectory(std::string name) {
@@ -345,7 +345,7 @@ uint8_t LineTableTestSections::AddStrOffset(const std::string& str) {
 void LineTableTestSections::AddCompileUnit(uint16_t version, std::optional<uint64_t> line_offset,
                                            const std::vector<uint64_t>& decl_files) {
   FX_CHECK(!context_);
-  DwarfSectionBuilder writer(info_);
+  DwarfSectionBuilder writer(info_, Endian::kLittle);
   auto length = writer.BeginInitialLength(4);
   writer.Fixed(version, 2);
   if (version >= 5) {
@@ -371,9 +371,9 @@ void LineTableTestSections::AddCompileUnit(uint16_t version, std::optional<uint6
   writer.EndInitialLength(length);
 }
 
-void LineTableTestSections::Finish(uint8_t address_size, bool little_endian) {
+void LineTableTestSections::Finish(Endian endian, uint8_t address_size) {
   FX_CHECK(!context_);
-  little_endian_ = little_endian;
+  endian_ = endian;
 
   auto make_buffer = [](std::span<const uint8_t> data, const char* name) {
     return llvm::MemoryBuffer::getMemBufferCopy(AsStringView(data), name);
@@ -397,11 +397,11 @@ void LineTableTestSections::Finish(uint8_t address_size, bool little_endian) {
   };
 
   // A DWARF 5 string offsets table for the kStrx1 strings.
-  AppendInteger(str_offsets_, 4 + 4 * indexed_strings_.size(), 4);
-  AppendInteger(str_offsets_, 5, 2);  // Version.
-  AppendInteger(str_offsets_, 0, 2);  // Padding.
+  AppendInteger(str_offsets_, 4 + 4 * indexed_strings_.size(), 4, Endian::kLittle);
+  AppendInteger(str_offsets_, 5, 2, Endian::kLittle);  // Version.
+  AppendInteger(str_offsets_, 0, 2, Endian::kLittle);  // Padding.
   for (const std::string& str : indexed_strings_)
-    AppendInteger(str_offsets_, str_.AddString(str), 4);
+    AppendInteger(str_offsets_, str_.AddString(str), 4, Endian::kLittle);
 
   buffers_["debug_line"] = make_buffer(line_, "debug_line");
   buffers_["debug_info"] = make_buffer(info_, "debug_info");
@@ -409,8 +409,8 @@ void LineTableTestSections::Finish(uint8_t address_size, bool little_endian) {
   buffers_["debug_str_offsets"] = make_buffer(str_offsets_, "debug_str_offsets");
   buffers_["debug_line_str"] = make_buffer(line_str_.bytes(), "debug_line_str");
   buffers_["debug_str"] = make_buffer(str_.bytes(), "debug_str");
-  context_ =
-      llvm::DWARFContext::create(buffers_, address_size, little_endian, IgnoreError, IgnoreError);
+  context_ = llvm::DWARFContext::create(buffers_, address_size, endian == Endian::kLittle,
+                                        IgnoreError, IgnoreError);
 }
 
 DwarfSections LineTableTestSections::sections() const {
@@ -421,13 +421,13 @@ DwarfSections LineTableTestSections::sections() const {
   result.str_offsets = str_offsets_;
   result.line = line_;
   result.line_str = line_str_.bytes();
-  result.little_endian = little_endian_;
+  result.endian = endian_;
   return result;
 }
 
 ErrOr<LineProgram> LineTableTestSections::Parse(uint64_t offset) const {
   DwarfSections views = sections();
-  return LineProgram::Parse(AsStringView(views.line), offset, views.little_endian,
+  return LineProgram::Parse(AsStringView(views.line), offset, views.endian,
                             GetLineStringSections(views));
 }
 

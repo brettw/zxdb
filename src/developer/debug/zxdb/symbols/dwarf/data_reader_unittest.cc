@@ -22,8 +22,8 @@ TEST(DataReader, Fixed) {
   for (size_t size = 1; size <= std::size(kBytes); size++) {
     SCOPED_TRACE(size);
     auto bytes = std::span(kBytes).first(size);
-    DataReader little(bytes, true);
-    DataReader big(bytes, false);
+    DataReader little(bytes, Endian::kLittle);
+    DataReader big(bytes, Endian::kBig);
     EXPECT_EQ(0u, little.offset());
     EXPECT_EQ(kLittle[size - 1], little.Fixed(size));
     EXPECT_EQ(kBig[size - 1], big.Fixed(size));
@@ -42,7 +42,7 @@ TEST(DataReader, Fixed) {
     EXPECT_EQ(size, little.offset());
   }
   for (size_t invalid : {0u, 9u}) {
-    DataReader reader(kBytes, true);
+    DataReader reader(kBytes, Endian::kLittle);
     EXPECT_EQ(0u, reader.Fixed(invalid));
     EXPECT_FALSE(reader.ok());
     EXPECT_EQ(0u, reader.offset());
@@ -53,14 +53,14 @@ TEST(DataReader, LebExamples) {
   // DWARF 4 figures 22 and 23 and DWARF 5 tables 7.7 and 7.8 give these encodings.
   constexpr uint8_t kUleb[] = {0x02, 0x7f, 0x80, 0x01, 0x81, 0x01, 0x82, 0x01, 0xb9, 0x64};
   constexpr uint8_t kSleb[] = {0x7e, 0x81, 0x7f, 0x80, 0x7f, 0xff, 0x7e, 0xff, 0x00};
-  for (bool little_endian : {true, false}) {
-    DataReader uleb(kUleb, little_endian);
+  for (Endian endian : {Endian::kLittle, Endian::kBig}) {
+    DataReader uleb(kUleb, endian);
     for (uint64_t value : {2, 127, 128, 129, 130, 12857})
       EXPECT_EQ(value, uleb.Uleb());
     EXPECT_TRUE(uleb.ok());
     EXPECT_EQ(0u, uleb.remaining());
 
-    DataReader sleb(kSleb, little_endian);
+    DataReader sleb(kSleb, endian);
     for (int64_t value : {-2, -127, -128, -129, 127})
       EXPECT_EQ(value, sleb.Sleb());
     EXPECT_TRUE(sleb.ok());
@@ -72,9 +72,9 @@ TEST(DataReader, LebExtremes) {
   constexpr uint8_t kUmax[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01};
   constexpr uint8_t kSmin[] = {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7f};
   constexpr uint8_t kSmax[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00};
-  DataReader umax(kUmax, true);
-  DataReader smin(kSmin, true);
-  DataReader smax(kSmax, true);
+  DataReader umax(kUmax, Endian::kLittle);
+  DataReader smin(kSmin, Endian::kLittle);
+  DataReader smax(kSmax, Endian::kLittle);
   EXPECT_EQ(UINT64_MAX, umax.Uleb());
   EXPECT_EQ(INT64_MIN, smin.Sleb());
   EXPECT_EQ(INT64_MAX, smax.Sleb());
@@ -91,9 +91,9 @@ TEST(DataReader, LebSignAndZeroExtension) {
                                    0xff, 0xff, 0xff, 0x80, 0x80, 0x00};
   constexpr uint8_t kNegative[] = {0x80, 0x80, 0x80, 0x80, 0x80, 0x80,
                                    0x80, 0x80, 0x80, 0xff, 0xff, 0x7f};
-  DataReader unsigned_reader(kUnsigned, true);
-  DataReader positive_reader(kPositive, true);
-  DataReader negative_reader(kNegative, true);
+  DataReader unsigned_reader(kUnsigned, Endian::kLittle);
+  DataReader positive_reader(kPositive, Endian::kLittle);
+  DataReader negative_reader(kNegative, Endian::kLittle);
   EXPECT_EQ(UINT64_MAX, unsigned_reader.Uleb());
   EXPECT_EQ(INT64_MAX, positive_reader.Sleb());
   EXPECT_EQ(INT64_MIN, negative_reader.Sleb());
@@ -114,22 +114,22 @@ TEST(DataReader, LebOverflow) {
                                           0x80, 0x80, 0x80, 0xff, 0x00};
   for (auto bytes :
        {std::span<const uint8_t>(kUnsigned), std::span<const uint8_t>(kUnsignedPadding)}) {
-    DataReader read(bytes, true);
+    DataReader read(bytes, Endian::kLittle);
     EXPECT_EQ(0u, read.Uleb());
     EXPECT_FALSE(read.ok());
     EXPECT_EQ(0u, read.offset());
-    DataReader skip(bytes, true);
+    DataReader skip(bytes, Endian::kLittle);
     skip.SkipUleb();
     EXPECT_FALSE(skip.ok());
     EXPECT_EQ(0u, skip.offset());
   }
   for (auto bytes : {std::span<const uint8_t>(kSigned), std::span<const uint8_t>(kPositivePadding),
                      std::span<const uint8_t>(kNegativePadding)}) {
-    DataReader read(bytes, true);
+    DataReader read(bytes, Endian::kLittle);
     EXPECT_EQ(0, read.Sleb());
     EXPECT_FALSE(read.ok());
     EXPECT_EQ(0u, read.offset());
-    DataReader skip(bytes, true);
+    DataReader skip(bytes, Endian::kLittle);
     skip.SkipSleb();
     EXPECT_FALSE(skip.ok());
     EXPECT_EQ(0u, skip.offset());
@@ -138,7 +138,7 @@ TEST(DataReader, LebOverflow) {
 
 TEST(DataReader, LebSkipAndTruncation) {
   constexpr uint8_t kBytes[] = {0x81, 0x01, 0xff, 0x7e, 0x80, 0x80, 0x00};
-  DataReader reader(kBytes, true);
+  DataReader reader(kBytes, Endian::kLittle);
   reader.SkipUleb();
   EXPECT_EQ(2u, reader.offset());
   reader.SkipSleb();
@@ -161,14 +161,14 @@ TEST(DataReader, InitialLength) {
   constexpr uint8_t k32[] = {0xef, 0xff, 0xff, 0xff};
   constexpr uint8_t k64[] = {0xff, 0xff, 0xff, 0xff, 0x01, 0x23,
                              0x45, 0x67, 0x89, 0xab, 0xcd, 0xef};
-  DataReader dwarf32(k32, true);
+  DataReader dwarf32(k32, Endian::kLittle);
   auto length = dwarf32.InitialLength();
   EXPECT_EQ(0xffffffefu, length.length);
   EXPECT_EQ(4u, length.offset_size);
   EXPECT_EQ(4u, dwarf32.offset());
   EXPECT_TRUE(dwarf32.ok());
 
-  DataReader dwarf64(k64, false);
+  DataReader dwarf64(k64, Endian::kBig);
   length = dwarf64.InitialLength();
   EXPECT_EQ(0x0123456789abcdefu, length.length);
   EXPECT_EQ(8u, length.offset_size);
@@ -176,7 +176,7 @@ TEST(DataReader, InitialLength) {
   EXPECT_TRUE(dwarf64.ok());
 
   constexpr uint8_t kEmpty[] = {0, 0, 0, 0};
-  DataReader empty(kEmpty, true);
+  DataReader empty(kEmpty, Endian::kLittle);
   length = empty.InitialLength();
   EXPECT_EQ(0u, length.length);
   EXPECT_EQ(4u, length.offset_size);
@@ -185,7 +185,7 @@ TEST(DataReader, InitialLength) {
   for (unsigned low = 0xf0; low < 0xff; low++) {
     SCOPED_TRACE(low);
     const uint8_t reserved[] = {static_cast<uint8_t>(low), 0xff, 0xff, 0xff};
-    DataReader reader(reserved, true);
+    DataReader reader(reserved, Endian::kLittle);
     length = reader.InitialLength();
     EXPECT_EQ(0u, length.length);
     EXPECT_EQ(0u, length.offset_size);
@@ -193,7 +193,7 @@ TEST(DataReader, InitialLength) {
     EXPECT_EQ(0u, reader.offset());
   }
 
-  DataReader truncated(std::span(k64).first(11), false);
+  DataReader truncated(std::span(k64).first(11), Endian::kBig);
   length = truncated.InitialLength();
   EXPECT_EQ(0u, length.length);
   EXPECT_EQ(0u, length.offset_size);
@@ -206,7 +206,7 @@ TEST(DataReader, OffsetAndAddressSizes) {
   constexpr uint64_t kExpected[] = {0x12, 0x1234, 0x12345678, 0x123456789abcdef0};
   constexpr size_t kSizes[] = {1, 2, 4, 8};
   for (size_t i = 0; i < std::size(kSizes); i++) {
-    DataReader reader(kBytes, false);
+    DataReader reader(kBytes, Endian::kBig);
     EXPECT_EQ(kExpected[i], reader.Address(kSizes[i]));
     EXPECT_TRUE(reader.ok());
     EXPECT_EQ(kSizes[i], reader.offset());
@@ -218,13 +218,13 @@ TEST(DataReader, OffsetAndAddressSizes) {
     }
   }
   for (size_t invalid : {0u, 1u, 2u, 3u, 5u, 6u, 7u, 9u}) {
-    DataReader reader(kBytes, true);
+    DataReader reader(kBytes, Endian::kLittle);
     EXPECT_EQ(0u, reader.Offset(invalid));
     EXPECT_FALSE(reader.ok());
     EXPECT_EQ(0u, reader.offset());
   }
   for (size_t invalid : {0u, 3u, 5u, 6u, 7u, 9u}) {
-    DataReader reader(kBytes, true);
+    DataReader reader(kBytes, Endian::kLittle);
     EXPECT_EQ(0u, reader.Address(invalid));
     EXPECT_FALSE(reader.ok());
     EXPECT_EQ(0u, reader.offset());
@@ -233,7 +233,7 @@ TEST(DataReader, OffsetAndAddressSizes) {
 
 TEST(DataReader, CString) {
   constexpr uint8_t kBytes[] = {0, 'a', 'b', 0};
-  DataReader reader(kBytes, true);
+  DataReader reader(kBytes, Endian::kLittle);
   EXPECT_TRUE(reader.CString().empty());
   EXPECT_EQ(1u, reader.offset());
   EXPECT_TRUE(reader.ok());
@@ -243,7 +243,7 @@ TEST(DataReader, CString) {
   EXPECT_TRUE(reader.CString().empty());
   EXPECT_FALSE(reader.ok());
 
-  DataReader missing_nul(kBytes, true);
+  DataReader missing_nul(kBytes, Endian::kLittle);
   missing_nul.Seek(1);
   missing_nul.set_limit(3);
   EXPECT_TRUE(missing_nul.CString().empty());
@@ -253,7 +253,7 @@ TEST(DataReader, CString) {
 
 TEST(DataReader, Bytes) {
   constexpr uint8_t kBytes[] = {1, 2, 3, 4};
-  DataReader reader(kBytes, true);
+  DataReader reader(kBytes, Endian::kLittle);
   reader.Skip(1);
   auto bytes = reader.Bytes(2);
   EXPECT_EQ(kBytes + 1, bytes.data());
@@ -268,7 +268,7 @@ TEST(DataReader, Bytes) {
 
 TEST(DataReader, SeekAndLimit) {
   constexpr uint8_t kBytes[] = {1, 2, 3, 4};
-  DataReader reader(kBytes, true);
+  DataReader reader(kBytes, Endian::kLittle);
   reader.set_limit(3);
   reader.set_limit(UINT64_MAX);
   EXPECT_EQ(3u, reader.remaining());
@@ -287,20 +287,20 @@ TEST(DataReader, SeekAndLimit) {
   reader.Seek(0);
   EXPECT_EQ(2u, reader.offset());
 
-  DataReader huge(kBytes, true);
+  DataReader huge(kBytes, Endian::kLittle);
   huge.Skip(1);
   huge.Skip(UINT64_MAX);
   EXPECT_FALSE(huge.ok());
   EXPECT_EQ(1u, huge.offset());
 
-  DataReader lowered(kBytes, true);
+  DataReader lowered(kBytes, Endian::kLittle);
   lowered.Seek(2);
   lowered.set_limit(1);
   EXPECT_FALSE(lowered.ok());
   EXPECT_EQ(2u, lowered.offset());
   EXPECT_EQ(0u, lowered.remaining());
 
-  DataReader empty({}, true);
+  DataReader empty({}, Endian::kLittle);
   EXPECT_TRUE(empty.ok());
   EXPECT_EQ(0u, empty.Uleb());
   EXPECT_FALSE(empty.ok());

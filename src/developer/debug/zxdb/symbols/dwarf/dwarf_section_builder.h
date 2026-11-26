@@ -16,6 +16,7 @@
 #include <string_view>
 #include <vector>
 
+#include "src/developer/debug/zxdb/common/endian.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/abbrev_table.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/unit_header.h"
 
@@ -23,8 +24,7 @@ namespace zxdb {
 
 enum class DwarfForm : int;
 
-void AppendInteger(std::vector<uint8_t>& out, uint64_t value, size_t size,
-                   bool little_endian = true);
+void AppendInteger(std::vector<uint8_t>& out, uint64_t value, size_t size, Endian endian);
 void AppendUleb(std::vector<uint8_t>& out, uint64_t value);
 void AppendUleb(std::vector<uint8_t>& out, DwarfForm form);
 void AppendSleb(std::vector<uint8_t>& out, int64_t value);
@@ -55,8 +55,8 @@ class DwarfSectionBuilder {
     uint64_t dwo_id = 0;
   };
 
-  explicit DwarfSectionBuilder(std::vector<uint8_t>& out, bool little_endian = true)
-      : out_(out), little_endian_(little_endian) {}
+  explicit DwarfSectionBuilder(std::vector<uint8_t>& out, Endian endian)
+      : out_(out), endian_(endian) {}
 
   void Fixed(uint64_t value, size_t size);
   void Uleb(uint64_t value);
@@ -85,7 +85,7 @@ class DwarfSectionBuilder {
 
  private:
   std::vector<uint8_t>& out_;
-  bool little_endian_;
+  Endian endian_;
 };
 
 // Builds a string section with one entry per distinct string.

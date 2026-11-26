@@ -13,6 +13,7 @@
 #include <string_view>
 #include <vector>
 
+#include "src/developer/debug/zxdb/common/endian.h"
 #include "src/developer/debug/zxdb/common/err_or.h"
 #include "src/developer/debug/zxdb/symbols/line_row.h"
 
@@ -71,7 +72,7 @@ struct LineFileEntry {
 // A parsed line table header.
 struct LineProgramHeader {
   uint16_t version = 0;
-  bool little_endian = true;
+  Endian endian = Endian::kLittle;
 
   uint8_t min_inst_length = 1;
   bool default_is_stmt = true;
@@ -129,7 +130,7 @@ struct LineTableExtent {
 
 // Reads the unit length of the line table at the offset of the line section.
 ErrOr<LineTableExtent> ReadLineTableExtent(std::string_view line_section, uint64_t offset,
-                                           bool little_endian);
+                                           Endian endian);
 
 enum class LineProgramStatus {
   kOk,
@@ -147,8 +148,8 @@ class LineProgram {
  public:
   // Parses the header of the line table at the given section offset. The section data must outlive
   // this object.
-  static ErrOr<LineProgram> Parse(std::string_view line_section, uint64_t offset,
-                                  bool little_endian, const LineStringSections& strings);
+  static ErrOr<LineProgram> Parse(std::string_view line_section, uint64_t offset, Endian endian,
+                                  const LineStringSections& strings);
 
   struct DecodeResult {
     LineProgramStatus status = LineProgramStatus::kOk;

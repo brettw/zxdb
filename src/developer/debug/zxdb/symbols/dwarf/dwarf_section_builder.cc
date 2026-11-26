@@ -12,20 +12,20 @@ namespace zxdb {
 
 namespace {
 
-void WriteInteger(std::span<uint8_t> out, uint64_t value, bool little_endian) {
+void WriteInteger(std::span<uint8_t> out, uint64_t value, Endian endian) {
   for (size_t i = 0; i < out.size(); i++) {
-    size_t shift = little_endian ? i : out.size() - 1 - i;
+    size_t shift = endian == Endian::kLittle ? i : out.size() - 1 - i;
     out[i] = static_cast<uint8_t>(value >> (8 * shift));
   }
 }
 
 }  // namespace
 
-void AppendInteger(std::vector<uint8_t>& out, uint64_t value, size_t size, bool little_endian) {
+void AppendInteger(std::vector<uint8_t>& out, uint64_t value, size_t size, Endian endian) {
   FX_DCHECK(size >= 1 && size <= 8);
   size_t offset = out.size();
   out.resize(offset + size);
-  WriteInteger(std::span(out).subspan(offset), value, little_endian);
+  WriteInteger(std::span(out).subspan(offset), value, endian);
 }
 
 void AppendUleb(std::vector<uint8_t>& out, uint64_t value) {
@@ -62,7 +62,7 @@ void AppendCString(std::vector<uint8_t>& out, std::string_view value) {
 }
 
 void DwarfSectionBuilder::Fixed(uint64_t value, size_t size) {
-  AppendInteger(out_, value, size, little_endian_);
+  AppendInteger(out_, value, size, endian_);
 }
 
 void DwarfSectionBuilder::Uleb(uint64_t value) { AppendUleb(out_, value); }
@@ -101,7 +101,7 @@ void DwarfSectionBuilder::EndInitialLength(LengthMarker marker,
   auto bytes = std::span(out_).subspan(marker.offset_);
   size_t length = bytes.size() - marker.offset_size_;
   FX_DCHECK(raw_length || marker.offset_size_ == 8 || length < 0xfffffff0);
-  WriteInteger(bytes.first(marker.offset_size_), raw_length.value_or(length), little_endian_);
+  WriteInteger(bytes.first(marker.offset_size_), raw_length.value_or(length), endian_);
 }
 
 DwarfSectionBuilder::LengthMarker DwarfSectionBuilder::BeginUnit(const UnitHeaderOptions& options) {
@@ -151,7 +151,7 @@ uint64_t DwarfStringSectionBuilder::AddString(std::string_view value) {
   if (auto found = offsets_.find(value); found != offsets_.end())
     return found->second;
   uint64_t offset = bytes_.size();
-  DwarfSectionBuilder(bytes_).CString(value);
+  AppendCString(bytes_, value);
   offsets_.emplace(value, offset);
   return offset;
 }

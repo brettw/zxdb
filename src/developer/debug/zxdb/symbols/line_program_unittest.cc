@@ -89,7 +89,7 @@ Decoded DecodeAndCheck(const LineTableTestSections& sections, uint64_t offset) {
 Decoded BuildAndCheck(const Builder& builder) {
   LineTableTestSections sections;
   uint64_t offset = sections.Add(builder);
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
   return DecodeAndCheck(sections, offset);
 }
 
@@ -499,7 +499,7 @@ TEST(LineProgram, StrippedSequencesBelowFirstCode) {
 
   LineTableTestSections sections;
   uint64_t offset = sections.Add(builder);
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
   ErrOr<LineProgram> program = sections.Parse(offset);
   ASSERT_TRUE(program.ok());
   auto scan = program.value().ScanFiles(kFirstCode);
@@ -574,7 +574,7 @@ TEST(LineProgram, PartialResultsKeepDefinedFiles) {
 
   LineTableTestSections sections;
   uint64_t offset = sections.Add(builder);
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
   auto parsed = sections.Parse(offset);
   ASSERT_TRUE(parsed.ok());
   const LineProgram& program = parsed.value();
@@ -817,7 +817,7 @@ TEST(LineProgram, TableEntryPastHeaderLength) {
     builder.set_header_length_adjust(version >= 5 ? -1 : -2);
     LineTableTestSections sections;
     uint64_t offset = sections.Add(builder);
-    sections.Finish();
+    sections.Finish(Endian::kLittle);
 
     ErrOr<LineProgram> program = sections.Parse(offset);
     ASSERT_TRUE(program.ok());
@@ -840,7 +840,7 @@ TEST(LineProgram, TableEntryPastHeaderLength) {
     builder.set_header_length_adjust(-6);  // The end is inside the DW_FORM_data4 value.
     LineTableTestSections sections;
     uint64_t offset = sections.Add(builder);
-    sections.Finish();
+    sections.Finish(Endian::kLittle);
 
     ErrOr<LineProgram> program = sections.Parse(offset);
     ASSERT_TRUE(program.ok());
@@ -908,7 +908,7 @@ namespace {
 bool ParseFails(const Builder& builder) {
   LineTableTestSections sections;
   uint64_t offset = sections.Add(builder);
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
   return sections.Parse(offset).has_error();
 }
 
@@ -935,7 +935,7 @@ TEST(LineProgram, ParseErrors) {
 
   LineTableTestSections sections;
   sections.Add(MakeBuilder());
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
   EXPECT_TRUE(sections.Parse(100000).has_error());
 }
 
@@ -971,9 +971,9 @@ TEST(LineProgram, IndexedStringBounds) {
       builder.set_raw_tables(tables);
       LineTableTestSections sections;
       uint64_t offset = sections.Add(builder);
-      sections.Finish();
-      ErrOr<LineProgram> program =
-          LineProgram::Parse(AsStringView(sections.sections().line), offset, true, strings);
+      sections.Finish(Endian::kLittle);
+      ErrOr<LineProgram> program = LineProgram::Parse(AsStringView(sections.sections().line),
+                                                      offset, Endian::kLittle, strings);
       ASSERT_TRUE(program.ok()) << program.err().msg();
       ASSERT_EQ(3u, program.value().header().files.size());
       EXPECT_EQ("first.cc", program.value().header().files[0].name);
@@ -986,16 +986,17 @@ TEST(LineProgram, IndexedStringBounds) {
 // Nonzero string offsets exercise byte order in both the indexed forms and their offset entries.
 // Real units give the string offsets base and entry width, so the test also checks those.
 TEST(LineProgram, IndexedStringByteOrder) {
-  for (bool little_endian : {false, true}) {
+  for (Endian endian : {Endian::kBig, Endian::kLittle}) {
     for (bool dwarf64 : {false, true}) {
       for (DwarfForm form : {DwarfForm::kStrx, DwarfForm::kStrx1, DwarfForm::kStrx2,
                              DwarfForm::kStrx3, DwarfForm::kStrx4, DwarfForm::kGnuStrIndex}) {
-        SCOPED_TRACE(::testing::Message() << "little endian " << little_endian << " DWARF64 "
-                                          << dwarf64 << " form " << DwarfFormToString(form));
+        SCOPED_TRACE(::testing::Message()
+                     << (endian == Endian::kLittle ? "little endian" : "big endian") << " DWARF64 "
+                     << dwarf64 << " form " << DwarfFormToString(form));
         const size_t offset_size = dwarf64 ? 8 : 4;
         const uint64_t str_offsets_base = dwarf64 ? 16 : 8;
-        auto put = [little_endian](std::vector<uint8_t>& out, uint64_t value, size_t size) {
-          AppendInteger(out, value, size, little_endian);
+        auto put = [endian](std::vector<uint8_t>& out, uint64_t value, size_t size) {
+          AppendInteger(out, value, size, endian);
         };
         auto contribution = [&](const std::vector<uint8_t>& body) {
           std::vector<uint8_t> out;
@@ -1023,11 +1024,11 @@ TEST(LineProgram, IndexedStringByteOrder) {
             put(tables, index, static_cast<int>(form) - static_cast<int>(DwarfForm::kStrx1) + 1);
         }
         Builder builder(5, dwarf64 ? Builder::Format::kDwarf64 : Builder::Format::kDwarf32);
-        builder.set_big_endian(!little_endian);
+        builder.set_endian(endian);
         builder.set_raw_tables(tables);
         LineTableTestSections line;
         line.Add(builder);
-        line.Finish(8, little_endian);
+        line.Finish(endian);
 
         std::vector<uint8_t> abbrev = {1,
                                        static_cast<uint8_t>(DwarfTag::kCompileUnit),
@@ -1059,7 +1060,7 @@ TEST(LineProgram, IndexedStringByteOrder) {
             llvm::MemoryBuffer::getMemBufferCopy(llvm::StringRef("pad\0first.cc\0second.cc\0", 23));
         buffers["debug_line"] =
             llvm::MemoryBuffer::getMemBufferCopy(AsStringView(line.sections().line));
-        auto context = llvm::DWARFContext::create(buffers, 8, little_endian);
+        auto context = llvm::DWARFContext::create(buffers, 8, endian == Endian::kLittle);
         llvm::DWARFUnit* unit = context->getUnitAtIndex(0);
         ASSERT_TRUE(unit);
         DwarfSections sections = GetDwarfSections(*context);
@@ -1079,15 +1080,15 @@ TEST(LineProgram, IndexedStringByteOrder) {
 
 // Unit and header lengths near 2^64 must not overflow.
 TEST(LineProgram, LineTableExtent) {
-  for (bool little_endian : {true, false}) {
-    SCOPED_TRACE(little_endian);
-    auto put = [little_endian](std::vector<uint8_t>& out, uint64_t value, size_t size) {
-      AppendInteger(out, value, size, little_endian);
+  for (Endian endian : {Endian::kLittle, Endian::kBig}) {
+    SCOPED_TRACE(endian == Endian::kLittle ? "little endian" : "big endian");
+    auto put = [endian](std::vector<uint8_t>& out, uint64_t value, size_t size) {
+      AppendInteger(out, value, size, endian);
     };
-    auto extent = [little_endian](const std::vector<uint8_t>& data, uint64_t offset = 0) {
+    auto extent = [endian](const std::vector<uint8_t>& data, uint64_t offset = 0) {
       return ReadLineTableExtent(
           std::string_view(reinterpret_cast<const char*>(data.data()), data.size()), offset,
-          little_endian);
+          endian);
     };
 
     // A DWARF64 length that wraps when it is added to the offset means the rest of the section.
@@ -1126,7 +1127,7 @@ TEST(LineProgram, LineTableExtent) {
     data.resize(52);
     EXPECT_TRUE(LineProgram::Parse(
                     std::string_view(reinterpret_cast<const char*>(data.data()), data.size()), 0,
-                    little_endian, LineStringSections())
+                    endian, LineStringSections())
                     .has_error());
   }
 }
@@ -1152,7 +1153,7 @@ TEST(LineProgram, TruncatedHeaders) {
       // truncated section.
       LineTableTestSections full;
       full.Add(builder);
-      full.Finish();
+      full.Finish(Endian::kLittle);
       const DwarfSections sections = full.sections();
       const std::string_view section = AsStringView(sections.line);
       LineStringSections strings = GetLineStringSections(sections);
@@ -1160,10 +1161,10 @@ TEST(LineProgram, TruncatedHeaders) {
       for (size_t length = 1; length < section.size(); length++) {
         SCOPED_TRACE(length);
         std::string_view prefix(section.data(), length);
-        EXPECT_TRUE(LineProgram::Parse(prefix, 0, true, strings).has_error());
+        EXPECT_TRUE(LineProgram::Parse(prefix, 0, Endian::kLittle, strings).has_error());
       }
 
-      ErrOr<LineProgram> program = LineProgram::Parse(section, 0, true, strings);
+      ErrOr<LineProgram> program = LineProgram::Parse(section, 0, Endian::kLittle, strings);
       ASSERT_TRUE(program.ok()) << program.err().msg();
       LineFileTable names = LineFileTable::FromEntries(program.value().header_files());
       if (version >= 5)
@@ -1397,7 +1398,7 @@ TEST(LineProgram, MultipleTables) {
     builder.EndSequence();
     offsets.push_back(sections.Add(builder));
   }
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
 
   EXPECT_EQ(0u, offsets[0]);
   for (uint64_t i = 0; i < 3; i++) {
@@ -1426,7 +1427,7 @@ TEST(LineProgram, MaxOpsPerInstAboveOneFails) {
 
     LineTableTestSections sections;
     uint64_t offset = sections.Add(builder);
-    sections.Finish();
+    sections.Finish(Endian::kLittle);
     EXPECT_TRUE(sections.Parse(offset).has_error());
   }
 }
@@ -1460,7 +1461,7 @@ TEST(LineProgram, DefineFile) {
 
   LineTableTestSections sections;
   uint64_t offset = sections.Add(builder);
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
 
   ErrOr<LineProgram> program = sections.Parse(offset);
   ASSERT_TRUE(program.ok());
@@ -1545,7 +1546,7 @@ TEST(LineProgram, EmptyEntries) {
 
     LineTableTestSections sections;
     uint64_t offset = sections.Add(builder);
-    sections.Finish();
+    sections.Finish(Endian::kLittle);
     Decoded decoded = DecodeAndCheck(sections, offset);
     EXPECT_EQ((std::vector<uint32_t>{static_cast<uint32_t>(count)}), decoded.files);
     EXPECT_EQ(count + 1, decoded.file_count);
@@ -1564,7 +1565,7 @@ TEST(LineProgram, EmptyEntries) {
     builder.set_raw_tables(tables);
     LineTableTestSections sections;
     uint64_t offset = sections.Add(builder);
-    sections.Finish();
+    sections.Finish(Endian::kLittle);
     ErrOr<LineProgram> program = sections.Parse(offset);
     ASSERT_TRUE(program.ok());
     EXPECT_EQ(count, program.value().header().include_dirs.size());
@@ -1580,7 +1581,7 @@ TEST(LineProgram, EmptyEntries) {
     builder.set_raw_tables(tables);
     LineTableTestSections sections;
     uint64_t offset = sections.Add(builder);
-    sections.Finish();
+    sections.Finish(Endian::kLittle);
     Decoded decoded = DecodeAndCheck(sections, offset);
     ExpectFileNames(decoded.names, {nullptr, nullptr, nullptr});
     ErrOr<LineProgram> program = sections.Parse(offset);
@@ -1664,7 +1665,7 @@ TEST(LineProgram, DefineFileScan) {
 
   LineTableTestSections sections;
   uint64_t offset = sections.Add(builder);
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
   const std::vector<uint32_t> expected = {2};
 
   ErrOr<LineProgram> program = sections.Parse(offset);
@@ -1687,12 +1688,12 @@ TEST(LineProgram, DefineFileScan) {
 }
 
 // The same programs in both byte orders.
-class LineProgramEndianTest : public ::testing::TestWithParam<std::tuple<uint16_t, bool>> {};
+class LineProgramEndianTest : public ::testing::TestWithParam<std::tuple<uint16_t, Endian>> {};
 
 TEST_P(LineProgramEndianTest, Decode) {
-  auto [version, big_endian] = GetParam();
+  auto [version, endian] = GetParam();
   Builder builder(version);
-  builder.set_big_endian(big_endian);
+  builder.set_endian(endian);
   builder.set_dir_index_form(Builder::DirIndexForm::kData2);
   uint64_t dir = builder.AddDirectory(version >= 5 ? "/build" : "src");
   if (version >= 5)
@@ -1713,7 +1714,7 @@ TEST_P(LineProgramEndianTest, Decode) {
 
   LineTableTestSections sections;
   uint64_t offset = sections.Add(builder);
-  sections.Finish(8, !big_endian);
+  sections.Finish(endian);
 
   Decoded decoded = DecodeAndCheck(sections, offset);
   std::vector<LineRow> expected = {
@@ -1732,7 +1733,8 @@ TEST_P(LineProgramEndianTest, Decode) {
 }
 
 INSTANTIATE_TEST_SUITE_P(LineProgram, LineProgramEndianTest,
-                         ::testing::Combine(::testing::Values(2, 4, 5), ::testing::Bool()));
+                         ::testing::Combine(::testing::Values(2, 4, 5),
+                                            ::testing::Values(Endian::kLittle, Endian::kBig)));
 
 // File name tables for DWARF 2 to 4. Names are inline strings and file 0 doesn't exist.
 TEST(LineProgram, FileNamesDwarf4) {
@@ -1751,7 +1753,7 @@ TEST(LineProgram, FileNamesDwarf4) {
 
     LineTableTestSections sections;
     uint64_t offset = sections.Add(builder);
-    sections.Finish();
+    sections.Finish(Endian::kLittle);
     ErrOr<LineProgram> program = sections.Parse(offset);
     ASSERT_TRUE(program.ok());
 
@@ -1795,7 +1797,7 @@ TEST_P(LineProgramFileNameTest, Dwarf5) {
 
   LineTableTestSections sections;
   uint64_t offset = sections.Add(builder);
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
   ErrOr<LineProgram> program = sections.Parse(offset);
   ASSERT_TRUE(program.ok()) << program.err().msg();
 
@@ -1836,7 +1838,7 @@ TEST(LineProgram, ManyFilesDwarf5) {
 
   LineTableTestSections sections;
   uint64_t offset = sections.Add(builder);
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
   Decoded decoded = DecodeAndCheck(sections, offset);
   EXPECT_EQ(300u, decoded.file_count);
   EXPECT_EQ((std::vector<uint32_t>{299}), decoded.files);

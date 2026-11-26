@@ -30,11 +30,11 @@ std::span<const uint8_t> SliceContribution(std::span<const uint8_t> section,
 }
 
 std::optional<uint64_t> ReadEntry(std::span<const uint8_t> section, uint64_t base, uint64_t index,
-                                  uint8_t width, bool little_endian) {
+                                  uint8_t width, Endian endian) {
   // Check the index before multiplying or adding it. This also requires a complete entry.
   if (base > section.size() || index >= (section.size() - base) / width)
     return std::nullopt;
-  return ReadFixed(section.data() + base + index * width, width, little_endian);
+  return ReadFixed(section.data() + base + index * width, width, endian);
 }
 
 std::optional<uint64_t> SectionOffset(const std::optional<FormValue>& value, uint16_t version) {
@@ -50,8 +50,7 @@ std::optional<uint64_t> SectionOffset(const std::optional<FormValue>& value, uin
 }
 
 std::optional<UnitContext::StringOffsets> ReadStringOffsets(std::span<const uint8_t> section,
-                                                            const FormParams& params,
-                                                            bool little_endian,
+                                                            const FormParams& params, Endian endian,
                                                             const UnitContext::Options& options,
                                                             std::optional<uint64_t> base) {
   uint64_t start;
@@ -81,7 +80,7 @@ std::optional<UnitContext::StringOffsets> ReadStringOffsets(std::span<const uint
     start = *base - prefix_size;
   }
 
-  DataReader reader(section, little_endian);
+  DataReader reader(section, endian);
   reader.Seek(start);
   auto length = reader.InitialLength();
   if (!reader.ok() || length.length < 4 || length.length > reader.remaining())
@@ -121,7 +120,7 @@ ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitH
       header.header_size < length_size || header.header_size - length_size >= header.length) {
     return error("invalid unit bounds or missing root");
   }
-  DataReader reader(info, sections.little_endian);
+  DataReader reader(info, sections.endian);
   reader.set_limit(header.next_unit_offset());
   reader.Seek(header.die_offset());
   uint64_t code = reader.Uleb();
@@ -166,13 +165,13 @@ ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitH
 
   UnitContext result;
   result.params_ = params;
-  result.little_endian_ = sections.little_endian;
+  result.endian_ = sections.endian;
   result.str_ = options.is_dwo ? sections.str_dwo : sections.str;
   result.line_str_ = sections.line_str;
   result.str_offsets_ = options.is_dwo ? sections.str_offsets_dwo : sections.str_offsets;
   result.addr_ = sections.addr;
   result.addr_entry_size_ = header.address_size;
-  result.addr_little_endian_ = sections.little_endian;
+  result.addr_endian_ = sections.endian;
   result.loclists_ = options.is_dwo ? sections.loclists_dwo : sections.loclists;
 
   auto offset = [&](DwarfAttr attr) { return SectionOffset(find(attr), header.version); };
@@ -198,7 +197,7 @@ ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitH
       result.addr_ = address_table->addr_;
       result.addr_base_ = address_table->addr_base_;
       result.addr_entry_size_ = address_table->addr_entry_size_;
-      result.addr_little_endian_ = address_table->addr_little_endian_;
+      result.addr_endian_ = address_table->addr_endian_;
     }
     if (options.skeleton && header.version <= 4)
       result.ranges_base_ = options.skeleton->gnu_ranges_base_;
@@ -214,8 +213,8 @@ ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitH
     result.gnu_ranges_base_ = offset(DwarfAttr::kGnuRangesBase);
   }
 
-  result.string_offsets_ = ReadStringOffsets(result.str_offsets_, params, sections.little_endian,
-                                             options, result.str_offsets_base_);
+  result.string_offsets_ = ReadStringOffsets(result.str_offsets_, params, sections.endian, options,
+                                             result.str_offsets_base_);
   if (result.string_offsets_)
     result.str_offsets_base_ = result.string_offsets_->base;
   if (const auto& dir = find(DwarfAttr::kCompDir))
@@ -263,7 +262,7 @@ std::optional<std::string_view> UnitContext::ResolveString(const FormValue& valu
         return std::nullopt;
       // LLVM's lookup checks the section end. Stay in this unit's contribution.
       auto entry = ReadEntry(str_offsets_.first(string_offsets_->end), string_offsets_->base,
-                             offset, string_offsets_->entry_size, little_endian_);
+                             offset, string_offsets_->entry_size, endian_);
       if (!entry)
         return std::nullopt;
       offset = *entry;
@@ -272,7 +271,7 @@ std::optional<std::string_view> UnitContext::ResolveString(const FormValue& valu
     default:
       return std::nullopt;
   }
-  DataReader reader(strings, little_endian_);
+  DataReader reader(strings, endian_);
   reader.Seek(offset);
   auto string = reader.CString();
   if (!reader.ok())
@@ -299,7 +298,7 @@ std::optional<uint64_t> UnitContext::ReadAddress(uint64_t index) const {
   if (!addr_base_)
     return std::nullopt;
   // Like LLDB's ReadAddressFromDebugAddrSection(), use the address size and section bounds.
-  return ReadEntry(addr_, *addr_base_, index, addr_entry_size_, addr_little_endian_);
+  return ReadEntry(addr_, *addr_base_, index, addr_entry_size_, addr_endian_);
 }
 
 std::optional<uint64_t> UnitContext::ReadLoclistOffset(uint64_t index) const {
@@ -307,7 +306,7 @@ std::optional<uint64_t> UnitContext::ReadLoclistOffset(uint64_t index) const {
   if (params_.version < 5 || !loclists_base_ || *loclists_base_ < prefix_size)
     return std::nullopt;
   uint64_t base = *loclists_base_;
-  DataReader reader(loclists_, little_endian_);
+  DataReader reader(loclists_, endian_);
   reader.Seek(base - prefix_size);
   auto length = reader.InitialLength();
   if (!reader.ok() || length.offset_size != params_.offset_size || length.length < 8 ||

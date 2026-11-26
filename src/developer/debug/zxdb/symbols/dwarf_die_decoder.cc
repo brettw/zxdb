@@ -13,6 +13,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFFormValue.h"
 #include "llvm/DebugInfo/DWARF/DWARFTypeUnit.h"
 #include "src/developer/debug/zxdb/common/checked_math.h"
+#include "src/developer/debug/zxdb/common/endian.h"
 #include "src/developer/debug/zxdb/common/file_util.h"
 #include "src/developer/debug/zxdb/symbols/const_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
@@ -282,10 +283,10 @@ ConstValue DwarfDieDecoder::GetConstValue(DwarfAttr attribute) const {
                   : form_code == DwarfForm::kData2 ? 2
                   : form_code == DwarfForm::kData4 ? 4
                                                    : 8;
-    bool little_endian = value->unit->getContext().isLittleEndian();
+    Endian endian = value->unit->getContext().isLittleEndian() ? Endian::kLittle : Endian::kBig;
     std::vector<uint8_t> bytes(size);
     for (size_t i = 0; i < size; i++)
-      bytes[little_endian ? i : size - 1 - i] = static_cast<uint8_t>(*bits >> (8 * i));
+      bytes[endian == Endian::kLittle ? i : size - 1 - i] = static_cast<uint8_t>(*bits >> (8 * i));
     return ConstValue(std::move(bytes));
   } else if (form_code == DwarfForm::kData16) {
     // LLVM keeps the 16 bytes as a block, in the byte order of the file.

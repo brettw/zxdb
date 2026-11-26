@@ -53,7 +53,7 @@ TEST(LineTableCache, HeaderOnlyUntilNeeded) {
   LineTableTestSections sections;
   uint64_t offset = AddDefineFileTable(sections);
   sections.AddCompileUnit(4, offset, {});
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
   llvm::DWARFUnit& unit = *sections.unit(0);
 
   LineTableCache cache;
@@ -88,7 +88,7 @@ TEST(LineTableCache, DecodeFirst) {
   LineTableTestSections sections;
   uint64_t offset = AddDefineFileTable(sections);
   sections.AddCompileUnit(4, offset, {});
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
   llvm::DWARFUnit& unit = *sections.unit(0);
 
   LineTableCache cache;
@@ -110,7 +110,7 @@ TEST(LineTableCache, SharesHeaderTableWithoutDefineFile) {
   LineTableTestSections sections;
   uint64_t offset = sections.Add(builder);
   sections.AddCompileUnit(5, offset, {});
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
   llvm::DWARFUnit& unit = *sections.unit(0);
 
   LineTableCache cache;
@@ -129,7 +129,7 @@ TEST(LineTableCache, BadLineTable) {
   LineTableTestSections sections;
   sections.Add(Builder(5));
   sections.AddCompileUnit(5, 100000, {});
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
   llvm::DWARFUnit& unit = *sections.unit(0);
 
   LineTableCache cache;
@@ -144,7 +144,7 @@ TEST(LineTableCache, UnitWithoutLineTable) {
   LineTableTestSections sections;
   sections.Add(Builder(5));
   sections.AddCompileUnit(5, std::nullopt, {1});
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
   llvm::DWARFUnit& unit = *sections.unit(0);
 
   LineTableCache cache;
@@ -162,7 +162,7 @@ TEST(DwarfDieDecoder, GetFileDefinedByProgram) {
   LineTableTestSections sections;
   uint64_t offset = AddDefineFileTable(sections);
   sections.AddCompileUnit(4, offset, {1, 2, 9});
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
   llvm::DWARFUnit& unit = *sections.unit(0);
 
   EXPECT_EQ("a.cc", DecodeDeclFile(sections.mutable_context(), unit, 0));
@@ -181,7 +181,7 @@ TEST(DwarfDieDecoder, GetFileStrx) {
   LineTableTestSections sections;
   uint64_t offset = sections.Add(builder);
   sections.AddCompileUnit(5, offset, {0});
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
 
   EXPECT_EQ("src/indexed.cc", DecodeDeclFile(sections.mutable_context(), *sections.unit(0), 0));
 }

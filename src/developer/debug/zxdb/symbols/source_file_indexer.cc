@@ -46,8 +46,8 @@ size_t GetDefaultThreadCount(const std::vector<LineTableJob>& jobs) {
 
 // Returns the size of the line table at the offset from its unit length, or 0 if it is invalid.
 // This is only for the thread count.
-uint64_t GetLineTableSize(std::string_view section, uint64_t offset, bool little_endian) {
-  ErrOr<LineTableExtent> extent = ReadLineTableExtent(section, offset, little_endian);
+uint64_t GetLineTableSize(std::string_view section, uint64_t offset, Endian endian) {
+  ErrOr<LineTableExtent> extent = ReadLineTableExtent(section, offset, endian);
   return extent.ok() ? extent.value().end - offset : 0;
 }
 
@@ -76,8 +76,8 @@ void AddLineTableJob(const DwarfSections& sections, UnitIndex unit_index, llvm::
   job.unit_index = unit_index;
   job.section = AsStringView(GetUnitLineSection(sections, unit));
   job.offset = *offset;
-  job.little_endian = sections.little_endian;
-  job.size = GetLineTableSize(job.section, job.offset, job.little_endian);
+  job.endian = sections.endian;
+  job.size = GetLineTableSize(job.section, job.offset, job.endian);
   job.strings = GetLineStringSections(sections, unit);
   job.first_code_address = first_code_address;
 }
@@ -165,8 +165,7 @@ void SourceFileIndexer::RunJobs(LineFilePathResolver& resolver) {
 
 void SourceFileIndexer::RunJob(size_t index, LineFilePathResolver& resolver) {
   const LineTableJob& job = jobs_[index];
-  ErrOr<LineProgram> program =
-      LineProgram::Parse(job.section, job.offset, job.little_endian, job.strings);
+  ErrOr<LineProgram> program = LineProgram::Parse(job.section, job.offset, job.endian, job.strings);
   if (program.has_error())
     return;
 

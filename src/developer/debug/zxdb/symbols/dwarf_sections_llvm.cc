@@ -74,7 +74,7 @@ DwarfSections GetDwarfSections(const llvm::DWARFObject& object) {
       .loclists_dwo = AsBytes(object.getLoclistsDWOSection().Data),
       .rnglists_dwo = AsBytes(object.getRnglistsDWOSection().Data),
       .types_dwo = GetSingleSection(object, &llvm::DWARFObject::forEachTypesDWOSections),
-      .little_endian = object.isLittleEndian(),
+      .endian = object.isLittleEndian() ? Endian::kLittle : Endian::kBig,
   };
 }
 
@@ -103,7 +103,7 @@ ErrOr<UnitContext> ReadUnitContext(const DwarfSections& sections, llvm::DWARFUni
   bool is_dwo = unit.isDWOUnit();
   UnitSection kind =
       unit.isTypeUnit() && unit.getVersion() < 5 ? UnitSection::kTypes : UnitSection::kInfo;
-  auto header = ReadUnitHeader(info, unit.getOffset(), sections.little_endian, kind);
+  auto header = ReadUnitHeader(info, unit.getOffset(), sections.endian, kind);
   if (header.has_error())
     return header.err();
 

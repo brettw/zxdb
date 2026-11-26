@@ -54,9 +54,9 @@ ErrOr<LineProgram> ParseLineProgramForUnit(const DwarfSections& sections, llvm::
 
 ErrOr<LineProgram> ParseLineProgramForUnit(const DwarfSections& sections, llvm::DWARFUnit& unit,
                                            uint64_t offset) {
-  FX_DCHECK(sections.little_endian == unit.isLittleEndian());
+  FX_DCHECK(sections.endian == (unit.isLittleEndian() ? Endian::kLittle : Endian::kBig));
   return LineProgram::Parse(AsStringView(GetUnitLineSection(sections, unit)), offset,
-                            sections.little_endian, GetLineStringSections(sections, unit));
+                            sections.endian, GetLineStringSections(sections, unit));
 }
 
 }  // namespace zxdb

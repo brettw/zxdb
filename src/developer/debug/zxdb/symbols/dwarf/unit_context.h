@@ -11,6 +11,7 @@
 #include <span>
 #include <string_view>
 
+#include "src/developer/debug/zxdb/common/endian.h"
 #include "src/developer/debug/zxdb/common/err_or.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/form_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/unit_header.h"
@@ -94,9 +95,9 @@ class UnitContext {
   std::span<const uint8_t> addr_;
   std::span<const uint8_t> loclists_;
   FormParams params_;
-  bool little_endian_;
+  Endian endian_;
   uint8_t addr_entry_size_;
-  bool addr_little_endian_;
+  Endian addr_endian_;
 
   std::optional<uint64_t> str_offsets_base_;
   std::optional<uint64_t> addr_base_;

@@ -36,29 +36,29 @@ Spec Attribute(DwarfForm form, std::optional<int64_t> implicit_const = std::null
 
 struct FormCase {
   FormParams params;
-  bool little_endian;
+  Endian endian;
   Spec spec;
   std::vector<uint8_t> bytes;
   FormValue expected;
 };
 
-void AddFormCases(std::vector<FormCase>& cases, const FormParams& params, bool little_endian) {
+void AddFormCases(std::vector<FormCase>& cases, const FormParams& params, Endian endian) {
   auto add = [&](DwarfForm form, Class form_class, FormValue::Value value,
                  std::vector<uint8_t> bytes, std::optional<int64_t> implicit_const = std::nullopt) {
     cases.push_back({params,
-                     little_endian,
+                     endian,
                      Attribute(form, implicit_const),
                      std::move(bytes),
                      {form, form_class, value}});
   };
   auto fixed = [&](DwarfForm form, Class form_class, uint64_t value, size_t width) {
     std::vector<uint8_t> bytes;
-    DwarfSectionBuilder(bytes, little_endian).Fixed(value, width);
+    DwarfSectionBuilder(bytes, endian).Fixed(value, width);
     add(form, form_class, value, std::move(bytes));
   };
   auto fixed_block = [&](DwarfForm form, size_t width) {
     std::vector<uint8_t> bytes;
-    DwarfSectionBuilder writer(bytes, little_endian);
+    DwarfSectionBuilder writer(bytes, endian);
     writer.Fixed(std::size(kBlock), width);
     writer.Bytes(kBlock);
     add(form, Class::kBlock, std::span<const uint8_t>(kBlock), std::move(bytes));
@@ -92,7 +92,7 @@ void AddFormCases(std::vector<FormCase>& cases, const FormParams& params, bool l
   fixed_block(DwarfForm::kBlock4, 4);
   add(DwarfForm::kBlock, Class::kBlock, std::span<const uint8_t>(kBlock), {3, 0x12, 0x80, 0x00});
   cases.push_back({params,
-                   little_endian,
+                   endian,
                    Attribute(DwarfForm::kIndirect),
                    {0x16, 0x0b, 0x81},
                    {DwarfForm::kData1, Class::kConstant, uint64_t{0x81}}});
@@ -135,7 +135,7 @@ void AddFormCases(std::vector<FormCase>& cases, const FormParams& params, bool l
 
   // The LLVM extension stores a ULEB128 address index followed by a four-byte offset.
   std::vector<uint8_t> indexed_address = {0x80, 0x80, 0x80, 0x80, 0x10};  // 2^32.
-  DwarfSectionBuilder(indexed_address, little_endian).Fixed(0xc1234567, 4);
+  DwarfSectionBuilder(indexed_address, endian).Fixed(0xc1234567, 4);
   add(DwarfForm::kLlvmAddrxOffset, Class::kAddress,
       FormValue::IndexedAddress{0x100000000, 0xc1234567}, std::move(indexed_address));
 }
@@ -144,8 +144,8 @@ std::vector<FormCase> AllFormCases() {
   std::vector<FormCase> cases;
   for (uint16_t version : {2, 3, 4, 5}) {
     for (const FormParams params : {FormParams{version, 4, 8}, FormParams{version, 8, 4}}) {
-      for (bool little_endian : {true, false})
-        AddFormCases(cases, params, little_endian);
+      for (Endian endian : {Endian::kLittle, Endian::kBig})
+        AddFormCases(cases, params, endian);
     }
   }
   return cases;
@@ -187,7 +187,7 @@ TEST_P(FormEncodingTest, ReadAndSkip) {
   std::vector<uint8_t> bytes = {0xfa};
   bytes.insert(bytes.end(), form.bytes.begin(), form.bytes.end());
   bytes.push_back(0xfb);
-  DataReader reader(bytes, form.little_endian);
+  DataReader reader(bytes, form.endian);
   reader.Seek(1);
   DataReader skip = reader;
 
@@ -203,7 +203,7 @@ TEST_P(FormEncodingTest, ReadAndSkip) {
 
 TEST_P(FormEncodingTest, Truncation) {
   const FormCase& form = GetParam();
-  DataReader input(form.bytes, form.little_endian);
+  DataReader input(form.bytes, form.endian);
   if (form.bytes.empty()) {
     // The two zero-byte forms can be read and skipped even at the end of the unit.
     EXPECT_TRUE(SkipForm(form.spec.form, form.params, input));
@@ -224,7 +224,7 @@ INSTANTIATE_TEST_SUITE_P(Dwarf2To5, FormEncodingTest, testing::ValuesIn(AllFormC
                            return DwarfFormToString(static_cast<DwarfForm>(form.spec.form)) + "_V" +
                                   std::to_string(form.params.version) +
                                   (form.params.offset_size == 4 ? "_32" : "_64") +
-                                  (form.little_endian ? "_LE" : "_BE");
+                                  (form.endian == Endian::kLittle ? "_LE" : "_BE");
                          });
 
 TEST(FormValue, BlocksPastTheLimit) {
@@ -232,14 +232,14 @@ TEST(FormValue, BlocksPastTheLimit) {
   for (DwarfForm form : {DwarfForm::kBlock, DwarfForm::kExprloc}) {
     constexpr uint8_t kHugeBlock[] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                                       0xff, 0xff, 0xff, 0x01, 0x12};
-    ExpectMalformed(Attribute(form), kDwarf5, DataReader(kHugeBlock, true));
+    ExpectMalformed(Attribute(form), kDwarf5, DataReader(kHugeBlock, Endian::kLittle));
   }
   constexpr uint8_t kBlock1[] = {5, 0x12};
   constexpr uint8_t kBlock2[] = {0x00, 0x05, 0x12};
   constexpr uint8_t kBlock4[] = {0x05, 0x00, 0x00, 0x00, 0x12};
-  ExpectMalformed(Attribute(DwarfForm::kBlock1), kDwarf5, DataReader(kBlock1, true));
-  ExpectMalformed(Attribute(DwarfForm::kBlock2), kDwarf5, DataReader(kBlock2, false));
-  ExpectMalformed(Attribute(DwarfForm::kBlock4), kDwarf5, DataReader(kBlock4, true));
+  ExpectMalformed(Attribute(DwarfForm::kBlock1), kDwarf5, DataReader(kBlock1, Endian::kLittle));
+  ExpectMalformed(Attribute(DwarfForm::kBlock2), kDwarf5, DataReader(kBlock2, Endian::kBig));
+  ExpectMalformed(Attribute(DwarfForm::kBlock4), kDwarf5, DataReader(kBlock4, Endian::kLittle));
 }
 
 TEST(FormValue, UnknownForms) {
@@ -247,9 +247,9 @@ TEST(FormValue, UnknownForms) {
   for (uint64_t form : kUnknown) {
     SCOPED_TRACE(form);
     std::vector<uint8_t> bytes;
-    DwarfSectionBuilder(bytes).Uleb(form);
-    ExpectMalformed(Spec{0x03, form, {}}, kDwarf5, DataReader(bytes, true));
-    ExpectMalformed(Attribute(DwarfForm::kIndirect), kDwarf5, DataReader(bytes, true));
+    DwarfSectionBuilder(bytes, Endian::kLittle).Uleb(form);
+    ExpectMalformed(Spec{0x03, form, {}}, kDwarf5, DataReader(bytes, Endian::kLittle));
+    ExpectMalformed(Attribute(DwarfForm::kIndirect), kDwarf5, DataReader(bytes, Endian::kLittle));
   }
 }
 
@@ -260,7 +260,7 @@ TEST(FormValue, IndirectDepthLimit) {
     // The abbreviation supplies the first indirect form, so the DIE has one fewer.
     std::vector<uint8_t> bytes(depth - 1, 0x16);
     bytes.push_back(0x19);  // DW_FORM_flag_present.
-    DataReader reader(bytes, true);
+    DataReader reader(bytes, Endian::kLittle);
     if (depth > kDepthLimit) {
       ExpectMalformed(Attribute(DwarfForm::kIndirect), kDwarf5, reader);
     } else {
@@ -278,7 +278,7 @@ TEST(FormValue, IndirectDepthLimit) {
 TEST(FormValue, IndirectImplicitConst) {
   // DWARF 5 errata section 7.5.3 stores the SLEB128 after the indirect form code.
   constexpr uint8_t kBytes[] = {0x16, 0x21, 0xff, 0x7e, 0xfb};
-  DataReader reader(kBytes, true);
+  DataReader reader(kBytes, Endian::kLittle);
   const auto spec = Attribute(DwarfForm::kIndirect);
   auto read = ReadForm(spec, kDwarf5, reader);
   ASSERT_TRUE(read.ok()) << read.err_or_empty().msg();
@@ -289,9 +289,9 @@ TEST(FormValue, IndirectImplicitConst) {
   EXPECT_EQ(4u, reader.offset());
 
   for (size_t limit : {2, 3})
-    ExpectMalformed(spec, kDwarf5, DataReader(std::span(kBytes).first(limit), true));
+    ExpectMalformed(spec, kDwarf5, DataReader(std::span(kBytes).first(limit), Endian::kLittle));
 
-  DataReader empty({}, true);
+  DataReader empty({}, Endian::kLittle);
   EXPECT_TRUE(ReadForm(Attribute(DwarfForm::kImplicitConst), kDwarf5, empty).has_error());
   auto zero = ReadForm(Attribute(DwarfForm::kImplicitConst, 0), kDwarf5, empty);
   ASSERT_TRUE(zero.ok()) << zero.err_or_empty().msg();
@@ -313,11 +313,11 @@ TEST(FormValue, ZeroValues) {
            FormValue{DwarfForm::kBlock, Class::kBlock, std::span<const uint8_t>{}},
        }) {
     SCOPED_TRACE(DwarfFormToString(expected.form));
-    DataReader reader(kZero, true);
+    DataReader reader(kZero, Endian::kLittle);
     auto read = ReadForm(Attribute(expected.form), kDwarf5, reader);
     ASSERT_TRUE(read.ok()) << read.err_or_empty().msg();
     ExpectForm(expected, read.value());
-    DataReader skip(kZero, true);
+    DataReader skip(kZero, Endian::kLittle);
     EXPECT_TRUE(SkipForm(expected.form, kDwarf5, skip));
     EXPECT_EQ(reader.offset(), skip.offset());
   }
@@ -326,7 +326,7 @@ TEST(FormValue, ZeroValues) {
 TEST(FormValue, KnownEncodingInOlderVersion) {
   constexpr uint8_t kIndex[] = {0x12, 0x34, 0x56};
   constexpr FormParams kDwarf4{.version = 4, .offset_size = 4, .address_size = 8};
-  DataReader reader(kIndex, false);
+  DataReader reader(kIndex, Endian::kBig);
   auto read = ReadForm(Attribute(DwarfForm::kStrx3), kDwarf4, reader);
   ASSERT_TRUE(read.ok()) << read.err_or_empty().msg();
   ExpectForm({DwarfForm::kStrx3, Class::kString, uint64_t{0x123456}}, read.value());
@@ -339,17 +339,17 @@ TEST(FormValue, InvalidPayloadsAndWidths) {
   constexpr uint8_t kOverflow[] = {0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02};
   for (DwarfForm form :
        {DwarfForm::kUdata, DwarfForm::kSdata, DwarfForm::kBlock, DwarfForm::kIndirect})
-    ExpectMalformed(Attribute(form), kDwarf5, DataReader(kOverflow, true));
+    ExpectMalformed(Attribute(form), kDwarf5, DataReader(kOverflow, Endian::kLittle));
 
   constexpr uint8_t kBytes[8] = {};
   constexpr FormParams kBadAddress{.version = 2, .offset_size = 4, .address_size = 3};
   constexpr FormParams kBadOffset{.version = 3, .offset_size = 2, .address_size = 4};
-  ExpectMalformed(Attribute(DwarfForm::kAddr), kBadAddress, DataReader(kBytes, true));
-  ExpectMalformed(Attribute(DwarfForm::kRefAddr), kBadAddress, DataReader(kBytes, true));
-  ExpectMalformed(Attribute(DwarfForm::kRefAddr), kBadOffset, DataReader(kBytes, true));
-  ExpectMalformed(Attribute(DwarfForm::kStrp), kBadOffset, DataReader(kBytes, true));
+  ExpectMalformed(Attribute(DwarfForm::kAddr), kBadAddress, DataReader(kBytes, Endian::kLittle));
+  ExpectMalformed(Attribute(DwarfForm::kRefAddr), kBadAddress, DataReader(kBytes, Endian::kLittle));
+  ExpectMalformed(Attribute(DwarfForm::kRefAddr), kBadOffset, DataReader(kBytes, Endian::kLittle));
+  ExpectMalformed(Attribute(DwarfForm::kStrp), kBadOffset, DataReader(kBytes, Endian::kLittle));
 
-  DataReader failed(kBytes, true);
+  DataReader failed(kBytes, Endian::kLittle);
   failed.Skip(sizeof(kBytes) + 1);
   ExpectMalformed(Attribute(DwarfForm::kFlagPresent), kDwarf5, failed);
 }

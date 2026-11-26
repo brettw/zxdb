@@ -12,6 +12,7 @@
 #include <span>
 #include <vector>
 
+#include "src/developer/debug/zxdb/common/endian.h"
 #include "src/developer/debug/zxdb/common/err_or.h"
 
 namespace zxdb {
@@ -62,14 +63,14 @@ struct UnitHeader {
 // Reads the header at offset in section using the given byte order and section kind.
 // Checks the initial length, unit and header bounds, version, address size, and type offset.
 // Returns an error with the unit offset and cause when validation fails.
-ErrOr<UnitHeader> ReadUnitHeader(std::span<const uint8_t> section, uint64_t offset,
-                                 bool little_endian, UnitSection kind);
+ErrOr<UnitHeader> ReadUnitHeader(std::span<const uint8_t> section, uint64_t offset, Endian endian,
+                                 UnitSection kind);
 
 // Owns the headers of one section. After parsing, callers can read it from multiple threads.
 class UnitList {
  public:
   // Stops at the first error and keeps the headers that precede it.
-  static UnitList Parse(std::span<const uint8_t> section, bool little_endian, UnitSection kind);
+  static UnitList Parse(std::span<const uint8_t> section, Endian endian, UnitSection kind);
 
   size_t size() const { return units_.size(); }
   const UnitHeader& operator[](size_t index) const { return units_[index]; }

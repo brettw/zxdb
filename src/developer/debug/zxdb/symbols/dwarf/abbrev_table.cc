@@ -101,7 +101,7 @@ std::optional<uint64_t> AbbrevTable::Declaration::FixedAttributeSize(
 
 ErrOr<AbbrevTable> AbbrevTable::Parse(std::span<const uint8_t> section, uint64_t offset) {
   // Abbreviations contain only LEB128 values and single-byte flags.
-  DataReader reader(section, true);
+  DataReader reader(section, Endian::kLittle);
   reader.Seek(offset);
   auto error = [&reader, offset](const char* reason) {
     return Err("DWARF abbreviation table at offset 0x%" PRIx64 ", byte 0x%" PRIx64 ": %s", offset,

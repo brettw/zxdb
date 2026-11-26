@@ -137,7 +137,7 @@ bool TryScanNameIndexPrefixFast(const llvm::DWARFDebugNames& debug_names, const 
   const auto prefix_bytes = AsBytes(prefix);
   for (uint32_t i = 0; i < hdr.NameCount; i++) {
     uint32_t str_off = ReadFixed(offsets + static_cast<size_t>(i) * sizeof(uint32_t),
-                                 sizeof(uint32_t), sections.little_endian);
+                                 sizeof(uint32_t), sections.endian);
     if (!CandidateMatchesPrefix(sections.str, str_off, prefix_bytes)) {
       continue;
     }

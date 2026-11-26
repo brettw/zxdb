@@ -15,10 +15,10 @@ namespace zxdb {
 namespace {
 
 TEST(DwarfSectionBuilder, Values) {
-  for (bool little_endian : {false, true}) {
-    SCOPED_TRACE(little_endian);
+  for (Endian endian : {Endian::kBig, Endian::kLittle}) {
+    SCOPED_TRACE(endian == Endian::kLittle ? "little endian" : "big endian");
     std::vector<uint8_t> bytes;
-    DwarfSectionBuilder writer(bytes, little_endian);
+    DwarfSectionBuilder writer(bytes, endian);
     constexpr uint64_t kFixed[] = {
         0x12,         0x1234,         0x123456,         0x12345678,
         0x123456789a, 0x123456789abc, 0x123456789abcde, 0x123456789abcdef0};
@@ -40,7 +40,7 @@ TEST(DwarfSectionBuilder, Values) {
     constexpr uint8_t kRaw[] = {0x01, 0xfe};
     writer.Bytes(kRaw);
 
-    DataReader reader(bytes, little_endian);
+    DataReader reader(bytes, endian);
     for (size_t i = 0; i < std::size(kFixed); i++)
       EXPECT_EQ(kFixed[i], reader.Fixed(i + 1));
     EXPECT_EQ(12857u, reader.Uleb());
@@ -64,10 +64,10 @@ TEST(DwarfSectionBuilder, Values) {
 }
 
 TEST(DwarfSectionBuilder, InitialLength) {
-  for (bool little_endian : {false, true}) {
-    SCOPED_TRACE(little_endian);
+  for (Endian endian : {Endian::kBig, Endian::kLittle}) {
+    SCOPED_TRACE(endian == Endian::kLittle ? "little endian" : "big endian");
     std::vector<uint8_t> bytes;
-    DwarfSectionBuilder writer(bytes, little_endian);
+    DwarfSectionBuilder writer(bytes, endian);
     writer.Fixed(0x42, 1);
     auto dwarf32 = writer.BeginInitialLength(4);
     writer.Fixed(0x1234, 2);
@@ -77,13 +77,14 @@ TEST(DwarfSectionBuilder, InitialLength) {
     writer.EndInitialLength(dwarf64);
 
     const std::vector<uint8_t> expected =
-        little_endian ? std::vector<uint8_t>{0x42, 2, 0, 0, 0, 0x34, 0x12, 0xff, 0xff, 0xff, 0xff,
-                                             3,    0, 0, 0, 0, 0,    0,    0,    0xef, 0xcd, 0xab}
-                      : std::vector<uint8_t>{0x42, 0, 0, 0, 2, 0x12, 0x34, 0xff, 0xff, 0xff, 0xff,
-                                             0,    0, 0, 0, 0, 0,    0,    3,    0xab, 0xcd, 0xef};
+        endian == Endian::kLittle
+            ? std::vector<uint8_t>{0x42, 2, 0, 0, 0, 0x34, 0x12, 0xff, 0xff, 0xff, 0xff,
+                                   3,    0, 0, 0, 0, 0,    0,    0,    0xef, 0xcd, 0xab}
+            : std::vector<uint8_t>{0x42, 0, 0, 0, 2, 0x12, 0x34, 0xff, 0xff, 0xff, 0xff,
+                                   0,    0, 0, 0, 0, 0,    0,    3,    0xab, 0xcd, 0xef};
     EXPECT_EQ(expected, bytes);
 
-    DataReader reader(bytes, little_endian);
+    DataReader reader(bytes, endian);
     EXPECT_EQ(0x42u, reader.Fixed(1));
     auto length32 = reader.InitialLength();
     EXPECT_EQ(2u, length32.length);
@@ -108,7 +109,7 @@ TEST(DwarfSectionBuilder, StringMerging) {
   EXPECT_EQ(7u, strings.AddString("beta"));
   EXPECT_EQ(12u, strings.bytes().size());
 
-  DataReader reader(strings.bytes(), true);
+  DataReader reader(strings.bytes(), Endian::kLittle);
   EXPECT_EQ("alpha", reader.CString());
   EXPECT_TRUE(reader.CString().empty());
   EXPECT_EQ("beta", reader.CString());

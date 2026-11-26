@@ -77,7 +77,7 @@ LineFileEntry ReadDefinedFile(const uint8_t* p, const uint8_t* end) {
 
 template <typename Sink>
 LineProgramStatus DecodeProgram(const LineProgramHeader& header, Sink& sink) {
-  const bool little_endian = header.little_endian;
+  const Endian endian = header.endian;
 
   const uint8_t default_flags = header.default_is_stmt ? LineRow::kIsStmt : 0;
   const uint8_t opcode_base = header.opcode_base;
@@ -149,7 +149,7 @@ LineProgramStatus DecodeProgram(const LineProgramHeader& header, Sink& sink) {
           // The operand size comes from the opcode length, not from the header.
           size_t size = length - 1;
           if (size == 1 || size == 2 || size == 4 || size == 8) {
-            address = ReadFixed(p + 1, size, little_endian);
+            address = ReadFixed(p + 1, size, endian);
             tombstoned = address == TombstoneForSize(size);
           }
           break;
@@ -219,7 +219,7 @@ LineProgramStatus DecodeProgram(const LineProgramHeader& header, Sink& sink) {
       case kLnsFixedAdvancePc:
         if (end - p < 2)
           return LineProgramStatus::kCorrupt;
-        address += ReadFixed(p, 2, little_endian);
+        address += ReadFixed(p, 2, endian);
         p += 2;
         break;
       case kLnsSetPrologueEnd:
@@ -368,7 +368,7 @@ std::optional<std::string_view> StringAt(std::string_view section, uint64_t offs
 }
 
 std::optional<std::string_view> IndexedString(const LineStringSections& strings, uint64_t index,
-                                              bool little_endian) {
+                                              Endian endian) {
   if (!strings.str_offsets_base)
     return std::nullopt;
   // Check the index against the number of entries, so the entry offset can't overflow.
@@ -378,8 +378,8 @@ std::optional<std::string_view> IndexedString(const LineStringSections& strings,
       index >= (strings.str_offsets.size() - base) / size)
     return std::nullopt;
   uint64_t entry = base + index * size;
-  uint64_t offset = ReadFixed(reinterpret_cast<const uint8_t*>(strings.str_offsets.data()) + entry,
-                              size, little_endian);
+  uint64_t offset =
+      ReadFixed(reinterpret_cast<const uint8_t*>(strings.str_offsets.data()) + entry, size, endian);
   return StringAt(strings.str, offset);
 }
 
@@ -399,8 +399,7 @@ struct FormValue {
 // Reads a value of the form. Fails if the reader fails or the form is unknown. The forms are the
 // ones that llvm::DWARFFormValue::extractValue() accepts.
 ErrOr<FormValue> ReadForm(DataReader& reader, uint64_t form, size_t offset_size,
-                          uint8_t address_size, const LineStringSections& strings,
-                          bool little_endian) {
+                          uint8_t address_size, const LineStringSections& strings, Endian endian) {
   // DW_FORM_indirect gives the actual form in the data. LLVM follows any number of them.
   while (form == static_cast<uint64_t>(DwarfForm::kIndirect) && reader.ok())
     form = reader.Uleb();
@@ -429,15 +428,14 @@ ErrOr<FormValue> ReadForm(DataReader& reader, uint64_t form, size_t offset_size,
       break;
     case DwarfForm::kStrx:
     case DwarfForm::kGnuStrIndex:
-      value.string = IndexedString(strings, reader.Uleb(), little_endian);
+      value.string = IndexedString(strings, reader.Uleb(), endian);
       break;
     case DwarfForm::kStrx1:
     case DwarfForm::kStrx2:
     case DwarfForm::kStrx3:
     case DwarfForm::kStrx4:
-      value.string =
-          IndexedString(strings, reader.Fixed(form - static_cast<uint64_t>(DwarfForm::kStrx1) + 1),
-                        little_endian);
+      value.string = IndexedString(
+          strings, reader.Fixed(form - static_cast<uint64_t>(DwarfForm::kStrx1) + 1), endian);
       break;
     case DwarfForm::kStrpSup:
     case DwarfForm::kGnuStrpAlt:
@@ -588,7 +586,7 @@ Err ReadV5Tables(DataReader& reader, size_t offset_size, uint8_t address_size,
     std::optional<std::string_view> dir;
     for (const EntryFormat& format : dir_format.value()) {
       ErrOr<FormValue> value =
-          ReadForm(reader, format.form, offset_size, address_size, strings, header->little_endian);
+          ReadForm(reader, format.form, offset_size, address_size, strings, header->endian);
       if (value.has_error())
         return Err();
       if (format.content_type == kLnctPath)
@@ -613,7 +611,7 @@ Err ReadV5Tables(DataReader& reader, size_t offset_size, uint8_t address_size,
     LineFileEntry file;
     for (const EntryFormat& format : file_format.value()) {
       ErrOr<FormValue> value =
-          ReadForm(reader, format.form, offset_size, address_size, strings, header->little_endian);
+          ReadForm(reader, format.form, offset_size, address_size, strings, header->endian);
       if (value.has_error())
         return Err();
       switch (format.content_type) {
@@ -672,17 +670,16 @@ void ReadV2Tables(DataReader& reader, LineProgramHeader* header) {
 }
 
 ErrOr<LineProgramHeader> ParseLineProgramHeader(std::string_view line_section, uint64_t offset,
-                                                bool little_endian,
-                                                const LineStringSections& strings) {
-  ErrOr<LineTableExtent> extent = ReadLineTableExtent(line_section, offset, little_endian);
+                                                Endian endian, const LineStringSections& strings) {
+  ErrOr<LineTableExtent> extent = ReadLineTableExtent(line_section, offset, endian);
   if (extent.has_error())
     return extent.err();
   uint64_t unit_end = extent.value().end;
   size_t offset_size = extent.value().offset_size;
 
   LineProgramHeader header;
-  header.little_endian = little_endian;
-  DataReader reader(AsBytes(line_section), little_endian);
+  header.endian = endian;
+  DataReader reader(AsBytes(line_section), endian);
   reader.set_limit(unit_end);
   reader.Seek(extent.value().begin);
 
@@ -772,12 +769,12 @@ std::optional<std::string_view> LineFileEntries::GetFileDirectory(
 }
 
 ErrOr<LineTableExtent> ReadLineTableExtent(std::string_view line_section, uint64_t offset,
-                                           bool little_endian) {
+                                           Endian endian) {
   if (offset >= line_section.size())
     return Err("Line table offset 0x%" PRIx64 " is outside the section.", offset);
 
   LineTableExtent extent;
-  DataReader reader(AsBytes(line_section), little_endian);
+  DataReader reader(AsBytes(line_section), endian);
   reader.Seek(offset);
   uint64_t unit_length = reader.Fixed(4);
   if (unit_length == 0xffffffff) {
@@ -797,10 +794,9 @@ ErrOr<LineTableExtent> ReadLineTableExtent(std::string_view line_section, uint64
 }
 
 // static
-ErrOr<LineProgram> LineProgram::Parse(std::string_view line_section, uint64_t offset,
-                                      bool little_endian, const LineStringSections& strings) {
-  ErrOr<LineProgramHeader> header =
-      ParseLineProgramHeader(line_section, offset, little_endian, strings);
+ErrOr<LineProgram> LineProgram::Parse(std::string_view line_section, uint64_t offset, Endian endian,
+                                      const LineStringSections& strings) {
+  ErrOr<LineProgramHeader> header = ParseLineProgramHeader(line_section, offset, endian, strings);
   if (header.has_error())
     return header.err();
 

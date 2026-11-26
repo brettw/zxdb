@@ -9,6 +9,8 @@
 
 #include <span>
 
+#include "src/developer/debug/zxdb/common/endian.h"
+
 namespace zxdb {
 
 // Views of DWARF section bytes owned by the DwarfBinary implementation. The implementation
@@ -40,7 +42,7 @@ struct DwarfSections {
   std::span<const uint8_t> rnglists_dwo;
   std::span<const uint8_t> types_dwo;
 
-  bool little_endian = true;
+  Endian endian = Endian::kLittle;
 };
 
 }  // namespace zxdb

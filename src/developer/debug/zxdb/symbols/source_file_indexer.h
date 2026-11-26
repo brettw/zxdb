@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "src/developer/debug/zxdb/common/endian.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
 #include "src/developer/debug/zxdb/symbols/unit_index.h"
 
@@ -42,7 +43,7 @@ struct LineTableJob {
   UnitIndex unit_index;
   std::string_view section;  // The line section data.
   uint64_t offset = 0;
-  bool little_endian = true;
+  Endian endian = Endian::kLittle;
 
   // Bytes of the line table, used to decide how many threads to start.
   uint64_t size = 0;

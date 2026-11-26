@@ -26,7 +26,7 @@ constexpr uint64_t kImplicitConst = 0x21;
 
 TEST(AbbrevTable, AttributesAtUnitOffset) {
   std::vector<uint8_t> section;
-  DwarfSectionBuilder builder(section);
+  DwarfSectionBuilder builder(section, Endian::kLittle);
   builder.AbbrevDeclaration(1, kCompileUnit, true);
   builder.EndAbbrevTable();
   const uint64_t offset = section.size();
@@ -60,9 +60,9 @@ TEST(AbbrevTable, AttributesAtUnitOffset) {
 
   // Byte order and offset size affect the unit header. They have no effect on the table.
   std::vector<uint8_t> info;
-  DwarfSectionBuilder info_builder(info, false);
+  DwarfSectionBuilder info_builder(info, Endian::kBig);
   info_builder.EndUnit(info_builder.BeginUnit({.offset_size = 8, .abbrev_offset = offset}));
-  const auto header = ReadUnitHeader(info, 0, false, UnitSection::kInfo);
+  const auto header = ReadUnitHeader(info, 0, Endian::kBig, UnitSection::kInfo);
   ASSERT_TRUE(header.ok()) << header.err_or_empty().msg();
   const auto second = AbbrevTable::Parse(section, header.value().abbrev_offset);
   ASSERT_TRUE(second.ok()) << second.err_or_empty().msg();
@@ -94,7 +94,7 @@ TEST(AbbrevTable, FixedAttributeSize) {
       {0x3b, 0x21, 1},   // DW_AT_decl_line, DW_FORM_implicit_const.
   };
   std::vector<uint8_t> bytes;
-  DwarfSectionBuilder builder(bytes);
+  DwarfSectionBuilder builder(bytes, Endian::kLittle);
   builder.AbbrevDeclaration(1, kSubprogram, false, specs);
   builder.AbbrevDeclaration(2, kSubprogram, false, dwarf5_specs);
   builder.AbbrevDeclaration(3, kConstant, false);
@@ -118,7 +118,7 @@ TEST(AbbrevTable, FixedAttributeSize) {
 
 TEST(AbbrevTable, ConsecutiveCodes) {
   std::vector<uint8_t> bytes;
-  DwarfSectionBuilder builder(bytes);
+  DwarfSectionBuilder builder(bytes, Endian::kLittle);
   builder.AbbrevDeclaration(UINT64_MAX - 1, kCompileUnit, true);
   builder.AbbrevDeclaration(UINT64_MAX, kSubprogram, false);
   builder.EndAbbrevTable();
@@ -138,7 +138,7 @@ TEST(AbbrevTable, ConsecutiveCodes) {
 TEST(AbbrevTable, SparseCodesAndDuplicates) {
   constexpr uint64_t kWideCode = uint64_t{1} << 32;
   std::vector<uint8_t> bytes;
-  DwarfSectionBuilder builder(bytes);
+  DwarfSectionBuilder builder(bytes, Endian::kLittle);
   builder.AbbrevDeclaration(3, kSubprogram, true);
   builder.AbbrevDeclaration(kWideCode, kConstant, false);
   builder.AbbrevDeclaration(1, kCompileUnit, true);
@@ -216,7 +216,7 @@ TEST(AbbrevTable, MissingTableTerminator) {
 TEST(AbbrevTable, TruncatedDeclaration) {
   const AbbrevTable::AttributeSpec specs[] = {{0x2000, kImplicitConst, -129}};
   std::vector<uint8_t> bytes;
-  DwarfSectionBuilder builder(bytes);
+  DwarfSectionBuilder builder(bytes, Endian::kLittle);
   builder.AbbrevDeclaration(128, 0x4080, false, specs);
   builder.EndAbbrevTable();
   ASSERT_TRUE(AbbrevTable::Parse(bytes, 0).ok());

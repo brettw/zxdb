@@ -26,10 +26,10 @@ TEST(UnitHeader, LegacyInfo) {
   for (uint16_t version : {2, 3, 4}) {
     SCOPED_TRACE(version);
     std::vector<uint8_t> bytes;
-    DwarfSectionBuilder builder(bytes);
+    DwarfSectionBuilder builder(bytes, Endian::kLittle);
     AppendUnit(builder, {.version = version, .address_size = 4, .abbrev_offset = 0x01020304});
 
-    auto result = ReadUnitHeader(bytes, 0, true, UnitSection::kInfo);
+    auto result = ReadUnitHeader(bytes, 0, Endian::kLittle, UnitSection::kInfo);
     ASSERT_TRUE(result.ok()) << result.err().msg();
     const auto& header = result.value();
     EXPECT_EQ(0u, header.offset);
@@ -52,10 +52,10 @@ TEST(UnitHeader, LegacyInfo) {
 
 TEST(UnitHeader, Dwarf4Types) {
   std::vector<uint8_t> bytes;
-  DwarfSectionBuilder builder(bytes);
+  DwarfSectionBuilder builder(bytes, Endian::kLittle);
   AppendUnit(builder, {.section = UnitSection::kTypes, .version = 4, .type_offset = 23});
 
-  auto result = ReadUnitHeader(bytes, 0, true, UnitSection::kTypes);
+  auto result = ReadUnitHeader(bytes, 0, Endian::kLittle, UnitSection::kTypes);
   ASSERT_TRUE(result.ok()) << result.err().msg();
   const auto& header = result.value();
   EXPECT_EQ(0u, header.offset);
@@ -91,7 +91,7 @@ TEST(UnitHeader, Dwarf5UnitTypes) {
   for (const TestCase& test : cases) {
     SCOPED_TRACE(test.unit_type);
     std::vector<uint8_t> bytes;
-    DwarfSectionBuilder builder(bytes);
+    DwarfSectionBuilder builder(bytes, Endian::kLittle);
     AppendUnit(builder, {.unit_type = test.unit_type,
                          .address_size = 2,
                          .abbrev_offset = 0x01020304,
@@ -99,7 +99,7 @@ TEST(UnitHeader, Dwarf5UnitTypes) {
                          .type_offset = test.die_offset,
                          .dwo_id = kDwoId});
 
-    auto result = ReadUnitHeader(bytes, 0, true, UnitSection::kInfo);
+    auto result = ReadUnitHeader(bytes, 0, Endian::kLittle, UnitSection::kInfo);
     ASSERT_TRUE(result.ok()) << result.err().msg();
     const auto& header = result.value();
     EXPECT_EQ(5u, header.version);
@@ -121,7 +121,7 @@ TEST(UnitHeader, Dwarf64BigEndian) {
   constexpr uint64_t kAbbrevOffset = 0x0102030405060708;
   constexpr uint64_t kSignature = 0xfedcba9876543210;
   std::vector<uint8_t> bytes(3, 0);
-  DwarfSectionBuilder builder(bytes, false);
+  DwarfSectionBuilder builder(bytes, Endian::kBig);
   AppendUnit(builder, {.offset_size = 8,
                        .unit_type = kUnitTypeSplitType,
                        .abbrev_offset = kAbbrevOffset,
@@ -140,7 +140,7 @@ TEST(UnitHeader, Dwarf64BigEndian) {
   };
   EXPECT_EQ(expected, bytes);
 
-  auto result = ReadUnitHeader(bytes, 3, false, UnitSection::kInfo);
+  auto result = ReadUnitHeader(bytes, 3, Endian::kBig, UnitSection::kInfo);
   ASSERT_TRUE(result.ok()) << result.err().msg();
   const auto& header = result.value();
   EXPECT_EQ(3u, header.offset);
@@ -158,10 +158,10 @@ TEST(UnitHeader, Dwarf64BigEndian) {
 
 TEST(UnitHeader, HeaderOnly) {
   std::vector<uint8_t> bytes;
-  DwarfSectionBuilder builder(bytes);
+  DwarfSectionBuilder builder(bytes, Endian::kLittle);
   builder.EndUnit(builder.BeginUnit({.unit_type = kUnitTypeSplitCompile}));
 
-  auto result = ReadUnitHeader(bytes, 0, true, UnitSection::kInfo);
+  auto result = ReadUnitHeader(bytes, 0, Endian::kLittle, UnitSection::kInfo);
   ASSERT_TRUE(result.ok()) << result.err().msg();
   EXPECT_EQ(0u, result.value().dwo_id);
   EXPECT_EQ(20u, result.value().die_offset());
@@ -187,12 +187,12 @@ TEST(UnitHeader, TruncatedFields) {
       SCOPED_TRACE(test.header_size);
       SCOPED_TRACE(size);
       std::vector<uint8_t> bytes;
-      DwarfSectionBuilder builder(bytes);
+      DwarfSectionBuilder builder(bytes, Endian::kLittle);
       auto marker = builder.BeginUnit(test.options);
       builder.EndUnit(marker, size < test.length_size ? 0 : size - test.length_size);
       bytes.resize(size);
 
-      auto result = ReadUnitHeader(bytes, 0, true, test.options.section);
+      auto result = ReadUnitHeader(bytes, 0, Endian::kLittle, test.options.section);
       ASSERT_TRUE(result.has_error());
       EXPECT_NE(
           std::string::npos,
@@ -206,18 +206,18 @@ TEST(UnitHeader, InvalidLength) {
   for (uint64_t length : {0u, 7u, 9u, 0xfffffff0u, 0xfffffffeu}) {
     SCOPED_TRACE(length);
     std::vector<uint8_t> bytes;
-    DwarfSectionBuilder builder(bytes);
+    DwarfSectionBuilder builder(bytes, Endian::kLittle);
     auto marker = builder.BeginUnit({});
     builder.EndUnit(marker, length);
-    EXPECT_TRUE(ReadUnitHeader(bytes, 0, true, UnitSection::kInfo).has_error());
+    EXPECT_TRUE(ReadUnitHeader(bytes, 0, Endian::kLittle, UnitSection::kInfo).has_error());
   }
 
   std::vector<uint8_t> bytes = {0};
-  DwarfSectionBuilder builder(bytes);
+  DwarfSectionBuilder builder(bytes, Endian::kLittle);
   auto marker = builder.BeginUnit({.offset_size = 8});
   builder.EndUnit(marker, UINT64_MAX);
-  EXPECT_TRUE(ReadUnitHeader(bytes, 1, true, UnitSection::kInfo).has_error());
-  EXPECT_TRUE(ReadUnitHeader(bytes, UINT64_MAX, true, UnitSection::kInfo).has_error());
+  EXPECT_TRUE(ReadUnitHeader(bytes, 1, Endian::kLittle, UnitSection::kInfo).has_error());
+  EXPECT_TRUE(ReadUnitHeader(bytes, UINT64_MAX, Endian::kLittle, UnitSection::kInfo).has_error());
 }
 
 TEST(UnitHeader, InvalidVersionAndAddressSize) {
@@ -228,9 +228,9 @@ TEST(UnitHeader, InvalidVersionAndAddressSize) {
     SCOPED_TRACE(options.version);
     SCOPED_TRACE(options.address_size);
     std::vector<uint8_t> bytes;
-    DwarfSectionBuilder builder(bytes);
+    DwarfSectionBuilder builder(bytes, Endian::kLittle);
     AppendUnit(builder, options);
-    EXPECT_TRUE(ReadUnitHeader(bytes, 0, true, UnitSection::kInfo).has_error());
+    EXPECT_TRUE(ReadUnitHeader(bytes, 0, Endian::kLittle, UnitSection::kInfo).has_error());
   }
 }
 
@@ -238,20 +238,20 @@ TEST(UnitHeader, InvalidTypeOffset) {
   for (uint64_t type_offset : {0u, 23u, 25u, 26u}) {
     SCOPED_TRACE(type_offset);
     std::vector<uint8_t> bytes;
-    DwarfSectionBuilder builder(bytes);
+    DwarfSectionBuilder builder(bytes, Endian::kLittle);
     AppendUnit(builder, {.unit_type = kUnitTypeType, .type_offset = type_offset});
-    EXPECT_TRUE(ReadUnitHeader(bytes, 0, true, UnitSection::kInfo).has_error());
+    EXPECT_TRUE(ReadUnitHeader(bytes, 0, Endian::kLittle, UnitSection::kInfo).has_error());
   }
 }
 
 TEST(UnitList, MixedFormats) {
   std::vector<uint8_t> bytes;
-  DwarfSectionBuilder builder(bytes);
+  DwarfSectionBuilder builder(bytes, Endian::kLittle);
   AppendUnit(builder, {.version = 2});
   AppendUnit(builder, {.offset_size = 8});
   AppendUnit(builder, {.unit_type = kUnitTypeSkeleton});
 
-  const auto list = UnitList::Parse(bytes, true, UnitSection::kInfo);
+  const auto list = UnitList::Parse(bytes, Endian::kLittle, UnitSection::kInfo);
   ASSERT_EQ(3u, list.size());
   EXPECT_FALSE(list.error().has_error());
   const uint64_t offsets[] = {0, 12, 37, 58};
@@ -273,11 +273,11 @@ TEST(UnitList, MixedFormats) {
 TEST(UnitList, VendorUnitType) {
   constexpr uint8_t kVendorUnitType = 0x80;  // DW_UT_lo_user.
   std::vector<uint8_t> bytes;
-  DwarfSectionBuilder builder(bytes);
+  DwarfSectionBuilder builder(bytes, Endian::kLittle);
   AppendUnit(builder, {.unit_type = kVendorUnitType});
   AppendUnit(builder, {});
 
-  const auto list = UnitList::Parse(bytes, true, UnitSection::kInfo);
+  const auto list = UnitList::Parse(bytes, Endian::kLittle, UnitSection::kInfo);
   ASSERT_EQ(2u, list.size());
   EXPECT_FALSE(list.error().has_error());
   EXPECT_EQ(kVendorUnitType, list[0].unit_type);
@@ -290,13 +290,13 @@ TEST(UnitList, VendorUnitType) {
 
 TEST(UnitList, StopsAtFirstError) {
   std::vector<uint8_t> bytes;
-  DwarfSectionBuilder builder(bytes);
+  DwarfSectionBuilder builder(bytes, Endian::kLittle);
   AppendUnit(builder, {});
   AppendUnit(builder, {.offset_size = 8});
   builder.Fixed(0, 4);  // A unit with length zero.
   AppendUnit(builder, {});
 
-  auto list = UnitList::Parse(bytes, true, UnitSection::kInfo);
+  auto list = UnitList::Parse(bytes, Endian::kLittle, UnitSection::kInfo);
   ASSERT_EQ(2u, list.size());
   EXPECT_EQ(0u, list[0].offset);
   EXPECT_EQ(13u, list[1].offset);
@@ -308,7 +308,7 @@ TEST(UnitList, StopsAtFirstError) {
 }
 
 TEST(UnitList, EmptySection) {
-  auto list = UnitList::Parse({}, true, UnitSection::kTypes);
+  auto list = UnitList::Parse({}, Endian::kLittle, UnitSection::kTypes);
   EXPECT_EQ(0u, list.size());
   EXPECT_EQ(list.begin(), list.end());
   EXPECT_FALSE(list.error().has_error());

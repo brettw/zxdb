@@ -12,6 +12,8 @@
 #include <span>
 #include <string_view>
 
+#include "src/developer/debug/zxdb/common/endian.h"
+
 namespace zxdb {
 
 // Convert between byte spans and string_view section APIs such as LineProgram::Parse.
@@ -86,10 +88,10 @@ inline bool SkipSleb(const uint8_t*& p, const uint8_t* end) {
 }
 
 // The caller checks the bounds and supplies a size from 1 to 8.
-inline uint64_t ReadFixed(const uint8_t* p, size_t size, bool little_endian) {
+inline uint64_t ReadFixed(const uint8_t* p, size_t size, Endian endian) {
   uint64_t result = 0;
   for (size_t i = 0; i < size; i++) {
-    size_t shift = little_endian ? i : size - 1 - i;
+    size_t shift = endian == Endian::kLittle ? i : size - 1 - i;
     result |= static_cast<uint64_t>(p[i]) << (8 * shift);
   }
   return result;
@@ -104,8 +106,8 @@ class DataReader {
     uint8_t offset_size = 0;
   };
 
-  DataReader(std::span<const uint8_t> data, bool little_endian)
-      : data_(data), limit_(data.size()), little_endian_(little_endian) {}
+  DataReader(std::span<const uint8_t> data, Endian endian)
+      : data_(data), limit_(data.size()), endian_(endian) {}
 
   bool ok() const { return ok_; }
   uint64_t offset() const { return offset_; }
@@ -124,7 +126,7 @@ class DataReader {
       ok_ = false;
       return 0;
     }
-    uint64_t result = ReadFixed(data_.data() + offset_, size, little_endian_);
+    uint64_t result = ReadFixed(data_.data() + offset_, size, endian_);
     offset_ += size;
     return result;
   }
@@ -154,7 +156,7 @@ class DataReader {
   std::span<const uint8_t> data_;
   uint64_t offset_ = 0;
   uint64_t limit_;
-  bool little_endian_;
+  Endian endian_;
   bool ok_ = true;
 };
 

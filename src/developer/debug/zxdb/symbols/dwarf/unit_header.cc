@@ -12,13 +12,13 @@
 
 namespace zxdb {
 
-ErrOr<UnitHeader> ReadUnitHeader(std::span<const uint8_t> section, uint64_t offset,
-                                 bool little_endian, UnitSection kind) {
+ErrOr<UnitHeader> ReadUnitHeader(std::span<const uint8_t> section, uint64_t offset, Endian endian,
+                                 UnitSection kind) {
   auto error = [offset](const char* reason) {
     return Err("DWARF unit at offset 0x%" PRIx64 ": %s", offset, reason);
   };
 
-  DataReader reader(section, little_endian);
+  DataReader reader(section, endian);
   reader.Seek(offset);
   auto initial_length = reader.InitialLength();
   if (!reader.ok())
@@ -71,10 +71,10 @@ ErrOr<UnitHeader> ReadUnitHeader(std::span<const uint8_t> section, uint64_t offs
   return header;
 }
 
-UnitList UnitList::Parse(std::span<const uint8_t> section, bool little_endian, UnitSection kind) {
+UnitList UnitList::Parse(std::span<const uint8_t> section, Endian endian, UnitSection kind) {
   UnitList list;
   for (uint64_t offset = 0; offset < section.size();) {
-    auto header = ReadUnitHeader(section, offset, little_endian, kind);
+    auto header = ReadUnitHeader(section, offset, endian, kind);
     if (header.has_error()) {
       list.error_ = header.err();
       break;

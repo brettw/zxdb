@@ -60,7 +60,7 @@ TEST(LineFilePathResolver, CachesMergedStrings) {
   LineTableTestSections sections;
   uint64_t first = sections.Add(MakeTable({"a.cc", "b.h"}));
   uint64_t second = sections.Add(MakeTable({"b.h", "a.cc"}));
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
 
   LineFilePathResolver resolver;
   ErrOr<LineProgram> program1 = sections.Parse(first);
@@ -116,7 +116,7 @@ TEST(LineFilePathResolver, MatchesLineFileTable) {
 
     LineTableTestSections sections;
     uint64_t offset = sections.Add(builder);
-    sections.Finish();
+    sections.Finish(Endian::kLittle);
     ErrOr<LineProgram> program = sections.Parse(offset);
     ASSERT_TRUE(program.ok());
     const LineProgramHeader& header = program.value().header();
@@ -152,7 +152,7 @@ TEST(LineFilePathResolver, SameNameDifferentDirectory) {
 
   LineTableTestSections sections;
   uint64_t offset = sections.Add(builder);
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
   ErrOr<LineProgram> program = sections.Parse(offset);
   ASSERT_TRUE(program.ok());
 
@@ -179,7 +179,7 @@ TEST(LineFilePathResolver, InlineStrings) {
     }
     uint64_t first_offset = sections.Add(first);
     uint64_t second_offset = sections.Add(second);
-    sections.Finish();
+    sections.Finish(Endian::kLittle);
 
     uint64_t file = version >= 5 ? 0 : 1;
     LineFilePathResolver resolver;
@@ -207,7 +207,7 @@ TEST_P(SourceFileIndexerTest, MergesInJobOrder) {
   // Many more units, so the threads share the work.
   for (int i = 3; i < 100; i++)
     offsets.push_back(sections.Add(MakeTable({"common.h", "unit" + std::to_string(i) + ".cc"})));
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
 
   // Add the jobs in reverse order. The merge uses job order, not unit order.
   std::vector<LineTableJob> jobs;
@@ -236,7 +236,7 @@ INSTANTIATE_TEST_SUITE_P(SourceFileIndexer, SourceFileIndexerTest, ::testing::Bo
 
 TEST(SourceFileIndexer, NoJobs) {
   LineTableTestSections sections;
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
 
   SourceFileIndexer indexer({});
   EXPECT_EQ(0u, indexer.worker_count());
@@ -249,7 +249,7 @@ TEST(SourceFileIndexer, NoJobs) {
 TEST(SourceFileIndexer, AddsToExistingIndex) {
   LineTableTestSections sections;
   uint64_t offset = sections.Add(MakeTable({"a.cc"}));
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
 
   SourceFileIndexer::FileIndex files;
   files["src/a.cc"].push_back(UnitIndex(true, 7));
@@ -268,7 +268,7 @@ TEST(SourceFileIndexer, DestroyWithoutFinish) {
   std::vector<uint64_t> offsets;
   for (int i = 0; i < 10; i++)
     offsets.push_back(sections.Add(MakeTable({"a.cc"})));
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
 
   std::vector<LineTableJob> jobs;
   for (size_t i = 0; i < offsets.size(); i++)
@@ -283,7 +283,7 @@ TEST(SourceFileIndexer, DefaultThreadCount) {
   std::vector<uint64_t> offsets;
   for (int i = 0; i < 64; i++)
     offsets.push_back(sections.Add(MakeTable({"a.cc"})));
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
 
   std::vector<LineTableJob> jobs;
   for (size_t i = 0; i < offsets.size(); i++) {
@@ -325,7 +325,7 @@ TEST_P(SourceFileIndexerStrxTest, ResolvesWithUnit) {
   uint64_t plain_offset = sections.Add(MakeTable({"plain.cc"}));
   sections.AddCompileUnit(5, strx_offset, {});
   sections.AddCompileUnit(5, plain_offset, {});
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
 
   std::vector<LineTableJob> jobs;
   AddLineTableJob(sections.sections(), UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs);
@@ -376,7 +376,7 @@ TEST(SourceFileIndexer, StrippedBelowFirstCode) {
   builder.EndSequence();
   LineTableTestSections sections;
   uint64_t offset = sections.Add(builder);
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
 
   for (uint64_t first_code_address : {0, 0x1000}) {
     SCOPED_TRACE(first_code_address);
@@ -396,7 +396,7 @@ TEST(SourceFileIndexer, UnitWithoutLineTable) {
   uint64_t offset = sections.Add(MakeTable({"a.cc"}));
   sections.AddCompileUnit(5, std::nullopt, {});
   sections.AddCompileUnit(5, offset, {});
-  sections.Finish();
+  sections.Finish(Endian::kLittle);
 
   std::vector<LineTableJob> jobs;
   AddLineTableJob(sections.sections(), UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs);
