@@ -66,13 +66,14 @@ std::optional<std::pair<const char*, const char*>> GetFileNameKey(LineFileEntrie
 
 }  // namespace
 
-void AddLineTableJob(const DwarfSections& sections, UnitIndex unit_index, llvm::DWARFUnit& unit,
+void AddLineTableJob(const DwarfSections& sections, UnitIndex unit_index, DwarfDie unit_die,
                      uint64_t first_code_address, std::vector<LineTableJob>* jobs,
                      const DwarfBinary* binary) {
-  std::optional<uint64_t> offset = GetUnitLineTableOffset(unit);
+  std::optional<uint64_t> offset = GetUnitLineTableOffset(unit_die);
   if (!offset)
     return;
 
+  llvm::DWARFUnit& unit = *unit_die.llvm_unit();
   LineTableJob& job = jobs->emplace_back();
   job.unit_index = unit_index;
   job.section = AsStringView(GetUnitLineSection(sections, unit));
@@ -91,9 +92,9 @@ std::vector<LineTableJob> CollectLineTableJobs(DwarfBinary& binary) {
     for (uint32_t i = 0; i < count; i++) {
       UnitIndex unit_index(is_dwo, i);
       fxl::RefPtr<DwarfUnit> unit = binary.GetUnitAtIndex(unit_index);
-      if (llvm::DWARFUnit* llvm_unit = unit ? unit->GetLLVMUnit() : nullptr)
-        AddLineTableJob(sections, unit_index, *llvm_unit, binary.GetFirstCodeAddress(), &jobs,
-                        &binary);
+      if (unit)
+        AddLineTableJob(sections, unit_index, unit->GetUnitDie(DwarfDie::Load::kRootOnly),
+                        binary.GetFirstCodeAddress(), &jobs, &binary);
     }
   };
   add_units(false, binary.GetNormalUnitCount());

@@ -70,7 +70,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
   fxl::RefPtr<DwarfUnit> GetUnitAtIndex(UnitIndex i) override;
   fxl::RefPtr<DwarfUnit> UnitForRelativeAddress(uint64_t relative_address) override;
   std::optional<uint64_t> GetDebugAddrEntry(uint64_t addr_base, uint64_t index) const override;
-  llvm::DWARFDie GetLLVMDieAtOffset(DwarfDieRef die_ref) const override;
+  DwarfDie GetDieAtOffset(DwarfDieRef die_ref) const override;
   DwarfDieRef GetDieRefForSignature(uint64_t signature) const override;
   const DebugNamesReader* GetDebugNames() const override;
   std::shared_ptr<const LineFileTable> GetLineFileTable(llvm::DWARFUnit* unit,
@@ -81,9 +81,9 @@ class DwarfBinaryImpl final : public DwarfBinary {
   // Decodes the whole line table of the unit. The file table is shared with GetLineFileTable().
   LineTable DecodeLineTable(llvm::DWARFUnit* unit) const;
 
-  // Returns the LLVM unit containing the DIE reference in the normal or DWO sections.
-  // Returns null for an invalid reference or a missing unit. The wrapper cache is untouched.
-  llvm::DWARFUnit* GetLLVMUnitForDieRef(DwarfDieRef die_ref, bool is_dwo) const;
+  // Restrict lookup to the selected file sections. These lookups do not create a unit wrapper.
+  DwarfDie GetDieAtOffset(DwarfDieRef die_ref, bool is_dwo) const;
+  DwarfDie GetUnitDieForRef(DwarfDieRef die_ref, bool is_dwo) const;
 
   // Returns a new DwarfUnit wrapper without adding it to the wrapper cache.
   // Returns null if the LLVM unit is null, belongs to another binary, or has no matching header.
@@ -100,6 +100,8 @@ class DwarfBinaryImpl final : public DwarfBinary {
   std::optional<IndexedUnit> GetUnitHeader(UnitIndex index) const;
   const UnitList& GetUnitList(bool is_dwo, UnitSection section) const;
   llvm::DWARFUnit* FindLLVMUnit(bool is_dwo, UnitSection section, uint64_t unit_offset) const;
+
+  llvm::DWARFUnit* FindLLVMUnitForRef(DwarfDieRef die_ref, bool is_dwo) const;
 
   // Call every time before using signature_to_die_ to make sure it's lazily populated.
   void EnsureSignatureMap() const;

@@ -11,9 +11,6 @@
 #include <memory>
 #include <set>
 
-#include "llvm/DebugInfo/DIContext.h"
-#include "llvm/Object/Binary.h"
-#include "llvm/Object/ObjectFile.h"
 #include "src/developer/debug/shared/address_range.h"
 #include "src/developer/debug/shared/largest_less_or_equal.h"
 #include "src/developer/debug/shared/logging/logging.h"
@@ -22,6 +19,7 @@
 #include "src/developer/debug/zxdb/symbols/compile_unit.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_debug_names.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_expr_eval.h"
@@ -302,14 +300,14 @@ ModuleSymbols::FoundUnit ModuleSymbolsImpl::GetDwarfUnitForAddress(
 
   // In the case of debug fission, we want to return the full unit in the .dwo file. This needs to
   // be looked up if the unit that was matched was a skeleton.
-  llvm::DWARFDie llvm_die = result.main_binary_unit->GetUnitDie();
-  if (static_cast<DwarfTag>(llvm_die.getTag()) != DwarfTag::kSkeletonUnit) {
+  DwarfDie die = result.main_binary_unit->GetUnitDie();
+  if (!die || die.tag() != DwarfTag::kSkeletonUnit) {
     // Not a skeleton unit.
     return result;
   }
 
   // Look up the DWO for this skeleton.
-  uint64_t skeleton_offset = llvm_die.getOffset();
+  uint64_t skeleton_offset = die.offset();
   auto found_skeleton_index = dwo_skeleton_offset_to_index_.find(skeleton_offset);
   if (found_skeleton_index == dwo_skeleton_offset_to_index_.end()) {
     // Some invalid DWO reference, give up and return the skeleton one.
@@ -358,8 +356,8 @@ std::vector<fxl::RefPtr<Function>> ModuleSymbolsImpl::GetMainFunctions() const {
       if (entry.tag != DwarfTag::kSubprogram) {
         continue;
       }
-      llvm::DWARFDie die = binary_->GetLLVMDieAtOffset(entry.die_ref);
-      if (!die.isValid() || !decoder.Decode(DwarfDie(die)) ||
+      DwarfDie die = binary_->GetDieAtOffset(entry.die_ref);
+      if (!die || !decoder.Decode(die) ||
           !decoder.GetBool(DwarfAttr::kMainSubprogram).value_or(false)) {
         continue;
       }

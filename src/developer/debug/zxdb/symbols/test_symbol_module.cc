@@ -4,10 +4,8 @@
 
 #include "src/developer/debug/zxdb/symbols/test_symbol_module.h"
 
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
-#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
-#include "llvm/Object/Binary.h"
-#include "llvm/Object/ELFObjectFile.h"
+#include <memory>
+
 #include "src/developer/debug/zxdb/common/host_util.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 

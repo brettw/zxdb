@@ -137,10 +137,7 @@ class DwarfBinary {
   fxl::RefPtr<DwarfUnit> GetDwoUnit() { return GetUnitAtIndex(UnitIndex(true, 0)); }
 
   // Looks up a DIE across units by its DIE reference.
-  DwarfDie GetDieAtOffset(DwarfDieRef die_ref) const {
-    return DwarfDie(GetLLVMDieAtOffset(die_ref));
-  }
-  virtual llvm::DWARFDie GetLLVMDieAtOffset(DwarfDieRef die_ref) const = 0;
+  virtual DwarfDie GetDieAtOffset(DwarfDieRef die_ref) const = 0;
 
   // Looks up a DIE reference by its 64-bit DWARF type signature (DW_FORM_ref_sig8 /
   // DW_AT_signature).

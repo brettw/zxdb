@@ -329,10 +329,10 @@ TEST_P(SourceFileIndexerStrxTest, ResolvesWithUnit) {
   sections.Finish(Endian::kLittle);
 
   std::vector<LineTableJob> jobs;
-  AddLineTableJob(sections.sections(), UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs,
-                  nullptr);
-  AddLineTableJob(sections.sections(), UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs,
-                  nullptr);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 0),
+                  DwarfDie::FromUnitRoot(sections.unit(0)), 0x1000, &jobs, nullptr);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 1),
+                  DwarfDie::FromUnitRoot(sections.unit(1)), 0x1000, &jobs, nullptr);
   ASSERT_EQ(2u, jobs.size());
   EXPECT_EQ(0x1000u, jobs[0].first_code_address);
 
@@ -346,7 +346,7 @@ TEST_P(SourceFileIndexerStrxTest, ResolvesWithUnit) {
   // Index::CreateIndex() extracts and frees each unit's DIEs while the workers run. Do the same,
   // so FinishInto() must extract the unit DIE again for the string offsets table.
   for (size_t i = 0; i < 2; i++) {
-    ASSERT_TRUE(DwarfDie(sections.unit(i)->getUnitDIE(false)));
+    ASSERT_TRUE(DwarfDie::FromUnitRoot(sections.unit(i), DwarfDie::Load::kAllDies));
     sections.unit(i)->clear();
   }
 
@@ -402,11 +402,11 @@ TEST(SourceFileIndexer, UnitWithoutLineTable) {
   sections.Finish(Endian::kLittle);
 
   std::vector<LineTableJob> jobs;
-  AddLineTableJob(sections.sections(), UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs,
-                  nullptr);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 0),
+                  DwarfDie::FromUnitRoot(sections.unit(0)), 0x1000, &jobs, nullptr);
   EXPECT_TRUE(jobs.empty());
-  AddLineTableJob(sections.sections(), UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs,
-                  nullptr);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 1),
+                  DwarfDie::FromUnitRoot(sections.unit(1)), 0x1000, &jobs, nullptr);
   ASSERT_EQ(1u, jobs.size());
 
   SourceFileIndexer indexer(std::move(jobs));

@@ -6,7 +6,7 @@
 
 #include <lib/syslog/cpp/macros.h>
 
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
+#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/common/ref_ptr_to.h"
 #include "src/developer/debug/zxdb/symbols/address_range_map_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
@@ -23,15 +23,10 @@ DwarfUnitImpl::DwarfUnitImpl(DwarfBinaryImpl* binary, llvm::DWARFUnit* unit,
 
 DwarfBinary* DwarfUnitImpl::GetBinary() const { return binary_.get(); }
 
-llvm::DWARFUnit* DwarfUnitImpl::GetLLVMUnit() const { return unit_; }
-
 int DwarfUnitImpl::GetDwarfVersion() const { return header_.version; }
 
-llvm::DWARFDie DwarfUnitImpl::GetUnitDie() const {
-  // Request that the unit DIEs be extracted (false parameter means "not unit die only"). Some
-  // operations that use this will iterate through the unit's DIEs which requires the cache to
-  // be populated (LLVM doesn't do this lazily and will just report "no children").
-  return unit_->getUnitDIE(false);
+DwarfDie DwarfUnitImpl::GetUnitDie(DwarfDie::Load load) const {
+  return DwarfDie::FromUnitRoot(unit_, load);
 }
 
 LazySymbol DwarfUnitImpl::FunctionForRelativeAddress(uint64_t relative_address) const {
@@ -51,9 +46,8 @@ LazySymbol DwarfUnitImpl::FunctionForRelativeAddress(uint64_t relative_address) 
     if (offset)
       return binary_->GetSymbolFactory()->MakeLazy(GetDieRef(offset));
   } else {
-    auto die = unit_->getSubroutineForAddress(relative_address);
-    if (die.isValid())
-      return binary_->GetSymbolFactory()->MakeLazy(GetDieRef(die.getOffset()));
+    if (DwarfDie die = DwarfDie::FromSubroutineAddress(*unit_, relative_address))
+      return binary_->GetSymbolFactory()->MakeLazy(GetDieRef(die.offset()));
   }
 
   return LazySymbol();
@@ -84,28 +78,24 @@ uint64_t DwarfUnitImpl::GetDieCount() const { return unit_->getNumDIEs(); }
 
 void DwarfUnitImpl::ClearDieCache() const { unit_->clear(); }
 
-llvm::DWARFDie DwarfUnitImpl::GetLLVMDieAtIndex(uint64_t index) const {
-  return unit_->getDIEAtIndex(index);
+DwarfDie DwarfUnitImpl::GetDieAtIndex(uint64_t index) const {
+  return DwarfDie::FromIndex(*unit_, index);
 }
 
-llvm::DWARFDie DwarfUnitImpl::GetLLVMDieAtOffset(DwarfDieRef die_ref) const {
+DwarfDie DwarfUnitImpl::GetDieAtOffset(DwarfDieRef die_ref) const {
   if (!die_ref.is_valid())
-    return llvm::DWARFDie();
-  return unit_->getDIEForOffset(die_ref.offset());
+    return DwarfDie();
+  return DwarfDie::FromOffset(unit_, die_ref.offset());
 }
 
-uint64_t DwarfUnitImpl::GetIndexForLLVMDie(const llvm::DWARFDie& die) const {
-  return unit_->getDIEIndex(die);
+std::optional<uint32_t> DwarfUnitImpl::GetIndexForDie(DwarfDie die) const {
+  return die.index_in(*unit_);
 }
 
 DwarfDieRef DwarfUnitImpl::GetDieRef(uint64_t offset) const {
   if (header_.is_type_unit())
     return DwarfDieRef::ForTypeUnit(header_.version, offset);
   return DwarfDieRef::Main(offset);
-}
-
-DwarfDieRef DwarfUnitImpl::GetDieRef(const llvm::DWARFDie& die) const {
-  return GetDieRef(die.getOffset());
 }
 
 void DwarfUnitImpl::EnsureFuncAddrMap() const {
@@ -117,23 +107,20 @@ void DwarfUnitImpl::EnsureFuncAddrMap() const {
   }
 }
 
-void DwarfUnitImpl::AddDieToFuncAddr(const DwarfBinary& binary, const llvm::DWARFDie& die,
+void DwarfUnitImpl::AddDieToFuncAddr(const DwarfBinary& binary, DwarfDie die,
                                      AddressRangeMapBuilder& builder) const {
   // Add all functions and inlines to the map.
-  DwarfTag tag = static_cast<DwarfTag>(die.getTag());
+  DwarfTag tag = die.tag();
   if (tag == DwarfTag::kSubprogram || tag == DwarfTag::kInlinedSubroutine) {
-    auto lazy_func = binary.GetSymbolFactory()->MakeLazy(GetDieRef(die.getOffset()));
+    auto lazy_func = binary.GetSymbolFactory()->MakeLazy(GetDieRef(die.offset()));
     if (const Function* func = lazy_func.Get()->As<Function>()) {
-      builder.AddRanges(func->code_ranges(), die.getOffset());
+      builder.AddRanges(func->code_ranges(), die.offset());
     }
   }
 
   // Recurse into children.
-  llvm::DWARFDie cur = die.getFirstChild();
-  while (cur.isValid()) {
-    AddDieToFuncAddr(binary, cur, builder);
-    cur = cur.getSibling();
-  }
+  for (DwarfDie child = die.first_child(); child; child = child.sibling())
+    AddDieToFuncAddr(binary, child, builder);
 }
 
 }  // namespace zxdb

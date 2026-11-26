@@ -447,7 +447,7 @@ std::optional<uint64_t> DwarfBinaryImpl::GetDebugAddrEntry(uint64_t addr_base,
   return result;
 }
 
-llvm::DWARFUnit* DwarfBinaryImpl::GetLLVMUnitForDieRef(DwarfDieRef die_ref, bool is_dwo) const {
+llvm::DWARFUnit* DwarfBinaryImpl::FindLLVMUnitForRef(DwarfDieRef die_ref, bool is_dwo) const {
   if (!die_ref.is_valid() || !context_)
     return nullptr;
 
@@ -458,12 +458,20 @@ llvm::DWARFUnit* DwarfBinaryImpl::GetLLVMUnitForDieRef(DwarfDieRef die_ref, bool
   return index ? FindLLVMUnit(is_dwo, section, list[*index].offset) : nullptr;
 }
 
-llvm::DWARFDie DwarfBinaryImpl::GetLLVMDieAtOffset(DwarfDieRef die_ref) const {
-  if (llvm::DWARFUnit* unit = GetLLVMUnitForDieRef(die_ref, false))
-    return unit->getDIEForOffset(die_ref.offset());
-  if (llvm::DWARFUnit* unit = GetLLVMUnitForDieRef(die_ref, true))
-    return unit->getDIEForOffset(die_ref.offset());
-  return llvm::DWARFDie();
+DwarfDie DwarfBinaryImpl::GetDieAtOffset(DwarfDieRef die_ref) const {
+  if (auto* unit = FindLLVMUnitForRef(die_ref, false))
+    return DwarfDie::FromOffset(unit, die_ref.offset());
+  return GetDieAtOffset(die_ref, true);
+}
+
+DwarfDie DwarfBinaryImpl::GetDieAtOffset(DwarfDieRef die_ref, bool is_dwo) const {
+  if (auto* unit = FindLLVMUnitForRef(die_ref, is_dwo))
+    return DwarfDie::FromOffset(unit, die_ref.offset());
+  return {};
+}
+
+DwarfDie DwarfBinaryImpl::GetUnitDieForRef(DwarfDieRef die_ref, bool is_dwo) const {
+  return DwarfDie::FromUnitRoot(FindLLVMUnitForRef(die_ref, is_dwo));
 }
 
 void DwarfBinaryImpl::EnsureSignatureMap() const {
@@ -537,7 +545,7 @@ void DwarfBinaryImpl::ClearLLVMCache() {
   // which would immediately re-populate unit_map_ for every unit in the binary.
   // Even though Index::IndexCompileUnit() evicts each unit's caches as it finishes,
   // cross-unit DIE references (such as DW_FORM_ref_addr and DW_FORM_ref_sig8) resolved via
-  // GetLLVMDieAtOffset() can lazily re-extract DIE arrays in previously indexed units, so a final
+  // GetDieAtOffset() can lazily re-extract DIE arrays in previously indexed units, so a final
   // sweep is still required here.
   unit_map_.clear();
   if (!context_)

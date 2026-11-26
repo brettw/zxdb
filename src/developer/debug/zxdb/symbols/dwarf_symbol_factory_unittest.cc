@@ -9,7 +9,6 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "src/developer/debug/shared/string_util.h"
 #include "src/developer/debug/zxdb/symbols/array_type.h"
 #include "src/developer/debug/zxdb/symbols/base_type.h"
@@ -666,19 +665,20 @@ TEST(DwarfSymbolFactory, TypeUnitReference) {
     ASSERT_TRUE(setup.Init().ok());
 
     // Check that the fixture has the reference form that this test is for.
-    llvm::DWARFContext* context = setup.symbols()->binary()->GetLLVMContext();
+    DwarfBinary& binary = *setup.symbols()->binary();
     DwarfDie var_die;
-    for (const std::unique_ptr<llvm::DWARFUnit>& unit : context->info_section_units()) {
-      if (unit->isTypeUnit())
+    for (uint32_t i = 0; i < binary.GetNormalUnitCount(); ++i) {
+      auto unit = binary.GetUnitAtIndex(UnitIndex(false, i));
+      ASSERT_TRUE(unit);
+      if (unit->GetUnitDie().tag() == DwarfTag::kTypeUnit)
         continue;
-      var_die = DwarfDie(
-          GetFirstDieOfTagAndName(context, unit.get(), DwarfTag::kVariable, "type_unit_outer"));
+      var_die = GetFirstDieOfTagAndName(*unit, DwarfTag::kVariable, "type_unit_outer");
       if (var_die)
         break;
     }
     ASSERT_TRUE(var_die);
     static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kType};
-    DwarfDieDecoder decoder(context, kAttrs);
+    DwarfDieDecoder decoder(binary, kAttrs);
     ASSERT_TRUE(decoder.Decode(var_die));
     const DwarfDieDecoder::AttributeValue* type_value = decoder.GetValue(DwarfAttr::kType);
     ASSERT_TRUE(type_value);
@@ -717,20 +717,20 @@ TEST(DwarfSymbolFactory, AddrxOffsetLowPc) {
   std::string path = TestSymbolModule::GetTestDataDir() + "addrx_offset/clang_addrx_offset.so";
   TestSymbolModule setup(path, "");
   ASSERT_TRUE(setup.Init().ok());
-  llvm::DWARFContext* context = setup.symbols()->binary()->GetLLVMContext();
-  const std::map<std::string, DwarfBinary::ElfTableSymbol>& elf_symbols =
-      setup.symbols()->binary()->GetELFSymbols();
+  DwarfBinary& binary = *setup.symbols()->binary();
+  const auto& elf_symbols = binary.GetELFSymbols();
 
+  auto unit = GetUnitWithNameEndingIn(binary, false, "addrx_offset_fixture.cc");
+  ASSERT_TRUE(unit);
   int addrx_offset_count = 0;
   for (const char* name : {"AddrxOffsetFirst", "AddrxOffsetSecond", "AddrxOffsetThird"}) {
     SCOPED_TRACE(name);
 
     // Count the functions whose fixture uses the form that this test is for.
-    DwarfDie die(
-        GetFirstDieOfTagAndName(context, context->getUnitAtIndex(0), DwarfTag::kSubprogram, name));
+    DwarfDie die = GetFirstDieOfTagAndName(*unit, DwarfTag::kSubprogram, name);
     ASSERT_TRUE(die);
     static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kLowPc};
-    DwarfDieDecoder decoder(context, kAttrs);
+    DwarfDieDecoder decoder(binary, kAttrs);
     ASSERT_TRUE(decoder.Decode(die));
     const DwarfDieDecoder::AttributeValue* low_pc = decoder.GetValue(DwarfAttr::kLowPc);
     ASSERT_TRUE(low_pc);
@@ -760,13 +760,15 @@ class AssemblyFixture {
   bool Init() {
     if (!setup_.Init().ok())
       return false;
-    context_ = setup_.symbols()->binary()->GetLLVMContext();
-    return context_ && context_->getNumCompileUnits() == 2;
+    return setup_.symbols()->binary()->GetNormalUnitCount() == 2;
   }
 
   // Returns the symbol for the child with the given index of the given unit.
   fxl::RefPtr<Symbol> UnitChild(unsigned unit, size_t index) {
-    DwarfDie die = DwarfDie(context_->getUnitAtIndex(unit)->getUnitDIE(false)).first_child();
+    auto dwarf_unit = setup_.symbols()->binary()->GetUnitAtIndex(UnitIndex(false, unit));
+    if (!dwarf_unit)
+      return nullptr;
+    DwarfDie die = dwarf_unit->GetUnitDie().first_child();
     for (size_t i = 0; i < index && die; i++)
       die = die.sibling();
     if (!die)
@@ -776,7 +778,6 @@ class AssemblyFixture {
 
  private:
   TestSymbolModule setup_;
-  llvm::DWARFContext* context_ = nullptr;
 };
 
 // Indices of the children of the units in the fixture.
@@ -1060,7 +1061,7 @@ TEST(DwarfSymbolFactory, InlinedParameterOrder) {
   std::string path = TestSymbolModule::GetTestDataDir() + "inline_params/clang_inline_params.so";
   TestSymbolModule setup(path, "");
   ASSERT_TRUE(setup.Init().ok());
-  llvm::DWARFContext* context = setup.symbols()->binary()->GetLLVMContext();
+  DwarfBinary& binary = *setup.symbols()->binary();
 
   struct Case {
     const char* caller;
@@ -1083,7 +1084,7 @@ TEST(DwarfSymbolFactory, InlinedParameterOrder) {
 
     // Find whether the fixture has the case this test is for: the concrete instance has fewer
     // parameter entries than the function.
-    DwarfDie die(context->getDIEForOffset(inlined->GetLazySymbol().die_ref().offset()));
+    DwarfDie die = binary.GetDieAtOffset(inlined->GetLazySymbol().die_ref());
     ASSERT_TRUE(die);
     size_t concrete_parameters = 0;
     for (DwarfDie child : die.children()) {

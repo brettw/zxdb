@@ -702,7 +702,7 @@ const std::vector<UnitIndex>* Index::FindFileUnitIndices(const std::string& name
 size_t Index::CountSymbolsIndexed() const { return RecursiveCountDies(root_); }
 
 void Index::IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, bool force_slow_path) {
-  DwarfDie unit_die(unit.GetUnitDie());
+  DwarfDie unit_die = unit.GetUnitDie();
   if (!unit_die.is_valid())
     return;
 

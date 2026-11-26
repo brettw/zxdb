@@ -32,22 +32,22 @@ LineStringSections GetLineStringSections(const DwarfSections& sections, llvm::DW
   return result;
 }
 
-std::optional<uint64_t> GetUnitLineTableOffset(llvm::DWARFUnit& unit) {
-  DwarfDie unit_die(unit.getUnitDIE());
+std::optional<uint64_t> GetUnitLineTableOffset(DwarfDie unit_die) {
   if (!unit_die)
     return std::nullopt;
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kStmtList};
-  DwarfDieDecoder decoder(&unit.getContext(), kAttrs);
+  llvm::DWARFUnit* unit = unit_die.llvm_unit();
+  DwarfDieDecoder decoder(&unit->getContext(), kAttrs);
   if (!decoder.Decode(unit_die))
     return std::nullopt;
   std::optional<uint64_t> stmt_list = decoder.GetSectionOffset(DwarfAttr::kStmtList);
   if (!stmt_list)
     return std::nullopt;
-  return *stmt_list + unit.getLineTableOffset();
+  return *stmt_list + unit->getLineTableOffset();
 }
 
 ErrOr<LineProgram> ParseLineProgramForUnit(const DwarfSections& sections, llvm::DWARFUnit& unit) {
-  std::optional<uint64_t> offset = GetUnitLineTableOffset(unit);
+  std::optional<uint64_t> offset = GetUnitLineTableOffset(DwarfDie::FromUnitRoot(&unit));
   if (!offset)
     return Err("The unit has no line table.");
   return ParseLineProgramForUnit(sections, unit, *offset, nullptr);

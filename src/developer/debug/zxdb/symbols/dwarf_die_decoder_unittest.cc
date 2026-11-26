@@ -96,20 +96,15 @@ class DwarfDieDecoderTest : public testing::Test {
 
   // Returns the DIE at the offset in the unit with the given index.
   DwarfDie GetDieInUnit(unsigned unit_index, uint64_t offset) {
-    return DwarfDie(context_->getUnitAtIndex(unit_index)->getDIEForOffset(offset));
+    return DwarfDie::FromOffset(context_->getUnitAtIndex(unit_index), offset);
   }
 
-  // Returns the unit with the given index, with its unit DIE extracted so its DW_AT_addr_base is
-  // known.
-  llvm::DWARFUnit* GetUnit(unsigned unit_index) {
-    llvm::DWARFUnit* unit = context_->getUnitAtIndex(unit_index);
-    unit->getUnitDIE();
-    return unit;
+  // Reading the root also initializes the LLVM unit's address table base.
+  DwarfDie GetUnitDie(unsigned unit_index) {
+    return DwarfDie::FromUnitRoot(context_->getUnitAtIndex(unit_index));
   }
 
-  DwarfDie GetDie(uint64_t offset) {
-    return DwarfDie(context_->getUnitAtIndex(0)->getDIEForOffset(offset));
-  }
+  DwarfDie GetDie(uint64_t offset) { return GetDieInUnit(0, offset); }
 
   // Offsets of the DIEs from the start of the section. The unit is at offset 0, so these are also
   // the unit-relative offsets.
@@ -512,7 +507,7 @@ TEST(DwarfDieDecoder, RefAddrInDwo) {
   const llvm::DWARFUnitVector& units = context->getDWOUnitsVector();
   ASSERT_EQ(2u, units.size());
   ASSERT_TRUE(units[1]->isDWOUnit());
-  DwarfDie source(units[1]->getDIEForOffset(source_offset));
+  DwarfDie source = DwarfDie::FromOffset(units[1].get(), source_offset);
   ASSERT_TRUE(source);
 
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kType};
@@ -521,7 +516,7 @@ TEST(DwarfDieDecoder, RefAddrInDwo) {
   DwarfDie target = decoder.GetReference(DwarfAttr::kType);
   ASSERT_TRUE(target);
   EXPECT_EQ(target_offset, target.offset());
-  EXPECT_EQ(units[0].get(), target.llvm_unit());
+  EXPECT_EQ(DwarfDie::FromOffset(units[0].get(), target_offset), target);
 }
 
 TEST(DwarfDieDecoder, SupplementaryStrings) {
@@ -558,7 +553,7 @@ TEST(DwarfDieDecoder, SupplementaryStrings) {
 
     static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName};
     DwarfDieDecoder decoder(context.get(), kAttrs);
-    ASSERT_TRUE(decoder.Decode(DwarfDie(context->getUnitAtIndex(0)->getUnitDIE())));
+    ASSERT_TRUE(decoder.Decode(DwarfDie::FromUnitRoot(context->getUnitAtIndex(0))));
     ASSERT_TRUE(decoder.Has(DwarfAttr::kName));
     EXPECT_EQ(std::nullopt, decoder.GetCString(DwarfAttr::kName));
   }
@@ -850,7 +845,7 @@ TEST_F(DwarfDieDecoderTest, AddressTableUnit) {
   EXPECT_EQ(std::nullopt, own_table.GetAddress(DwarfAttr::kLowPc));
 
   // With the address table of the skeleton unit, the indices resolve.
-  DwarfDieDecoder decoder(context(), kAttrs, GetUnit(kSkeletonUnit));
+  DwarfDieDecoder decoder(context(), kAttrs, GetUnitDie(kSkeletonUnit).llvm_unit());
   ASSERT_TRUE(decoder.Decode(die));
   EXPECT_EQ(0x6000u, decoder.GetAddress(DwarfAttr::kLowPc));
 
@@ -881,7 +876,7 @@ TEST_F(DwarfDieDecoderTest, CorruptBlockLength) {
   EXPECT_FALSE(skip_decoder.Decode(die));
 
   // The unit DIE before it is fine.
-  EXPECT_TRUE(skip_decoder.Decode(DwarfDie(GetUnit(kCorruptUnit)->getUnitDIE())));
+  EXPECT_TRUE(skip_decoder.Decode(GetUnitDie(kCorruptUnit)));
   EXPECT_STREQ("corrupt", skip_decoder.GetCString(DwarfAttr::kName).value_or(""));
 }
 

@@ -5,27 +5,18 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_TEST_UTIL_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_TEST_UTIL_H_
 
-#include "llvm/DebugInfo/DWARF/DWARFCompileUnit.h"
-#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
+#include <string_view>
 
-namespace llvm {
-class DWARFContext;
-class DWARFDie;
-}  // namespace llvm
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 
 namespace zxdb {
 
-// Returns the unit in the list with a name ending in the given string. The name is normally the
-// file name, so searching for "/foo.cc" will find the unit corresponding to foo.cc (the full path
-// in the unit name may be more complicated so don't depend on the particulars of that).
-llvm::DWARFUnit* GetUnitWithNameEndingIn(llvm::DWARFContext* context, llvm::DWARFUnitVector& units,
-                                         const std::string& name);
+// A unit name usually ends with the source file name.
+fxl::RefPtr<DwarfUnit> GetUnitWithNameEndingIn(DwarfBinary& binary, bool is_dwo,
+                                               std::string_view name);
 
-// Returns the first DIE in the unit with the matching tag and DW_AT_Name attribute. If not found,t
-// he returned DIE will be !isValid().
-llvm::DWARFDie GetFirstDieOfTagAndName(llvm::DWARFContext* context, llvm::DWARFUnit* unit,
-                                       DwarfTag tag, const std::string& name);
+// Returns the first DIE with the given tag and DW_AT_name, or an invalid handle.
+DwarfDie GetFirstDieOfTagAndName(const DwarfUnit& unit, DwarfTag tag, std::string_view name);
 
 }  // namespace zxdb
 

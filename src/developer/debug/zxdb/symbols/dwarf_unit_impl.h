@@ -14,7 +14,6 @@
 #include "src/lib/fxl/memory/weak_ptr.h"
 
 namespace llvm {
-class DWARFDie;
 class DWARFUnit;
 }  // namespace llvm
 
@@ -27,25 +26,20 @@ class DwarfUnitImpl : public DwarfUnit {
  public:
   // Construct with fxl::MakeRefCounted<DwarfUnitImpl>().
 
-  // Possibly null (this class may outlive the DwarfBinary).
-  llvm::DWARFUnit* unit() const { return binary_ ? unit_ : nullptr; }
-
   // DwarfUnit implementation.
   DwarfBinary* GetBinary() const override;
-  llvm::DWARFUnit* GetLLVMUnit() const override;
   int GetDwarfVersion() const override;
-  llvm::DWARFDie GetUnitDie() const override;
+  DwarfDie GetUnitDie(DwarfDie::Load load = DwarfDie::Load::kAllDies) const override;
   uint64_t GetOffset() const override;
   LazySymbol FunctionForRelativeAddress(uint64_t relative_address) const override;
   std::string GetCompilationDir() const override;
   const LineTable& GetLineTable() const override;
   uint64_t GetDieCount() const override;
   void ClearDieCache() const override;
-  llvm::DWARFDie GetLLVMDieAtIndex(uint64_t index) const override;
-  llvm::DWARFDie GetLLVMDieAtOffset(DwarfDieRef die_ref) const override;
-  uint64_t GetIndexForLLVMDie(const llvm::DWARFDie& die) const override;
+  DwarfDie GetDieAtIndex(uint64_t index) const override;
+  DwarfDie GetDieAtOffset(DwarfDieRef die_ref) const override;
+  std::optional<uint32_t> GetIndexForDie(DwarfDie die) const override;
   DwarfDieRef GetDieRef(uint64_t offset) const override;
-  DwarfDieRef GetDieRef(const llvm::DWARFDie& die) const override;
 
  private:
   FRIEND_REF_COUNTED_THREAD_SAFE(DwarfUnitImpl);
@@ -58,7 +52,7 @@ class DwarfUnitImpl : public DwarfUnit {
 
   // Recursive helper for EnsureFuncAddrMap(). Takes a pre-decoded non-weak reference to the binary_
   // weak member to avoid checking for weak pointers each time.
-  void AddDieToFuncAddr(const DwarfBinary& binary, const llvm::DWARFDie& die,
+  void AddDieToFuncAddr(const DwarfBinary& binary, DwarfDie die,
                         AddressRangeMapBuilder& builder) const;
 
   // The binary that owns us.

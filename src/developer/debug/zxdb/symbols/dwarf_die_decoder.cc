@@ -91,7 +91,7 @@ DwarfDie GetDIEForSignature(llvm::DWARFContext* context, uint64_t signature) {
       if (type_unit->getTypeHash() != signature)
         continue;
       uint64_t die_offset = unit->getOffset() + type_unit->getTypeOffset();
-      return DwarfDie(unit->getDIEForOffset(die_offset));
+      return DwarfDie::FromOffset(unit.get(), die_offset);
     }
     return DwarfDie();
   };
@@ -481,25 +481,19 @@ DwarfDie DwarfDieDecoder::DecodeReference(llvm::DWARFUnit* unit, const FormValue
     case DwarfForm::kRef4:
     case DwarfForm::kRef8:
     case DwarfForm::kRefUdata:
-      return DwarfDie(unit->getDIEForOffset(unit->getOffset() + *ref_value));
+      return DwarfDie::FromOffset(unit, unit->getOffset() + *ref_value);
     case DwarfForm::kRefAddr: {
-      // This is an offset in the .debug_info section of the referencing unit, so it can be used
-      // across units. DWARFContext::getDIEForOffset() searches only the normal units, so a unit in
-      // a .dwo file looks in the units of .debug_info.dwo itself.
-      if (unit->isDWOUnit()) {
-        if (llvm::DWARFUnit* target =
-                unit->getContext().getDWOUnitsVector().getUnitForOffset(*ref_value))
-          return DwarfDie(target->getDIEForOffset(*ref_value));
-        break;
-      }
-      return DwarfDie(context_->getDIEForOffset(*ref_value));
+      // A section-relative reference can cross units in the same .debug_info section.
+      const auto& units = unit->isDWOUnit() ? unit->getContext().getDWOUnitsVector()
+                                            : context_->getNormalUnitsVector();
+      return DwarfDie::FromOffset(units.getUnitForOffset(*ref_value), *ref_value);
     }
     case DwarfForm::kRefSig8: {
       if (binary_) {
         // Prefer fast O(log N) cached signature lookup and section-aware DIE resolution
         // via DwarfBinary.
         if (DwarfDieRef die_ref = binary_->GetDieRefForSignature(*ref_value))
-          return DwarfDie(binary_->GetLLVMDieAtOffset(die_ref));
+          return binary_->GetDieAtOffset(die_ref);
       } else {
         // Fallback for tests or contexts where only a bare llvm::DWARFContext* was provided.
         return GetDIEForSignature(context_, *ref_value);

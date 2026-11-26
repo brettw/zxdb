@@ -16,11 +16,6 @@
 #include "src/developer/debug/zxdb/symbols/symbol_factory.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
 
-namespace llvm {
-class DWARFContext;
-class DWARFUnit;
-}  // namespace llvm
-
 namespace zxdb {
 
 class BaseType;
@@ -77,12 +72,7 @@ class DwarfSymbolFactory : public SymbolFactory {
   LazySymbol MakeLazy(DwarfDie die) const;
   UncachedLazySymbol MakeUncachedLazy(DwarfDie die) const;
 
-  llvm::DWARFContext* GetLLVMContext() const;
-
   VariableLocation DecodeLocation(DwarfDie die, const FormValue& form) const;
-
-  // Returns the unit that contains the DIE, or null.
-  llvm::DWARFUnit* GetUnitForDieRef(DwarfDieRef die_ref) const;
 
   // The size of one array dimension. At most one is set. Neither is set when the size is unknown.
   struct ArraySubrange {

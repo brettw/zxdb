@@ -37,13 +37,13 @@ uint64_t AddDefineFileTable(LineTableTestSections& sections) {
 // Decodes DW_AT_decl_file of the first child of the unit DIE with a decoder without a binary.
 std::optional<std::string> DecodeDeclFile(llvm::DWARFContext& context, llvm::DWARFUnit& unit,
                                           size_t child_index) {
-  llvm::DWARFDie die = unit.getUnitDIE(false).getFirstChild();
+  DwarfDie die = DwarfDie::FromUnitRoot(&unit, DwarfDie::Load::kAllDies).first_child();
   for (size_t i = 0; i < child_index; i++)
-    die = die.getSibling();
+    die = die.sibling();
 
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kDeclFile};
   DwarfDieDecoder decoder(&context, kAttrs);
-  EXPECT_TRUE(decoder.Decode(DwarfDie(die)));
+  EXPECT_TRUE(decoder.Decode(die));
   return decoder.GetFile(DwarfAttr::kDeclFile);
 }
 

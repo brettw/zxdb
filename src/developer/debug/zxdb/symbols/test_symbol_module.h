@@ -5,33 +5,16 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_TEST_SYMBOL_MODULE_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_TEST_SYMBOL_MODULE_H_
 
-#include <memory>
 #include <string>
 #include <string_view>
 
-#include "llvm/DebugInfo/DWARF/DWARFCompileUnit.h"
-#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
-#include "llvm/Object/ObjectFile.h"
 #include "src/developer/debug/zxdb/symbols/identifier.h"
 #include "src/developer/debug/zxdb/symbols/module_symbols_impl.h"
 #include "src/lib/fxl/macros.h"
 
-namespace llvm {
-
-class DWARFCompileUnit;
-class DWARFContext;
-class MemoryBuffer;
-
-namespace object {
-class Binary;
-}  // namespace object
-
-}  // namespace llvm
-
 namespace zxdb {
 
-// This class loads the unstripped zxdb_symbol_test module with the required LLDB classes for
-// writing symbol testing.
+// Loads one of the symbol test modules for tests.
 class TestSymbolModule {
  public:
   // Which of the symbol files to load int he constructor.

@@ -12,7 +12,6 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "src/developer/debug/shared/string_util.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die.h"
@@ -298,6 +297,7 @@ TEST(Index, UnitDieLookup) {
   ASSERT_GT(unit->GetDieCount(), 1u);
   DwarfDie root = unit->GetDieAtIndex(0);
   ASSERT_TRUE(root);
+  EXPECT_EQ(root, unit->GetUnitDie());
   EXPECT_EQ(0u, unit->GetIndexForDie(root));
   DwarfDie child = root.first_child();
   ASSERT_TRUE(child);
@@ -329,22 +329,22 @@ TEST(Index, CreateIndexEvictsUnitCaches) {
   ASSERT_TRUE(unit0);
 
   // Once the tree is loaded, a root-only lookup can see its children.
-  ASSERT_TRUE(DwarfDie(unit0->GetUnitDie()));
-  llvm::DWARFContext* context = binary->GetLLVMContext();
-  EXPECT_TRUE(DwarfDie(context->getUnitAtIndex(0)->getUnitDIE(true)).first_child());
+  ASSERT_TRUE(unit0->GetUnitDie());
+  EXPECT_TRUE(unit0->GetUnitDie(DwarfDie::Load::kRootOnly).first_child());
 
   Index index;
   index.CreateIndex(*binary, IndexNode::SymbolRef::kMainBinary);
 
   // After CreateIndex completes (without an explicit ClearLLVMCache call), every unit's non-root
   // DIEs should have been evicted at the end of IndexCompileUnit.
-  for (const auto& llvm_unit : context->normal_units()) {
-    ASSERT_TRUE(llvm_unit);
-    EXPECT_FALSE(DwarfDie(llvm_unit->getUnitDIE(true)).first_child());
+  for (uint32_t i = 0; i < binary->GetNormalUnitCount(); ++i) {
+    auto unit = binary->GetUnitAtIndex(UnitIndex(false, i));
+    ASSERT_TRUE(unit);
+    EXPECT_FALSE(unit->GetUnitDie(DwarfDie::Load::kRootOnly).first_child());
   }
 
   // Subsequent on-demand queries on the unit should lazily re-extract the DIEs and line table.
-  EXPECT_TRUE(DwarfDie(unit0->GetUnitDie()).first_child());
+  EXPECT_TRUE(unit0->GetUnitDie().first_child());
   EXPECT_GT(unit0->GetLineTable().files().size(), 0u);
 }
 
@@ -355,7 +355,7 @@ TEST(Index, ClearLLVMCacheEvictsUnitsAndLineTables) {
   TestSymbolModule setup(TestSymbolModule::kCheckedIn);
   ASSERT_TRUE(setup.Init("", false).ok());
 
-  DwarfBinary* binary = setup.symbols()->binary();
+  DwarfBinaryImpl* binary = setup.symbols()->binary();
   ASSERT_GT(binary->GetNormalUnitCount(), 1u);
 
   // Obtain a weak pointer to unit 0 without keeping a local RefPtr so its lifetime is governed
@@ -372,7 +372,7 @@ TEST(Index, ClearLLVMCacheEvictsUnitsAndLineTables) {
     fxl::RefPtr<DwarfUnit> unit1 = binary->GetUnitAtIndex(UnitIndex(false, 1));
     ASSERT_TRUE(unit1);
     weak_unit1 = unit1->GetWeakPtr();
-    ASSERT_TRUE(DwarfDie(unit1->GetUnitDie()));
+    ASSERT_TRUE(unit1->GetUnitDie());
     const LineTable& line_table = unit1->GetLineTable();
     initial_file_count = line_table.files().size();
     ASSERT_GT(initial_file_count, 1u);
@@ -382,14 +382,21 @@ TEST(Index, ClearLLVMCacheEvictsUnitsAndLineTables) {
   }
   EXPECT_TRUE(weak_unit1);
 
+  std::vector<DwarfDieRef> unit_refs;
+  for (uint32_t i = 0; i < binary->GetNormalUnitCount(); ++i) {
+    auto unit = binary->GetUnitAtIndex(UnitIndex(false, i));
+    ASSERT_TRUE(unit);
+    unit_refs.push_back(unit->GetDieRef());
+  }
   binary->ClearLLVMCache();
 
   // Clearing the cache must evict unit_map_ entries and must not re-populate them while iterating.
   EXPECT_FALSE(weak_unit0);
   EXPECT_FALSE(weak_unit1);
-  for (const auto& llvm_unit : binary->GetLLVMContext()->normal_units()) {
-    ASSERT_TRUE(llvm_unit);
-    EXPECT_FALSE(DwarfDie(llvm_unit->getUnitDIE(true)).first_child());
+  for (DwarfDieRef ref : unit_refs) {
+    DwarfDie root = binary->GetUnitDieForRef(ref, false);
+    ASSERT_TRUE(root);
+    EXPECT_FALSE(root.first_child());
   }
 
   // Re-querying unit 1 after cache eviction must allocate a fresh DwarfUnit wrapper and re-parse

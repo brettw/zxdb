@@ -14,10 +14,6 @@
 #include "src/lib/fxl/memory/ref_counted.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
 
-namespace llvm {
-class DWARFDie;
-}
-
 namespace zxdb {
 
 class DwarfBinary;
@@ -46,15 +42,11 @@ class DwarfUnit : public fxl::RefCountedThreadSafe<DwarfUnit> {
   // out from under the reference-counted unit pointer.
   virtual DwarfBinary* GetBinary() const = 0;
 
-  // Returns the LLVM unit for this object. Ideally this would be removed but it is necessary since
-  // we expose a number of LLVM DIE helpers.
-  virtual llvm::DWARFUnit* GetLLVMUnit() const = 0;
-
   // Returns the DWARF specification version of this unit (e.g. "5").
   virtual int GetDwarfVersion() const = 0;
 
-  // Returns the DWARFDie corresponding to this unit.
-  virtual llvm::DWARFDie GetUnitDie() const = 0;
+  // By default, load the full tree so callers can walk the children of the root.
+  virtual DwarfDie GetUnitDie(DwarfDie::Load load = DwarfDie::Load::kAllDies) const = 0;
 
   // Returns function covering the given absolute/relative address. This will the most specific
   // inlined subroutine if there are any. Returns an !is_valid() LazySymbol on failure.
@@ -84,28 +76,15 @@ class DwarfUnit : public fxl::RefCountedThreadSafe<DwarfUnit> {
   // this unit (LLVM does a binary search in the unit's DIE array for the DIE with the given
   // offset). See DwarfBinary::GetDieAtOffset() to query across units.
   // For an indexed lookup, first call GetDieCount() and use an index below that count.
-  DwarfDie GetDieAtIndex(uint64_t index) const { return DwarfDie(GetLLVMDieAtIndex(index)); }
-  DwarfDie GetDieAtOffset(DwarfDieRef die_ref) const {
-    return DwarfDie(GetLLVMDieAtOffset(die_ref));
-  }
-  virtual llvm::DWARFDie GetLLVMDieAtIndex(uint64_t index) const = 0;
-  virtual llvm::DWARFDie GetLLVMDieAtOffset(DwarfDieRef die_ref) const = 0;
+  virtual DwarfDie GetDieAtIndex(uint64_t index) const = 0;
+  virtual DwarfDie GetDieAtOffset(DwarfDieRef die_ref) const = 0;
 
   // Returns the array index if the DIE belongs to this unit.
-  std::optional<uint32_t> GetIndexForDie(DwarfDie die) const {
-    if (!die || die.llvm_unit() != GetLLVMUnit())
-      return std::nullopt;
-    return GetIndexForLLVMDie(die.llvm_die());
-  }
+  virtual std::optional<uint32_t> GetIndexForDie(DwarfDie die) const = 0;
 
-  // Back-computes the index for the given DIE in this unit. The DIE must be part of this unit or
-  // the returned value will be incorrect (it just does a simple offset conversion).
-  virtual uint64_t GetIndexForLLVMDie(const llvm::DWARFDie& die) const = 0;
-
-  // Returns a DwarfDieRef for this unit itself, or for an offset or LLVM DIE in this unit.
+  // Returns a reference to the unit header or to an offset in the unit's section.
   DwarfDieRef GetDieRef() const { return GetDieRef(GetOffset()); }
   virtual DwarfDieRef GetDieRef(uint64_t offset) const = 0;
-  virtual DwarfDieRef GetDieRef(const llvm::DWARFDie& die) const = 0;
 
  protected:
   FRIEND_REF_COUNTED_THREAD_SAFE(DwarfUnit);

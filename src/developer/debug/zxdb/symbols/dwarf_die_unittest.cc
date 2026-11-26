@@ -5,6 +5,7 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 
 #include <memory>
+#include <type_traits>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -19,6 +20,9 @@
 
 namespace zxdb {
 namespace {
+
+static_assert(std::is_trivially_copyable_v<DwarfDie>);
+static_assert(sizeof(DwarfDie) <= 2 * sizeof(void*));
 
 // The unit has a namespace with one variable, followed by a subprogram at unit scope.
 class DieTree {
@@ -62,7 +66,9 @@ class DieTree {
     context_ = llvm::DWARFContext::create(buffers_, 8, kEndian == Endian::kLittle);
   }
 
-  DwarfDie root() { return DwarfDie(context_->getUnitAtIndex(0)->getUnitDIE(false)); }
+  DwarfDie root() {
+    return DwarfDie::FromUnitRoot(context_->getUnitAtIndex(0), DwarfDie::Load::kAllDies);
+  }
 
   size_t root_offset;
   size_t namespace_offset;
@@ -87,6 +93,8 @@ TEST(DwarfDie, Navigation) {
   ASSERT_TRUE(ns);
   EXPECT_EQ(DwarfTag::kNamespace, ns.tag());
   EXPECT_EQ(tree.namespace_offset, ns.offset());
+  EXPECT_EQ(root, ns.unit_root());
+  EXPECT_EQ(DwarfDieRef::Main(tree.namespace_offset), ns.ref());
   EXPECT_EQ(root, ns.parent());
   EXPECT_EQ(0u, ns.parent_index());
 
@@ -148,6 +156,8 @@ TEST(DwarfDie, Attributes) {
 TEST(DwarfDie, Identity) {
   DwarfDie invalid;
   EXPECT_FALSE(invalid.is_valid());
+  EXPECT_FALSE(invalid.unit_root());
+  EXPECT_FALSE(invalid.ref());
   EXPECT_EQ(DwarfDie(), invalid);
 
   DieTree tree;

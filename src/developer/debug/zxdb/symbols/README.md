@@ -64,7 +64,14 @@ Public headers expose these symbol classes, factories, and evaluators:
 
 - `DwarfDie` is a handle to an entry in a unit's DIE array. Use it to read
   the tag, walk the tree, or iterate over the attribute specifications. Use
-  the handle only while the unit keeps its DIE array.
+  the handle only while the unit keeps its DIE array. Loading the full tree
+  can invalidate a handle to the root. Use `DwarfDie::ref()`
+  to keep the section and offset after the unit releases the array.
+- `DwarfUnit::GetUnitDie()` returns the root and loads its children. Use
+  `kRootOnly` when you need only the root. `GetDieAtIndex()` and
+  `GetDieAtOffset()` return a handle in that unit. `GetIndexForDie()`
+  returns the index if the handle belongs to the unit. To find a DIE across
+  units, pass its `DwarfDieRef` to `DwarfBinary::GetDieAtOffset()`.
 - The index scans each unit in array order. It uses each `DwarfDie` and its
   parent index to track scope. The index stores `DwarfDieRef` values so it
   can release the unit's DIE array after indexing.
