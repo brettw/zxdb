@@ -12,6 +12,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
@@ -521,6 +522,46 @@ TEST(DwarfDieDecoder, RefAddrInDwo) {
   ASSERT_TRUE(target);
   EXPECT_EQ(target_offset, target.getOffset());
   EXPECT_EQ(units[0].get(), target.getDwarfUnit());
+}
+
+TEST(DwarfDieDecoder, SupplementaryStrings) {
+  // A supplementary offset can coincide with a valid string offset in the local section.
+  DwarfStringSectionBuilder strings;
+  uint64_t offset = strings.AddString("local name");
+
+  std::vector<uint8_t> info;
+  DwarfSectionBuilder info_builder(info, Endian::kLittle);
+  auto unit = info_builder.BeginUnit({});
+  info_builder.Uleb(1);
+  info_builder.Offset(offset, 4);
+  info_builder.EndUnit(unit);
+
+  auto make_buffer = [](std::span<const uint8_t> data) {
+    return llvm::MemoryBuffer::getMemBufferCopy(
+        llvm::StringRef(reinterpret_cast<const char*>(data.data()), data.size()));
+  };
+  for (DwarfForm form : {DwarfForm::kStrpSup, DwarfForm::kGnuStrpAlt}) {
+    SCOPED_TRACE(DwarfFormToString(form));
+    std::vector<uint8_t> abbrev;
+    DwarfSectionBuilder abbrev_builder(abbrev, Endian::kLittle);
+    const AbbrevTable::AttributeSpec attrs[] = {
+        {static_cast<uint64_t>(DwarfAttr::kName), static_cast<uint64_t>(form), std::nullopt}};
+    abbrev_builder.AbbrevDeclaration(1, static_cast<uint64_t>(DwarfTag::kCompileUnit), false,
+                                     attrs);
+    abbrev_builder.EndAbbrevTable();
+
+    llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
+    buffers["debug_abbrev"] = make_buffer(abbrev);
+    buffers["debug_info"] = make_buffer(info);
+    buffers["debug_str"] = make_buffer(strings.bytes());
+    auto context = llvm::DWARFContext::create(buffers, 8, true);
+
+    static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName};
+    DwarfDieDecoder decoder(context.get(), kAttrs);
+    ASSERT_TRUE(decoder.Decode(context->getUnitAtIndex(0)->getUnitDIE()));
+    ASSERT_TRUE(decoder.Has(DwarfAttr::kName));
+    EXPECT_EQ(std::nullopt, decoder.GetCString(DwarfAttr::kName));
+  }
 }
 
 TEST_F(DwarfDieDecoderTest, AbstractOrigin) {

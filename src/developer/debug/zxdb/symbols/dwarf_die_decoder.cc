@@ -265,7 +265,9 @@ std::optional<const char*> DwarfDieDecoder::GetCString(DwarfAttr attribute) cons
       offset = *entry;
       break;
     }
+    case DwarfForm::kStrpSup:
     case DwarfForm::kGnuStrpAlt:
+      // Leave strings in supplementary files unresolved, as LLDB does.
       return std::nullopt;
     default:
       break;
