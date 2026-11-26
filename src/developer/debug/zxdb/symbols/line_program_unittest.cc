@@ -9,8 +9,10 @@
 #include <gtest/gtest.h>
 
 #include "llvm/BinaryFormat/Dwarf.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program_llvm.h"
@@ -970,9 +972,8 @@ TEST(LineProgram, IndexedStringBounds) {
       LineTableTestSections sections;
       uint64_t offset = sections.Add(builder);
       sections.Finish();
-      llvm::StringRef line = sections.line_section().Data;
       ErrOr<LineProgram> program =
-          LineProgram::Parse(std::string_view(line.data(), line.size()), offset, true, strings);
+          LineProgram::Parse(AsStringView(sections.sections().line), offset, true, strings);
       ASSERT_TRUE(program.ok()) << program.err().msg();
       ASSERT_EQ(3u, program.value().header().files.size());
       EXPECT_EQ("first.cc", program.value().header().files[0].name);
@@ -1049,23 +1050,24 @@ TEST(LineProgram, IndexedStringByteOrder) {
 
         llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
         auto add = [&](const char* name, const std::vector<uint8_t>& bytes) {
-          buffers[name] = llvm::MemoryBuffer::getMemBufferCopy(
-              llvm::StringRef(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
+          buffers[name] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(bytes));
         };
         add("debug_info", contribution(info));
         add("debug_abbrev", abbrev);
         add("debug_str_offsets", contribution(offsets));
         buffers["debug_str"] =
             llvm::MemoryBuffer::getMemBufferCopy(llvm::StringRef("pad\0first.cc\0second.cc\0", 23));
-        buffers["debug_line"] = llvm::MemoryBuffer::getMemBufferCopy(line.line_section().Data);
+        buffers["debug_line"] =
+            llvm::MemoryBuffer::getMemBufferCopy(AsStringView(line.sections().line));
         auto context = llvm::DWARFContext::create(buffers, 8, little_endian);
         llvm::DWARFUnit* unit = context->getUnitAtIndex(0);
         ASSERT_TRUE(unit);
-        LineStringSections strings = GetLineStringSections(*unit);
+        DwarfSections sections = GetDwarfSections(*context);
+        LineStringSections strings = GetLineStringSections(sections, *unit);
         EXPECT_EQ(str_offsets_base, strings.str_offsets_base);
         EXPECT_EQ(offset_size, strings.str_offset_size);
 
-        ErrOr<LineProgram> program = ParseLineProgramForUnit(*unit);
+        ErrOr<LineProgram> program = ParseLineProgramForUnit(sections, *unit);
         ASSERT_TRUE(program.ok()) << program.err().msg();
         ASSERT_EQ(2u, program.value().header().files.size());
         EXPECT_EQ("second.cc", program.value().header().files[0].name);
@@ -1151,8 +1153,9 @@ TEST(LineProgram, TruncatedHeaders) {
       LineTableTestSections full;
       full.Add(builder);
       full.Finish();
-      const llvm::StringRef section = full.line_section().Data;
-      LineStringSections strings = GetLineStringSections(full.context());
+      const DwarfSections sections = full.sections();
+      const std::string_view section = AsStringView(sections.line);
+      LineStringSections strings = GetLineStringSections(sections);
 
       for (size_t length = 1; length < section.size(); length++) {
         SCOPED_TRACE(length);
@@ -1160,8 +1163,7 @@ TEST(LineProgram, TruncatedHeaders) {
         EXPECT_TRUE(LineProgram::Parse(prefix, 0, true, strings).has_error());
       }
 
-      ErrOr<LineProgram> program =
-          LineProgram::Parse(std::string_view(section.data(), section.size()), 0, true, strings);
+      ErrOr<LineProgram> program = LineProgram::Parse(section, 0, true, strings);
       ASSERT_TRUE(program.ok()) << program.err().msg();
       LineFileTable names = LineFileTable::FromEntries(program.value().header_files());
       if (version >= 5)

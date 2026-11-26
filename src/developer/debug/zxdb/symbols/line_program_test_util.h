@@ -19,6 +19,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/dwarf_sections.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
@@ -205,7 +206,9 @@ class LineTableTestSections {
 
   // Returns the unit in the order AddCompileUnit() added it.
   llvm::DWARFUnit* unit(size_t index) { return context_->getUnitAtIndex(index); }
-  const llvm::DWARFSection& line_section() const;
+
+  // Views the section bytes after Finish().
+  DwarfSections sections() const;
 
   // Parses the table without a unit, so DW_FORM_strx names don't resolve.
   ErrOr<LineProgram> Parse(uint64_t offset) const;
@@ -219,7 +222,8 @@ class LineTableTestSections {
   DwarfStringSectionBuilder line_str_;
   DwarfStringSectionBuilder str_;
   std::vector<uint8_t> info_;
-  std::vector<std::string> str_offsets_;  // Strings for kStrx1, by index.
+  std::vector<std::string> indexed_strings_;  // Strings for kStrx1, by index.
+  std::vector<uint8_t> str_offsets_;
   bool little_endian_ = true;
 
   // The context references these buffers, so they must outlive it.

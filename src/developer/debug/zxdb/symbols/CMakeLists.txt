@@ -22,6 +22,7 @@ add_library(zxdb_symbols STATIC
   dwarf_lang.cc
   dwarf_location.cc
   dwarf_op.cc
+  dwarf_sections_llvm.cc
   dwarf_stack_entry.cc
   dwarf_symbol_factory.cc
   dwarf_tag.cc

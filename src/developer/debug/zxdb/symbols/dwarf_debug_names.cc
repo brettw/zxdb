@@ -11,9 +11,9 @@
 #include <span>
 #include <string_view>
 
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/Support/Error.h"
 #include "src/developer/debug/zxdb/common/checked_math.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 
 namespace zxdb {
@@ -92,8 +92,8 @@ void AppendEntriesForMatchedName(const llvm::DWARFDebugNames& debug_names, std::
 // Checks whether the .debug_str entry at str_off starts with prefix without scanning for its NUL
 // terminator first. Slicing prefix.size() bytes within str_data is safe even when the entry is
 // shorter than prefix because a non-NUL prefix won't match across the entry's NUL byte.
-bool CandidateMatchesPrefix(std::span<const char> str_data, uint32_t str_off,
-                            std::string_view prefix) {
+bool CandidateMatchesPrefix(std::span<const uint8_t> str_data, uint32_t str_off,
+                            std::span<const uint8_t> prefix) {
   if (prefix.empty()) {
     return false;
   }
@@ -101,7 +101,7 @@ bool CandidateMatchesPrefix(std::span<const char> str_data, uint32_t str_off,
   if (!end_off.has_value() || *end_off > str_data.size()) {
     return false;
   }
-  std::span<const char> candidate = str_data.subspan(str_off, prefix.size());
+  std::span<const uint8_t> candidate = str_data.subspan(str_off, prefix.size());
   if (candidate.back() != prefix.back() || candidate.front() != prefix.front()) {
     return false;
   }
@@ -115,17 +115,13 @@ bool TryScanNameIndexPrefixFast(const llvm::DWARFDebugNames& debug_names, const 
                                 std::string_view prefix, std::set<DwarfDieRef>* seen,
                                 std::set<std::string_view>* seen_names,
                                 std::vector<DebugNamesEntry>* results) {
-  llvm::DWARFContext* context = binary.GetLLVMContext();
-  if (!context || prefix.empty() || prefix.contains('\0')) {
+  if (!binary.GetLLVMContext() || prefix.empty() || prefix.contains('\0')) {
     return false;
   }
 
-  llvm::StringRef names_sec = context->getDWARFObj().getNamesSection().Data;
-  llvm::StringRef str_sec = context->getDWARFObj().getStrSection();
-  std::span<const char> names_data(names_sec.data(), names_sec.size());
-  std::span<const char> str_data(str_sec.data(), str_sec.size());
+  const DwarfSections& sections = binary.GetSections();
 
-  if (!IsDwarf32DebugNamesTable(names_data, name_index.getUnitOffset()))
+  if (!IsDwarf32DebugNamesTable(sections.names, name_index.getUnitOffset()))
     return false;
 
   llvm::DWARFDebugNames::Header hdr = name_index.getHeader();
@@ -133,18 +129,16 @@ bool TryScanNameIndexPrefixFast(const llvm::DWARFDebugNames& debug_names, const 
   uint64_t str_offsets_base = name_index.getOffsets().StringOffsetsBase;
   uint64_t table_bytes = static_cast<uint64_t>(hdr.NameCount) * sizeof(uint32_t);
   auto table_end = CheckedAdd(str_offsets_base, table_bytes);
-  if (!table_end.has_value() || *table_end > names_data.size()) {
+  if (!table_end.has_value() || *table_end > sections.names.size()) {
     return false;
   }
 
-  std::span<const char> offsets_table =
-      names_data.subspan(static_cast<size_t>(str_offsets_base), static_cast<size_t>(table_bytes));
+  const uint8_t* offsets = sections.names.data() + str_offsets_base;
+  const auto prefix_bytes = AsBytes(prefix);
   for (uint32_t i = 0; i < hdr.NameCount; i++) {
-    uint32_t str_off = 0;
-    std::span<const char> entry_bytes =
-        offsets_table.subspan(static_cast<size_t>(i) * sizeof(uint32_t), sizeof(uint32_t));
-    std::memcpy(&str_off, entry_bytes.data(), sizeof(uint32_t));
-    if (!CandidateMatchesPrefix(str_data, str_off, prefix)) {
+    uint32_t str_off = ReadFixed(offsets + static_cast<size_t>(i) * sizeof(uint32_t),
+                                 sizeof(uint32_t), sections.little_endian);
+    if (!CandidateMatchesPrefix(sections.str, str_off, prefix_bytes)) {
       continue;
     }
 
@@ -157,13 +151,13 @@ bool TryScanNameIndexPrefixFast(const llvm::DWARFDebugNames& debug_names, const 
 
 }  // namespace
 
-bool IsDwarf32DebugNamesTable(std::span<const char> section, uint64_t offset) {
+bool IsDwarf32DebugNamesTable(std::span<const uint8_t> section, uint64_t offset) {
   // A 64-bit table starts with the escape value 0xffffffff in place of its 32-bit unit length. The
   // escape value is the same in both byte orders.
   if (offset > section.size() || section.size() - offset < 4)
     return false;
   for (size_t i = 0; i < 4; i++) {
-    if (static_cast<uint8_t>(section[offset + i]) != 0xff)
+    if (section[offset + i] != 0xff)
       return true;
   }
   return false;

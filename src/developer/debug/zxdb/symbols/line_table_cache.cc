@@ -4,25 +4,27 @@
 
 #include "src/developer/debug/zxdb/symbols/line_table_cache.h"
 
-#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
 #include "src/developer/debug/zxdb/symbols/line_program_llvm.h"
 
 namespace zxdb {
 
-std::shared_ptr<const LineFileTable> LineTableCache::GetFileTable(llvm::DWARFUnit& unit,
+std::shared_ptr<const LineFileTable> LineTableCache::GetFileTable(const DwarfSections& sections,
+                                                                  llvm::DWARFUnit& unit,
                                                                   uint64_t file_index) {
   std::optional<uint64_t> offset = GetUnitLineTableOffset(unit);
   if (!offset)
     return nullptr;
 
-  auto [iter, inserted] = entries_.try_emplace(Key(unit.getLineSection().Data.data(), *offset));
+  auto [iter, inserted] =
+      entries_.try_emplace(Key(GetUnitLineSection(sections, unit).data(), *offset));
   Entry& entry = iter->second;
   bool needs_more = !entry.exhausted && entry.files && file_index >= entry.files->size();
   if (!inserted && !needs_more)
     return entry.files;
 
-  ErrOr<LineProgram> program = ParseLineProgramForUnit(unit, *offset);
+  ErrOr<LineProgram> program = ParseLineProgramForUnit(sections, unit, *offset);
   if (program.has_error()) {
     entry.exhausted = true;  // Don't try again.
     return entry.files;
@@ -37,13 +39,14 @@ std::shared_ptr<const LineFileTable> LineTableCache::GetFileTable(llvm::DWARFUni
   return entry.files;
 }
 
-LineTable LineTableCache::DecodeLineTable(llvm::DWARFUnit& unit, uint64_t first_code_address) {
+LineTable LineTableCache::DecodeLineTable(const DwarfSections& sections, llvm::DWARFUnit& unit,
+                                          uint64_t first_code_address) {
   std::optional<uint64_t> offset = GetUnitLineTableOffset(unit);
   if (!offset)
     return LineTable();
 
-  Entry& entry = entries_[Key(unit.getLineSection().Data.data(), *offset)];
-  ErrOr<LineProgram> program = ParseLineProgramForUnit(unit, *offset);
+  Entry& entry = entries_[Key(GetUnitLineSection(sections, unit).data(), *offset)];
+  ErrOr<LineProgram> program = ParseLineProgramForUnit(sections, unit, *offset);
   if (program.has_error()) {
     entry.exhausted = true;
     return LineTable();

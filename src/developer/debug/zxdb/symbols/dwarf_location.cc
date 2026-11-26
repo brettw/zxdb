@@ -7,12 +7,10 @@
 #include <limits>
 #include <span>
 
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
-#include "llvm/DebugInfo/DWARF/DWARFDebugLoc.h"
-#include "llvm/DebugInfo/DWARF/DWARFSection.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/common/checked_math.h"
 #include "src/developer/debug/zxdb/common/data_extractor.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/dwarf_sections.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 
 namespace zxdb {
@@ -82,13 +80,11 @@ bool AppendCountedLocationDescriptionEntry(TargetPointer begin, TargetPointer en
 
 // Decodes a reference to a DWARF 4 location list. This is a DW_FORM_sec_offset type into the
 // .debug_loc section that contains the location list.
-VariableLocation DecodeDwarf4LocationReference(const llvm::DWARFUnit* unit,
+VariableLocation DecodeDwarf4LocationReference(const DwarfSections& sections,
+                                               const llvm::DWARFUnit* unit,
                                                const llvm::DWARFFormValue& form,
                                                const UncachedLazySymbol& source) {
-  llvm::DWARFContext& context = unit->getContext();
-  const llvm::DWARFObject& object = context.getDWARFObj();
-  const llvm::DWARFSection& debug_loc_section = object.getLocSection();
-  if (debug_loc_section.Data.empty()) {
+  if (sections.loc.empty()) {
     // LLVM dumpLocation() falls back on the DWARFObject::getLocDWOSection() call in this case. We
     // don't support DWOs yet so just fail.
     return VariableLocation();
@@ -98,28 +94,21 @@ VariableLocation DecodeDwarf4LocationReference(const llvm::DWARFUnit* unit,
   if (!offset_or)
     return VariableLocation();
 
-  if (*offset_or >= debug_loc_section.Data.size())
+  if (*offset_or >= sections.loc.size())
     return VariableLocation();  // Off the end.
-
-  std::span<const uint8_t> section_data(
-      reinterpret_cast<const uint8_t*>(debug_loc_section.Data.data()),
-      debug_loc_section.Data.size());
 
   // Interpret the resulting list.
   auto base_address = const_cast<llvm::DWARFUnit*>(unit)->getBaseAddress();
   return DecodeDwarf4LocationList(base_address ? base_address->Address : 0,
-                                  section_data.subspan(*offset_or), source);
+                                  sections.loc.subspan(*offset_or), source);
 }
 
 // Decodes a DWARF 5 location which is a DW_FORM_loclistx-type offset into the .debug_loclist
 // section that contains the location list.
-VariableLocation DecodeDwarf5LocationReference(llvm::DWARFUnit* unit,
+VariableLocation DecodeDwarf5LocationReference(const DwarfSections& sections, llvm::DWARFUnit* unit,
                                                const llvm::DWARFFormValue& form,
                                                const UncachedLazySymbol& source) {
-  llvm::DWARFContext& context = unit->getContext();
-  const llvm::DWARFObject& object = context.getDWARFObj();
-  const llvm::DWARFSection& debug_loclists_section = object.getLoclistsSection();
-  if (debug_loclists_section.Data.empty()) {
+  if (sections.loclists.empty()) {
     // LLVM dumpLocation() falls back on the DWARFObject::getLocDWOSection() call in this case. We
     // don't support DWOs yet so just fail.
     return VariableLocation();
@@ -156,9 +145,8 @@ VariableLocation DecodeDwarf5LocationReference(llvm::DWARFUnit* unit,
     }
   }
 
-  std::span<const uint8_t> section_data(
-      reinterpret_cast<const uint8_t*>(debug_loclists_section.Data.data()),
-      debug_loclists_section.Data.size());
+  if (list_offset >= sections.loclists.size())
+    return VariableLocation();  // Off the end.
 
   // Callback that converts an index into the .debug_addr table into the corresponding address.
   fit::function<std::optional<TargetPointer>(uint64_t)> index_to_addr =
@@ -173,12 +161,13 @@ VariableLocation DecodeDwarf5LocationReference(llvm::DWARFUnit* unit,
 
   auto base_address = const_cast<llvm::DWARFUnit*>(unit)->getBaseAddress();
   return DecodeDwarf5LocationList(base_address ? base_address->Address : 0,
-                                  section_data.subspan(list_offset), index_to_addr, source);
+                                  sections.loclists.subspan(list_offset), index_to_addr, source);
 }
 
 }  // namespace
 
-VariableLocation DecodeVariableLocation(llvm::DWARFUnit* unit, const llvm::DWARFFormValue& form,
+VariableLocation DecodeVariableLocation(const DwarfSections& sections, llvm::DWARFUnit* unit,
+                                        const llvm::DWARFFormValue& form,
                                         const UncachedLazySymbol& source) {
   DwarfForm form_code = static_cast<DwarfForm>(form.getForm());
   if (DwarfFormIsBlock(form_code) || form_code == DwarfForm::kExprloc) {
@@ -191,11 +180,11 @@ VariableLocation DecodeVariableLocation(llvm::DWARFUnit* unit, const llvm::DWARF
 
   if (unit->getVersion() < 5) {
     // DWARF 4 location list.
-    return DecodeDwarf4LocationReference(unit, form, source);
+    return DecodeDwarf4LocationReference(sections, unit, form, source);
   }
 
   // Assume everything newer is a DWARF 5 location list.
-  return DecodeDwarf5LocationReference(unit, form, source);
+  return DecodeDwarf5LocationReference(sections, unit, form, source);
 }
 
 VariableLocation DecodeDwarf4LocationList(TargetPointer unit_base_addr,

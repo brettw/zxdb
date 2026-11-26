@@ -21,6 +21,7 @@ class DWARFUnit;
 namespace zxdb {
 
 class LineProgram;
+struct DwarfSections;
 
 // Caches the file tables of the line tables of one binary, so that each file table is resolved
 // once. Use it only on the thread that owns the binary's DWARFContext.
@@ -36,13 +37,15 @@ class LineTableCache {
   // that index at all. Returns null if the unit has no line table or its header can't be parsed.
   // Each result is an immutable snapshot. A later request can replace the cached snapshot with
   // one that includes program-defined files; earlier results remain valid.
-  std::shared_ptr<const LineFileTable> GetFileTable(llvm::DWARFUnit& unit, uint64_t file_index);
+  std::shared_ptr<const LineFileTable> GetFileTable(const DwarfSections& sections,
+                                                    llvm::DWARFUnit& unit, uint64_t file_index);
 
   // Decodes the whole line table of the unit. The result uses the cached file table. Returns an
   // empty table if the unit has no line table or its header can't be parsed. first_code_address is
   // the lowest address of a code section of the binary, which finds the stripped sequences (see
   // LineTable).
-  LineTable DecodeLineTable(llvm::DWARFUnit& unit, uint64_t first_code_address);
+  LineTable DecodeLineTable(const DwarfSections& sections, llvm::DWARFUnit& unit,
+                            uint64_t first_code_address);
 
   void Clear() { entries_.clear(); }
 

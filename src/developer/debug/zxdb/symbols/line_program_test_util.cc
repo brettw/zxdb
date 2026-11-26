@@ -9,9 +9,8 @@
 #include <algorithm>
 
 #include "llvm/ADT/StringMap.h"
-#include "llvm/DebugInfo/DWARF/DWARFObject.h"
 #include "llvm/Support/MemoryBuffer.h"
-#include "src/developer/debug/zxdb/symbols/line_program_llvm.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 
 namespace zxdb {
 
@@ -338,9 +337,9 @@ uint64_t LineTableTestSections::AddRaw(const std::vector<uint8_t>& bytes) {
 }
 
 uint8_t LineTableTestSections::AddStrOffset(const std::string& str) {
-  FX_CHECK(str_offsets_.size() < 256);
-  str_offsets_.push_back(str);
-  return static_cast<uint8_t>(str_offsets_.size() - 1);
+  FX_CHECK(indexed_strings_.size() < 256);
+  indexed_strings_.push_back(str);
+  return static_cast<uint8_t>(indexed_strings_.size() - 1);
 }
 
 void LineTableTestSections::AddCompileUnit(uint16_t version, std::optional<uint64_t> line_offset,
@@ -377,8 +376,7 @@ void LineTableTestSections::Finish(uint8_t address_size, bool little_endian) {
   little_endian_ = little_endian;
 
   auto make_buffer = [](std::span<const uint8_t> data, const char* name) {
-    return llvm::MemoryBuffer::getMemBufferCopy(
-        llvm::StringRef(reinterpret_cast<const char*>(data.data()), data.size()), name);
+    return llvm::MemoryBuffer::getMemBufferCopy(AsStringView(data), name);
   };
   // Abbreviations for AddCompileUnit().
   std::vector<uint8_t> abbrev = {
@@ -399,31 +397,37 @@ void LineTableTestSections::Finish(uint8_t address_size, bool little_endian) {
   };
 
   // A DWARF 5 string offsets table for the kStrx1 strings.
-  std::vector<uint8_t> str_offsets;
-  AppendInteger(str_offsets, 4 + 4 * str_offsets_.size(), 4);
-  AppendInteger(str_offsets, 5, 2);  // Version.
-  AppendInteger(str_offsets, 0, 2);  // Padding.
-  for (const std::string& str : str_offsets_)
-    AppendInteger(str_offsets, str_.AddString(str), 4);
+  AppendInteger(str_offsets_, 4 + 4 * indexed_strings_.size(), 4);
+  AppendInteger(str_offsets_, 5, 2);  // Version.
+  AppendInteger(str_offsets_, 0, 2);  // Padding.
+  for (const std::string& str : indexed_strings_)
+    AppendInteger(str_offsets_, str_.AddString(str), 4);
 
   buffers_["debug_line"] = make_buffer(line_, "debug_line");
   buffers_["debug_info"] = make_buffer(info_, "debug_info");
   buffers_["debug_abbrev"] = make_buffer(abbrev, "debug_abbrev");
-  buffers_["debug_str_offsets"] = make_buffer(str_offsets, "debug_str_offsets");
+  buffers_["debug_str_offsets"] = make_buffer(str_offsets_, "debug_str_offsets");
   buffers_["debug_line_str"] = make_buffer(line_str_.bytes(), "debug_line_str");
   buffers_["debug_str"] = make_buffer(str_.bytes(), "debug_str");
   context_ =
       llvm::DWARFContext::create(buffers_, address_size, little_endian, IgnoreError, IgnoreError);
 }
 
-const llvm::DWARFSection& LineTableTestSections::line_section() const {
-  return context_->getDWARFObj().getLineSection();
+DwarfSections LineTableTestSections::sections() const {
+  DwarfSections result;
+  result.info = info_;
+  result.str = str_.bytes();
+  result.str_offsets = str_offsets_;
+  result.line = line_;
+  result.line_str = line_str_.bytes();
+  result.little_endian = little_endian_;
+  return result;
 }
 
 ErrOr<LineProgram> LineTableTestSections::Parse(uint64_t offset) const {
-  llvm::StringRef section = line_section().Data;
-  return LineProgram::Parse(std::string_view(section.data(), section.size()), offset,
-                            little_endian_, GetLineStringSections(*context_));
+  DwarfSections views = sections();
+  return LineProgram::Parse(AsStringView(views.line), offset, views.little_endian,
+                            GetLineStringSections(views));
 }
 
 }  // namespace zxdb

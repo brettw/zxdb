@@ -28,59 +28,13 @@
 #include "src/developer/debug/shared/logging/logging.h"
 #include "src/developer/debug/zxdb/common/file_util.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit_impl.h"
 #include "src/lib/elflib/elflib.h"
 
 namespace zxdb {
 
 namespace {
-
-std::span<const uint8_t> AsBytes(llvm::StringRef data) { return {data.bytes_begin(), data.size()}; }
-
-using SectionVisitor = llvm::function_ref<void(const llvm::DWARFSection&)>;
-using VisitSections = void (llvm::DWARFObject::*)(SectionVisitor) const;
-
-std::span<const uint8_t> GetSingleSection(const llvm::DWARFObject& object,
-                                          VisitSections visit_sections) {
-  std::span<const uint8_t> result;
-  size_t count = 0;
-  (object.*visit_sections)([&](const llvm::DWARFSection& section) {
-    if (++count == 1)
-      result = AsBytes(section.Data);
-  });
-  // Relocatable objects can have multiple COMDAT sections of the same type. The byte reader
-  // doesn't support these objects.
-  return count == 1 ? result : std::span<const uint8_t>();
-}
-
-DwarfSections GetSectionViews(const llvm::DWARFObject& object) {
-  return {
-      .info = GetSingleSection(object, &llvm::DWARFObject::forEachInfoSections),
-      .abbrev = AsBytes(object.getAbbrevSection()),
-      .str = AsBytes(object.getStrSection()),
-      .str_offsets = AsBytes(object.getStrOffsetsSection().Data),
-      .line = AsBytes(object.getLineSection().Data),
-      .line_str = AsBytes(object.getLineStrSection()),
-      .addr = AsBytes(object.getAddrSection().Data),
-      .ranges = AsBytes(object.getRangesSection().Data),
-      .rnglists = AsBytes(object.getRnglistsSection().Data),
-      .loc = AsBytes(object.getLocSection().Data),
-      .loclists = AsBytes(object.getLoclistsSection().Data),
-      .aranges = AsBytes(object.getArangesSection()),
-      .names = AsBytes(object.getNamesSection().Data),
-      .types = GetSingleSection(object, &llvm::DWARFObject::forEachTypesSections),
-      .info_dwo = GetSingleSection(object, &llvm::DWARFObject::forEachInfoDWOSections),
-      .abbrev_dwo = AsBytes(object.getAbbrevDWOSection()),
-      .str_dwo = AsBytes(object.getStrDWOSection()),
-      .str_offsets_dwo = AsBytes(object.getStrOffsetsDWOSection().Data),
-      .line_dwo = AsBytes(object.getLineDWOSection().Data),
-      .loc_dwo = AsBytes(object.getLocDWOSection().Data),
-      .loclists_dwo = AsBytes(object.getLoclistsDWOSection().Data),
-      .rnglists_dwo = AsBytes(object.getRnglistsDWOSection().Data),
-      .types_dwo = GetSingleSection(object, &llvm::DWARFObject::forEachTypesDWOSections),
-      .little_endian = object.isLittleEndian(),
-  };
-}
 
 uint64_t ComputeMappedLength(elflib::ElfLib& elf) {
   uint64_t max = 0;
@@ -306,7 +260,7 @@ Err DwarfBinaryImpl::Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
   context_ = llvm::DWARFContext::create(*GetLLVMObjectFile(),
                                         llvm::DWARFContext::ProcessDebugRelocations::Process,
                                         nullptr, "", &LLVMErrorHandler);
-  sections_ = GetSectionViews(context_->getDWARFObj());
+  sections_ = GetDwarfSections(*context_);
 
   return Err();
 }
@@ -446,13 +400,15 @@ std::shared_ptr<const LineFileTable> DwarfBinaryImpl::GetLineFileTable(llvm::DWA
                                                                        uint64_t file_index) const {
   if (!unit)
     return nullptr;
-  return line_tables_.GetFileTable(*unit, file_index);
+  FX_DCHECK(&unit->getContext() == context_.get());
+  return line_tables_.GetFileTable(sections_, *unit, file_index);
 }
 
 LineTable DwarfBinaryImpl::DecodeLineTable(llvm::DWARFUnit* unit) const {
   if (!unit)
     return LineTable();
-  return line_tables_.DecodeLineTable(*unit, first_code_address_);
+  FX_DCHECK(&unit->getContext() == context_.get());
+  return line_tables_.DecodeLineTable(sections_, *unit, first_code_address_);
 }
 
 void DwarfBinaryImpl::ClearLLVMCache() {

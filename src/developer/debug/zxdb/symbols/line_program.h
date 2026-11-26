@@ -18,6 +18,8 @@
 
 namespace zxdb {
 
+struct DwarfSections;
+
 // The zxdb line table parser.
 //
 // zxdb parses the header of each line table, including the directory and file tables, and decodes
@@ -55,6 +57,9 @@ struct LineStringSections {
   std::optional<uint64_t> str_offsets_base;
   uint8_t str_offset_size = 4;  // 4 for DWARF32 and 8 for DWARF64 contributions.
 };
+
+// Gives the main line string and string sections for a parse without a unit.
+LineStringSections GetLineStringSections(const DwarfSections& sections);
 
 // One entry of a file name table. The name views section data. A name that can't be decoded is
 // nullopt, which isn't the same as an empty name.

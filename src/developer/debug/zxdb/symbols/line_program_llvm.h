@@ -8,23 +8,22 @@
 #include "src/developer/debug/zxdb/symbols/line_program.h"
 
 namespace llvm {
-class DWARFContext;
 class DWARFUnit;
 }  // namespace llvm
 
 namespace zxdb {
 
-// LLVM adaptation for the section-data-only parser. Call these functions only on the thread that
-// owns the context. Unit access can extract DIEs and change LLVM caches. The returned views must
-// not outlive the context's section data; workers can read those views without calling LLVM.
-LineStringSections GetLineStringSections(llvm::DWARFUnit& unit);
-LineStringSections GetLineStringSections(const llvm::DWARFContext& context);
+// Supplies the unit's line table offset and string offsets contribution to the line parser.
+// Call these functions on the thread that owns the LLVM context. Unit access can extract DIEs
+// and change LLVM caches. Workers can read the resulting views while the section bytes are alive.
+LineStringSections GetLineStringSections(const DwarfSections& sections, llvm::DWARFUnit& unit);
 
 // Includes the contribution offset for split DWARF. Offset 0 is valid; nullopt means no table.
 std::optional<uint64_t> GetUnitLineTableOffset(llvm::DWARFUnit& unit);
 
-ErrOr<LineProgram> ParseLineProgramForUnit(llvm::DWARFUnit& unit);
-ErrOr<LineProgram> ParseLineProgramForUnit(llvm::DWARFUnit& unit, uint64_t offset);
+ErrOr<LineProgram> ParseLineProgramForUnit(const DwarfSections& sections, llvm::DWARFUnit& unit);
+ErrOr<LineProgram> ParseLineProgramForUnit(const DwarfSections& sections, llvm::DWARFUnit& unit,
+                                           uint64_t offset);
 
 }  // namespace zxdb
 

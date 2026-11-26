@@ -59,24 +59,25 @@ TEST(LineTableCache, HeaderOnlyUntilNeeded) {
   LineTableCache cache;
 
   // A header entry uses the header's table, which doesn't have the defined file.
-  std::shared_ptr<const LineFileTable> header_files = cache.GetFileTable(unit, 1);
+  std::shared_ptr<const LineFileTable> header_files =
+      cache.GetFileTable(sections.sections(), unit, 1);
   ASSERT_TRUE(header_files);
   EXPECT_EQ(2u, header_files->size());
   EXPECT_EQ("a.cc", *header_files->GetFileName(1));
 
   // An entry past the header decodes the program once and finds the defined file.
-  std::shared_ptr<const LineFileTable> files = cache.GetFileTable(unit, 2);
+  std::shared_ptr<const LineFileTable> files = cache.GetFileTable(sections.sections(), unit, 2);
   ASSERT_TRUE(files);
   EXPECT_EQ(3u, files->size());
   ASSERT_TRUE(files->GetFileName(2));
   EXPECT_EQ("inc/defined.h", *files->GetFileName(2));
 
   // The complete table is cached, also for indices that no table has.
-  EXPECT_EQ(files, cache.GetFileTable(unit, 1));
-  EXPECT_EQ(files, cache.GetFileTable(unit, 100));
+  EXPECT_EQ(files, cache.GetFileTable(sections.sections(), unit, 1));
+  EXPECT_EQ(files, cache.GetFileTable(sections.sections(), unit, 100));
 
   // A decoded line table shares the file table.
-  LineTable table = cache.DecodeLineTable(unit, kTestFirstCodeAddress);
+  LineTable table = cache.DecodeLineTable(sections.sections(), unit, kTestFirstCodeAddress);
   EXPECT_EQ(files.get(), &table.files());
   ASSERT_EQ(1u, table.GetNumSequences());
   EXPECT_EQ("inc/defined.h", *table.GetFileNameForRow(table.rows_with_end_markers()[1]));
@@ -91,9 +92,9 @@ TEST(LineTableCache, DecodeFirst) {
   llvm::DWARFUnit& unit = *sections.unit(0);
 
   LineTableCache cache;
-  LineTable table = cache.DecodeLineTable(unit, kTestFirstCodeAddress);
+  LineTable table = cache.DecodeLineTable(sections.sections(), unit, kTestFirstCodeAddress);
   EXPECT_EQ(3u, table.files().size());
-  EXPECT_EQ(&table.files(), cache.GetFileTable(unit, 1).get());
+  EXPECT_EQ(&table.files(), cache.GetFileTable(sections.sections(), unit, 1).get());
 }
 
 TEST(LineTableCache, SharesHeaderTableWithoutDefineFile) {
@@ -113,13 +114,14 @@ TEST(LineTableCache, SharesHeaderTableWithoutDefineFile) {
   llvm::DWARFUnit& unit = *sections.unit(0);
 
   LineTableCache cache;
-  std::shared_ptr<const LineFileTable> files = cache.GetFileTable(unit, 0);
+  std::shared_ptr<const LineFileTable> files = cache.GetFileTable(sections.sections(), unit, 0);
   ASSERT_TRUE(files);
-  EXPECT_EQ(files.get(), &cache.DecodeLineTable(unit, kTestFirstCodeAddress).files());
+  EXPECT_EQ(files.get(),
+            &cache.DecodeLineTable(sections.sections(), unit, kTestFirstCodeAddress).files());
 
   // After Clear(), the table is resolved again.
   cache.Clear();
-  EXPECT_NE(files, cache.GetFileTable(unit, 0));
+  EXPECT_NE(files, cache.GetFileTable(sections.sections(), unit, 0));
 }
 
 TEST(LineTableCache, BadLineTable) {
@@ -131,9 +133,11 @@ TEST(LineTableCache, BadLineTable) {
   llvm::DWARFUnit& unit = *sections.unit(0);
 
   LineTableCache cache;
-  EXPECT_FALSE(cache.GetFileTable(unit, 0));
-  EXPECT_FALSE(cache.GetFileTable(unit, 5));
-  EXPECT_EQ(0u, cache.DecodeLineTable(unit, kTestFirstCodeAddress).GetNumSequences());
+  EXPECT_FALSE(cache.GetFileTable(sections.sections(), unit, 0));
+  EXPECT_FALSE(cache.GetFileTable(sections.sections(), unit, 5));
+  EXPECT_EQ(
+      0u,
+      cache.DecodeLineTable(sections.sections(), unit, kTestFirstCodeAddress).GetNumSequences());
 }
 
 TEST(LineTableCache, UnitWithoutLineTable) {
@@ -144,8 +148,10 @@ TEST(LineTableCache, UnitWithoutLineTable) {
   llvm::DWARFUnit& unit = *sections.unit(0);
 
   LineTableCache cache;
-  EXPECT_FALSE(cache.GetFileTable(unit, 1));
-  EXPECT_EQ(0u, cache.DecodeLineTable(unit, kTestFirstCodeAddress).GetNumSequences());
+  EXPECT_FALSE(cache.GetFileTable(sections.sections(), unit, 1));
+  EXPECT_EQ(
+      0u,
+      cache.DecodeLineTable(sections.sections(), unit, kTestFirstCodeAddress).GetNumSequences());
 
   // DW_AT_decl_file has no file table to use.
   EXPECT_EQ(std::nullopt, DecodeDeclFile(sections.mutable_context(), unit, 0));

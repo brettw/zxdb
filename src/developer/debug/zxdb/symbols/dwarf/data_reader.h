@@ -14,6 +14,15 @@
 
 namespace zxdb {
 
+// Convert between byte spans and string_view section APIs such as LineProgram::Parse.
+inline std::span<const uint8_t> AsBytes(std::string_view data) {
+  return {reinterpret_cast<const uint8_t*>(data.data()), data.size()};
+}
+
+inline std::string_view AsStringView(std::span<const uint8_t> data) {
+  return {reinterpret_cast<const char*>(data.data()), data.size()};
+}
+
 // These helpers decode from a raw pointer in hot loops such as the line program decoder.
 // For LEB128, the caller supplies the end pointer. On failure, the LEB128 helpers return
 // std::nullopt or false and may advance p.

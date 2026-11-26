@@ -4,28 +4,26 @@
 
 #include "src/developer/debug/zxdb/symbols/line_program_llvm.h"
 
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
+#include <lib/syslog/cpp/macros.h>
+
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 
 namespace zxdb {
 
-LineStringSections GetLineStringSections(llvm::DWARFUnit& unit) {
-  LineStringSections result = GetLineStringSections(unit.getContext());
-  result.str = unit.getStringSection();
-  result.str_offsets = unit.getStringOffsetSection().Data;
+LineStringSections GetLineStringSections(const DwarfSections& sections, llvm::DWARFUnit& unit) {
+  LineStringSections result;
+  // DWO units also use the main .debug_line_str section.
+  result.line_str = AsStringView(sections.line_str);
+  result.str = AsStringView(GetUnitStrSection(sections, unit));
+  result.str_offsets = AsStringView(GetUnitStrOffsetsSection(sections, unit));
   // This extracts the unit DIE, which has the string offsets base.
   if (const auto& contribution = unit.getStringOffsetsTableContribution()) {
     result.str_offsets_base = contribution->Base;
     result.str_offset_size = contribution->getDwarfOffsetByteSize();
   }
-  return result;
-}
-
-LineStringSections GetLineStringSections(const llvm::DWARFContext& context) {
-  LineStringSections result;
-  result.line_str = context.getDWARFObj().getLineStrSection();
-  result.str = context.getDWARFObj().getStrSection();
   return result;
 }
 
@@ -43,17 +41,18 @@ std::optional<uint64_t> GetUnitLineTableOffset(llvm::DWARFUnit& unit) {
   return *stmt_list + unit.getLineTableOffset();
 }
 
-ErrOr<LineProgram> ParseLineProgramForUnit(llvm::DWARFUnit& unit) {
+ErrOr<LineProgram> ParseLineProgramForUnit(const DwarfSections& sections, llvm::DWARFUnit& unit) {
   std::optional<uint64_t> offset = GetUnitLineTableOffset(unit);
   if (!offset)
     return Err("The unit has no line table.");
-  return ParseLineProgramForUnit(unit, *offset);
+  return ParseLineProgramForUnit(sections, unit, *offset);
 }
 
-ErrOr<LineProgram> ParseLineProgramForUnit(llvm::DWARFUnit& unit, uint64_t offset) {
-  llvm::StringRef section = unit.getLineSection().Data;
-  return LineProgram::Parse(std::string_view(section.data(), section.size()), offset,
-                            unit.isLittleEndian(), GetLineStringSections(unit));
+ErrOr<LineProgram> ParseLineProgramForUnit(const DwarfSections& sections, llvm::DWARFUnit& unit,
+                                           uint64_t offset) {
+  FX_DCHECK(sections.little_endian == unit.isLittleEndian());
+  return LineProgram::Parse(AsStringView(GetUnitLineSection(sections, unit)), offset,
+                            sections.little_endian, GetLineStringSections(sections, unit));
 }
 
 }  // namespace zxdb

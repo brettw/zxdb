@@ -8,8 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
-#include "src/developer/debug/zxdb/symbols/line_program_llvm.h"
 #include "src/developer/debug/zxdb/symbols/line_program_test_util.h"
 
 namespace zxdb {
@@ -35,14 +35,14 @@ Builder MakeTable(const std::vector<std::string>& files,
   return builder;
 }
 
-LineTableJob MakeJob(const LineTableTestSections& sections, uint32_t unit, uint64_t offset) {
+LineTableJob MakeJob(const LineTableTestSections& test_sections, uint32_t unit, uint64_t offset) {
+  const DwarfSections sections = test_sections.sections();
   LineTableJob job;
   job.unit_index = UnitIndex(false, unit);
-  llvm::StringRef section = sections.line_section().Data;
-  job.section = std::string_view(section.data(), section.size());
+  job.section = AsStringView(sections.line);
   job.offset = offset;
   job.size = 100;
-  job.strings = GetLineStringSections(sections.context());
+  job.strings = GetLineStringSections(sections);
   return job;
 }
 
@@ -328,8 +328,8 @@ TEST_P(SourceFileIndexerStrxTest, ResolvesWithUnit) {
   sections.Finish();
 
   std::vector<LineTableJob> jobs;
-  AddLineTableJob(UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs);
-  AddLineTableJob(UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs);
   ASSERT_EQ(2u, jobs.size());
   EXPECT_EQ(0x1000u, jobs[0].first_code_address);
 
@@ -399,9 +399,9 @@ TEST(SourceFileIndexer, UnitWithoutLineTable) {
   sections.Finish();
 
   std::vector<LineTableJob> jobs;
-  AddLineTableJob(UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs);
   EXPECT_TRUE(jobs.empty());
-  AddLineTableJob(UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs);
   ASSERT_EQ(1u, jobs.size());
 
   SourceFileIndexer indexer(std::move(jobs));

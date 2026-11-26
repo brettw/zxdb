@@ -8,8 +8,9 @@
 
 #include <algorithm>
 
-#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
 #include "src/developer/debug/zxdb/symbols/line_program_llvm.h"
@@ -65,32 +66,32 @@ std::optional<std::pair<const char*, const char*>> GetFileNameKey(LineFileEntrie
 
 }  // namespace
 
-void AddLineTableJob(UnitIndex unit_index, llvm::DWARFUnit& unit, uint64_t first_code_address,
-                     std::vector<LineTableJob>* jobs) {
+void AddLineTableJob(const DwarfSections& sections, UnitIndex unit_index, llvm::DWARFUnit& unit,
+                     uint64_t first_code_address, std::vector<LineTableJob>* jobs) {
   std::optional<uint64_t> offset = GetUnitLineTableOffset(unit);
   if (!offset)
     return;
 
   LineTableJob& job = jobs->emplace_back();
   job.unit_index = unit_index;
-  llvm::StringRef section = unit.getLineSection().Data;
-  job.section = std::string_view(section.data(), section.size());
+  job.section = AsStringView(GetUnitLineSection(sections, unit));
   job.offset = *offset;
-  job.little_endian = unit.isLittleEndian();
+  job.little_endian = sections.little_endian;
   job.size = GetLineTableSize(job.section, job.offset, job.little_endian);
-  job.strings = GetLineStringSections(unit);
+  job.strings = GetLineStringSections(sections, unit);
   job.first_code_address = first_code_address;
 }
 
 std::vector<LineTableJob> CollectLineTableJobs(DwarfBinary& binary) {
   std::vector<LineTableJob> jobs;
+  const DwarfSections& sections = binary.GetSections();
 
   auto add_units = [&](bool is_dwo, uint32_t count) {
     for (uint32_t i = 0; i < count; i++) {
       UnitIndex unit_index(is_dwo, i);
       fxl::RefPtr<DwarfUnit> unit = binary.GetUnitAtIndex(unit_index);
       if (llvm::DWARFUnit* llvm_unit = unit ? unit->GetLLVMUnit() : nullptr)
-        AddLineTableJob(unit_index, *llvm_unit, binary.GetFirstCodeAddress(), &jobs);
+        AddLineTableJob(sections, unit_index, *llvm_unit, binary.GetFirstCodeAddress(), &jobs);
     }
   };
   add_units(false, binary.GetNormalUnitCount());

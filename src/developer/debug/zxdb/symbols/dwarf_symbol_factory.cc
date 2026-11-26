@@ -4,13 +4,12 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf_symbol_factory.h"
 
+#include <lib/syslog/cpp/macros.h>
+
 #include <algorithm>
 
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
-#include "llvm/DebugInfo/DWARF/DWARFDataExtractor.h"
 #include "llvm/DebugInfo/DWARF/DWARFDebugInfoEntry.h"
-#include "llvm/DebugInfo/DWARF/DWARFDebugLoc.h"
-#include "llvm/DebugInfo/DWARF/DWARFSection.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/shared/logging/logging.h"
 #include "src/developer/debug/zxdb/common/int128_t.h"
@@ -30,6 +29,7 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_lang.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_location.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_op.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit_impl.h"
 #include "src/developer/debug/zxdb/symbols/enumeration.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
@@ -108,6 +108,17 @@ llvm::DWARFContext* DwarfSymbolFactory::GetLLVMContext() const {
     return binary_->GetLLVMContext();
   }
   return nullptr;
+}
+
+VariableLocation DwarfSymbolFactory::DecodeLocation(const llvm::DWARFDie& die,
+                                                    const llvm::DWARFFormValue& form) const {
+  llvm::DWARFUnit* unit = die.getDwarfUnit();
+  UncachedLazySymbol source = MakeUncachedLazy(die);
+  if (binary_) {
+    FX_DCHECK(&unit->getContext() == binary_->GetLLVMContext());
+    return DecodeVariableLocation(binary_->GetSections(), unit, form, source);
+  }
+  return DecodeVariableLocation(GetDwarfSections(unit->getContext()), unit, form, source);
 }
 
 DwarfSymbolFactory::ArraySubrange DwarfSymbolFactory::ReadArraySubrange(
@@ -437,7 +448,7 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeFunction(const llvm::DWARFDie& die
   // table of that DIE's unit.
   VariableLocation frame_base;
   if (const DwarfDieDecoder::AttributeValue* value = decoder.GetValue(DwarfAttr::kFrameBase))
-    frame_base = DecodeVariableLocation(value->unit, value->form, MakeUncachedLazy(value->die));
+    frame_base = DecodeLocation(value->die, value->form);
 
   llvm::DWARFDie object_ptr = decoder.GetReference(DwarfAttr::kObjectPointer);
 
@@ -1165,7 +1176,7 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeVariable(const llvm::DWARFDie& die
   // origin in another unit, for example for a static local of an inline function.
   VariableLocation location;
   if (const DwarfDieDecoder::AttributeValue* value = decoder.GetValue(DwarfAttr::kLocation))
-    location = DecodeVariableLocation(value->unit, value->form, MakeUncachedLazy(value->die));
+    location = DecodeLocation(value->die, value->form);
 
   llvm::DWARFDie type = decoder.GetReference(DwarfAttr::kType);
   std::optional<bool> external = decoder.GetBool(DwarfAttr::kExternal);

@@ -8,7 +8,6 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/input_location.h"
@@ -21,15 +20,15 @@ namespace zxdb {
 namespace {
 
 TEST(DwarfDebugNamesTest, IsDwarf32DebugNamesTable) {
-  const char kDwarf32[] = {0x10, 0x00, 0x00, 0x00, 0x05, 0x00};
+  const uint8_t kDwarf32[] = {0x10, 0x00, 0x00, 0x00, 0x05, 0x00};
   EXPECT_TRUE(IsDwarf32DebugNamesTable(kDwarf32, 0));
 
   // The escape value starts a 64-bit table in both byte orders.
-  const char kDwarf64[] = {'\xff', '\xff', '\xff', '\xff', 0x10, 0, 0, 0, 0, 0, 0, 0};
+  const uint8_t kDwarf64[] = {0xff, 0xff, 0xff, 0xff, 0x10, 0, 0, 0, 0, 0, 0, 0};
   EXPECT_FALSE(IsDwarf32DebugNamesTable(kDwarf64, 0));
 
   // A table can start inside the section.
-  const char kSecond[] = {0x01, 0x00, 0x00, 0x00, '\xff', '\xff', '\xff', '\xff'};
+  const uint8_t kSecond[] = {0x01, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff};
   EXPECT_TRUE(IsDwarf32DebugNamesTable(kSecond, 0));
   EXPECT_FALSE(IsDwarf32DebugNamesTable(kSecond, 4));
 
@@ -38,7 +37,7 @@ TEST(DwarfDebugNamesTest, IsDwarf32DebugNamesTable) {
   EXPECT_FALSE(IsDwarf32DebugNamesTable(kSecond, 8));
   EXPECT_FALSE(IsDwarf32DebugNamesTable(kSecond, 9));
   EXPECT_FALSE(IsDwarf32DebugNamesTable(kSecond, UINT64_MAX));
-  EXPECT_FALSE(IsDwarf32DebugNamesTable(std::span<const char>(), 0));
+  EXPECT_FALSE(IsDwarf32DebugNamesTable({}, 0));
 }
 
 TEST(DwarfDebugNamesTest, LookupBuiltBinary) {
@@ -142,7 +141,7 @@ TEST(DwarfDebugNamesTest, LookupBuiltBinary) {
   EXPECT_TRUE(
       FindDebugNamesPrefixEntries(*debug_names, *module->binary(), long_symbol_prefix).empty());
   ASSERT_TRUE(module->binary()->GetLLVMContext());
-  size_t str_sec_size = module->binary()->GetLLVMContext()->getDWARFObj().getStrSection().size();
+  size_t str_sec_size = module->binary()->GetSections().str.size();
   std::string oversized_prefix(str_sec_size + 1024, 'M');
   EXPECT_TRUE(
       FindDebugNamesPrefixEntries(*debug_names, *module->binary(), oversized_prefix).empty());

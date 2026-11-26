@@ -35,6 +35,7 @@ class DwarfDieDecoder;
 class LazySymbol;
 class ModuleSymbols;
 class UncachedLazySymbol;
+class VariableLocation;
 
 // Implementation of SymbolFactory that reads from the DWARF symbols in the given DwarfBinary.
 //
@@ -78,6 +79,9 @@ class DwarfSymbolFactory : public SymbolFactory {
   UncachedLazySymbol MakeUncachedLazy(const llvm::DWARFDie& die) const;
 
   llvm::DWARFContext* GetLLVMContext() const;
+
+  VariableLocation DecodeLocation(const llvm::DWARFDie& die,
+                                  const llvm::DWARFFormValue& form) const;
 
   // Returns the unit that contains the DIE, or null.
   llvm::DWARFUnit* GetUnitForDieRef(DwarfDieRef die_ref) const;

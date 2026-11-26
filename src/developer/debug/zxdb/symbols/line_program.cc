@@ -11,6 +11,7 @@
 #include <limits>
 
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/dwarf_sections.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/line_sequence.h"
 
@@ -31,10 +32,6 @@
 namespace zxdb {
 
 namespace {
-
-std::span<const uint8_t> AsBytes(std::string_view data) {
-  return {reinterpret_cast<const uint8_t*>(data.data()), data.size()};
-}
 
 // Standard opcodes (DWARF 5 section 7.22).
 enum : uint8_t {
@@ -740,6 +737,13 @@ ErrOr<LineProgramHeader> ParseLineProgramHeader(std::string_view line_section, u
 }
 
 }  // namespace
+
+LineStringSections GetLineStringSections(const DwarfSections& sections) {
+  LineStringSections result;
+  result.line_str = AsStringView(sections.line_str);
+  result.str = AsStringView(sections.str);
+  return result;
+}
 
 size_t LineFileEntries::size() const {
   size_t count = header_.files.size() + defined_files_.size();

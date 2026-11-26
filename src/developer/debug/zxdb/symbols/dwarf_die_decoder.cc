@@ -17,6 +17,7 @@
 #include "src/developer/debug/zxdb/symbols/const_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_table_cache.h"
 
@@ -330,7 +331,8 @@ std::optional<std::string> DwarfDieDecoder::GetFile(DwarfAttr attribute) const {
   if (binary_) {
     files = binary_->GetLineFileTable(value->unit, *file_index);
   } else {
-    files = LineTableCache().GetFileTable(*value->unit, *file_index);
+    files = LineTableCache().GetFileTable(GetDwarfSections(value->unit->getContext()), *value->unit,
+                                          *file_index);
   }
   if (!files)
     return std::nullopt;
