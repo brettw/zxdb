@@ -27,8 +27,6 @@ std::span<const uint8_t> GetSingleSection(const llvm::DWARFObject& object,
     if (++count == 1)
       result = AsBytes(section.Data);
   });
-  // Relocatable objects can have multiple COMDAT sections of the same type. The byte reader
-  // doesn't support these objects.
   return count == 1 ? result : std::span<const uint8_t>();
 }
 
@@ -148,21 +146,17 @@ void UnitContextCache::Clear() {
 
 UnitContextResult UnitContextCache::Parse(const DwarfSections& sections, llvm::DWARFUnit& unit,
                                           UnitContextSource skeleton, UnitContextCache* cache) {
-  auto info = AsBytes(unit.getInfoSection().Data);
   bool is_dwo = unit.isDWOUnit();
   UnitSection kind =
       unit.isTypeUnit() && unit.getVersion() < 5 ? UnitSection::kTypes : UnitSection::kInfo;
+  auto info = is_dwo ? sections.info_dwo : sections.info;
+  if (kind == UnitSection::kTypes)
+    info = is_dwo ? sections.types_dwo : sections.types;
   auto header = ReadUnitHeader(info, unit.getOffset(), sections.endian, kind);
   if (header.has_error())
     return header.err();
 
-  // Use the section of this LLVM unit even when the object has several sections of this kind.
   DwarfSections unit_sections = sections;
-  if (kind == UnitSection::kTypes)
-    (is_dwo ? unit_sections.types_dwo : unit_sections.types) = info;
-  else
-    (is_dwo ? unit_sections.info_dwo : unit_sections.info) = info;
-
   UnitContext::Options options;
   options.is_dwo = is_dwo;
   if (const auto* entry = GetPackageEntry(unit, header.value())) {

@@ -11,6 +11,7 @@
 
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/common/err.h"
+#include "src/developer/debug/zxdb/common/err_or.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/debug_names_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/unit_header.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
@@ -33,12 +34,10 @@ class ObjectFile;
 
 namespace zxdb {
 
-// Returns the lowest address of the sections of the object file that have code, or 0 if there are
-// none. This matches the first code address of LLDB (InitializeFirstCodeAddress() in
-// SymbolFileDWARF.cpp). LLDB uses the code sections of the module. A separate debug file has the
-// same addresses and flags for its code sections even though they have no data, so the result is
-// the same for it.
-uint64_t GetFirstCodeAddress(const llvm::object::ObjectFile& object);
+// Rejects repeated DWARF sections and returns the lowest address of a code section, or 0 if
+// there is no code section. This matches LLDB's InitializeFirstCodeAddress(). A separate debug
+// file preserves the addresses and flags of the code sections.
+ErrOr<uint64_t> InspectObjectSections(const llvm::object::ObjectFile& object);
 
 class DwarfBinaryImpl final : public DwarfBinary {
  public:

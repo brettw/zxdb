@@ -178,13 +178,17 @@ CheckStats CheckBinary(const std::string& path) {
   if (!context)
     return stats;
 
+  auto first_code_address = InspectObjectSections(*binary.getBinary());
+  if (first_code_address.has_error()) {
+    ADD_FAILURE() << first_code_address.err().msg();
+    return stats;
+  }
   const DwarfSections sections = GetDwarfSections(*context);
-  uint64_t first_code_address = GetFirstCodeAddress(*binary.getBinary());
   for (const auto& unit : context->normal_units())
-    CheckUnit(sections, *unit, first_code_address, &stats);
+    CheckUnit(sections, *unit, first_code_address.value(), &stats);
   for (const auto& unit : context->dwo_units())
-    CheckUnit(sections, *unit, first_code_address, &stats);
-  CheckSourceFileIndex(sections, *context, first_code_address);
+    CheckUnit(sections, *unit, first_code_address.value(), &stats);
+  CheckSourceFileIndex(sections, *context, first_code_address.value());
   return stats;
 }
 
@@ -314,7 +318,9 @@ TEST(LineProgramBinary, FixtureSourceLines) {
     std::unique_ptr<llvm::DWARFContext> context = LoadContext(entry.path().string(), &binary);
     ASSERT_TRUE(context);
     const DwarfSections sections = GetDwarfSections(*context);
-    uint64_t first_code_address = GetFirstCodeAddress(*binary.getBinary());
+    auto code_address = InspectObjectSections(*binary.getBinary());
+    ASSERT_TRUE(code_address.ok()) << code_address.err().msg();
+    uint64_t first_code_address = code_address.value();
     EXPECT_GT(first_code_address, 0u);
 
     std::vector<bool> found(std::size(kFunctions));

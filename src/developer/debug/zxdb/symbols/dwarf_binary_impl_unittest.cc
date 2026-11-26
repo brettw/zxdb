@@ -79,6 +79,57 @@ bool SetDynamicSymbolSize(std::string& elf, std::string_view name, uint64_t size
   return false;
 }
 
+TEST(DwarfBinaryImpl, RejectsRepeatedDwarfSections) {
+  files::ScopedTempDir temp_dir;
+  for (std::string_view name : {".debug_types", ".debug_info.dwo", ".debug_line"}) {
+    SCOPED_TRACE(name);
+    constexpr std::string_view kStringTablePrefix("\0.shstrtab\0", 11);
+    std::string names(kStringTablePrefix);
+    names.append(name);
+    names.push_back('\0');
+
+    // The file has a null section, a section name table, and two sections with the same name.
+    constexpr uint64_t kNamesOffset = sizeof(Elf64_Ehdr) + 4 * sizeof(Elf64_Shdr);
+    const Elf64_Ehdr header = {
+        .e_ident = {ELFMAG0, ELFMAG1, ELFMAG2, ELFMAG3, ELFCLASS64, ELFDATA2LSB, EV_CURRENT},
+        .e_type = ET_REL,
+        .e_machine = EM_X86_64,
+        .e_version = EV_CURRENT,
+        .e_shoff = sizeof(Elf64_Ehdr),
+        .e_ehsize = sizeof(Elf64_Ehdr),
+        .e_shentsize = sizeof(Elf64_Shdr),
+        .e_shnum = 4,
+        .e_shstrndx = 1,
+    };
+    Elf64_Shdr sections[] = {
+        {},
+        {.sh_name = 1, .sh_type = SHT_STRTAB, .sh_offset = kNamesOffset, .sh_size = names.size()},
+        {.sh_name = kStringTablePrefix.size(),
+         .sh_type = SHT_PROGBITS,
+         .sh_offset = kNamesOffset + names.size(),
+         .sh_size = 1},
+        {.sh_name = kStringTablePrefix.size(),
+         .sh_type = SHT_PROGBITS,
+         .sh_offset = kNamesOffset + names.size() + 1,
+         .sh_size = 1},
+    };
+    std::string elf(reinterpret_cast<const char*>(&header), sizeof(header));
+    elf.append(reinterpret_cast<const char*>(sections), sizeof(sections));
+    elf.append(names).append(2, '\0');
+
+    std::string path;
+    ASSERT_TRUE(temp_dir.NewTempFileWithData(elf, &path));
+    DwarfBinaryImpl binary(path, "", "");
+    Err err = binary.Load(
+        {}, name.ends_with(".dwo") ? DwarfSymbolFactory::kDWO : DwarfSymbolFactory::kMainBinary);
+    ASSERT_TRUE(err.has_error());
+    EXPECT_NE(std::string::npos,
+              err.msg().find("has more than one " + std::string(name) + " section"))
+        << err.msg();
+    EXPECT_NE(std::string::npos, err.msg().find("Link it first")) << err.msg();
+  }
+}
+
 TEST(DwarfBinaryImpl, DebugAddr) {
   std::string path = TestSymbolModule::GetTestDataDir() + "addrx_offset/clang_addrx_offset.so";
   TestSymbolModule setup(path, "");

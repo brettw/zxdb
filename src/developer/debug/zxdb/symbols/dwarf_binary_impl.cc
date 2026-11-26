@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <string_view>
 #include <unordered_set>
 
 #include <llvm/DebugInfo/DIContext.h>
@@ -229,12 +230,28 @@ bool DwarfBinaryImpl::HasBinary() const {
   return false;
 }
 
-uint64_t GetFirstCodeAddress(const llvm::object::ObjectFile& object) {
+ErrOr<uint64_t> InspectObjectSections(const llvm::object::ObjectFile& object) {
   std::optional<uint64_t> first;
+  std::unordered_set<std::string_view> dwarf_sections;
   for (const llvm::object::SectionRef& section : object.sections()) {
     // For ELF, a text section is one with SHF_EXECINSTR.
     if (section.isText())
       first = std::min(first.value_or(std::numeric_limits<uint64_t>::max()), section.getAddress());
+
+    auto name = section.getName();
+    if (!name) {
+      llvm::consumeError(name.takeError());
+      continue;
+    }
+    // GNU compression changes the prefix but preserves the DWARF section kind.
+    if ((name->consume_front(".debug_") || name->consume_front(".zdebug_")) &&
+        !dwarf_sections.insert(*name).second) {
+      return Err(
+          "The object \"%s\" has more than one .debug_%s section. "
+          "This usually means a relocatable (.o) file. Link it first. "
+          "zxdb reads linked executables, shared libraries, and their separate debug files.",
+          object.getFileName().str().c_str(), name->str().c_str());
+    }
   }
   return first.value_or(0);
 }
@@ -271,7 +288,10 @@ Err DwarfBinaryImpl::Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
   binary_buffer_ = std::move(binary_pair.second);
   binary_ = std::move(binary_pair.first);
 
-  first_code_address_ = zxdb::GetFirstCodeAddress(*GetLLVMObjectFile());
+  auto first_code_address = InspectObjectSections(*GetLLVMObjectFile());
+  if (first_code_address.has_error())
+    return first_code_address.err();
+  first_code_address_ = first_code_address.value();
 
   // Overwrite the default Error handler object, but leave everything else default.
   context_ = llvm::DWARFContext::create(*GetLLVMObjectFile(),

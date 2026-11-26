@@ -113,7 +113,7 @@ std::unique_ptr<DwoInfo> ModuleIndexer::IndexOneDwo(size_t skeleton_index,
 
   if (Err err = dwo_info->Load(dwo_path, dwo_path); err.has_error()) {
     // TODO(brettw) have a better way to report this error/warning to the frontend.
-    fprintf(stderr, "Can't load DWO binary %s\n", dwo_path.c_str());
+    fprintf(stderr, "Can't load DWO binary %s: %s\n", dwo_path.c_str(), err.msg().c_str());
     return nullptr;
   }
 

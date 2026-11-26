@@ -2,6 +2,11 @@
 
 This repository extracts the Fuchsia debugger into a standalone project.
 
+zxdb loads linked executables, shared libraries, and their separate debug files,
+including `.dwo` and `.dwp`. It does not support bare relocatable object files
+(`.o` files or `ld -r` output). An object with more than one section of the same
+DWARF kind fails to load with an error that names the section.
+
 ## Imported Fuchsia libraries
 
 - Place support libraries imported from Fuchsia under `src/lib/`.

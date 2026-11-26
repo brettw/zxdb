@@ -128,9 +128,8 @@
   its CU index. Parent offsets are relative to the entry pool.
   `DW_FORM_flag_present` means that the parent has no entry in the pool.
 - The parsed name indexes have no lazy state. Lookups can share the reader
-  across threads while the section bytes stay alive. For relocatable objects
-  the caller can supply relocated CU, local TU, and string offsets at parse
-  time.
+  across threads while the section bytes stay alive. The caller can supply
+  relocated CU, local TU, and string offsets at parse time.
 - A parsed context has no lazy state. It borrows the section bytes, including
   the skeleton's address and range sections when applicable. Readers can
   share the context across threads while the section bytes stay alive. The

@@ -83,6 +83,10 @@ Public headers expose these symbol classes, factories, and evaluators:
 
 Callers and implementations must preserve these invariants:
 
+- zxdb loads linked executables, shared libraries, and their separate debug
+  files, including `.dwo` and `.dwp`. It does not support bare relocatable
+  object files (`.o` files or `ld -r` output). If an object has more than one
+  section of the same DWARF kind, loading fails with an error that names it.
 - `Symbol` objects use `fxl::RefCountedThreadSafe<Symbol>` and do not globally
   cache or deduplicate instances by DIE offset. Never compare `Symbol*` pointers
   to test semantic symbol equality.
