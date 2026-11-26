@@ -16,6 +16,13 @@
   a null pointer. Each declaration stores its tag, children flag, and attribute
   specifications in their original order. `FixedAttributeSize()` gives the
   total byte size for a unit when all attributes have a fixed size.
+- `ReadForm()` reads one attribute from its specification and the unit's form
+  parameters. It returns a `FormValue` or an error. `FormValue` stores the
+  final form, its class, and its raw value. The form identifies the reference
+  base, target string section, or index table. The caller resolves these values
+  with unit and section data.
+- `SkipForm()` moves past one value and returns false if the form or its
+  bytes are invalid. It needs the form code and the unit's form parameters.
 - `DwarfSectionBuilder` and `DwarfStringSectionBuilder` write section bytes
   for tests. `DwarfSectionBuilder` writes unit headers and abbreviation
   declarations. It can write raw unit lengths for error tests. The build
@@ -46,6 +53,20 @@
   the table across threads. Lookup uses a direct index for consecutive codes
   and binary search for other codes. Memory use depends on the declarations
   in the section.
+- `ReadForm()` and `SkipForm()` use the same encoding rules. They reject
+  unknown form codes, invalid LEB128 values, missing string terminators,
+  and values that extend past the reader limit. On error, the reader can
+  remain partway through the value.
+- `DW_FORM_addr` uses the address size. `DW_FORM_ref_addr` uses the address
+  size in DWARF 2 and the offset size in DWARF 3 and later. Both functions
+  accept recognized encodings in any supported unit version.
+- Form decoding follows at most eight `DW_FORM_indirect` codes. A direct
+  `DW_FORM_implicit_const` gets its value from the abbreviation and uses
+  zero DIE bytes. If an indirect form selects `DW_FORM_implicit_const`,
+  the decoder reads a signed LEB128 from the DIE as specified in the
+  DWARF 5 errata.
+- Blocks, inline strings, and 16-byte constants borrow the reader's input.
+  Keep the input alive while using these values.
 
 ## Side Effects
 
@@ -54,4 +75,4 @@ Reads change only the reader's cursor and error state.
 ## Verification
 
 - Build with `cmake --build build --target zxdb_dwarf zxdb_tests`.
-- Run `FUCHSIA_ANALYTICS_DISABLED=1 ./build/zxdb_tests --gtest_filter='AbbrevTable.*:DataReader.*:DwarfSectionBuilder.*:UnitHeader.*:UnitList.*'`.
+- Run `FUCHSIA_ANALYTICS_DISABLED=1 ./build/zxdb_tests --gtest_filter='AbbrevTable.*:DataReader.*:DwarfSectionBuilder.*:FormValue.*:Dwarf2To5/FormEncodingTest.*:UnitHeader.*:UnitList.*'`.
