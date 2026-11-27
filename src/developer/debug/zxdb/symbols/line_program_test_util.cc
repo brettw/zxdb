@@ -8,21 +8,21 @@
 
 #include <algorithm>
 
-#include "llvm/ADT/StringMap.h"
-#include "llvm/Support/MemoryBuffer.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 
 namespace zxdb {
 
 namespace {
+
+enum : uint8_t { kUnitWithLineTable = 1, kSubprogram, kUnitWithoutLineTable };
 
 // The offset of the first entry of .debug_str_offsets, after its DWARF 5 header.
 constexpr uint32_t kStrOffsetsBase = 8;
 
 // Operand counts of the standard opcodes 1 to 12.
 constexpr uint8_t kStandardLengths[12] = {0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1};
-
-void IgnoreError(llvm::Error err) { llvm::consumeError(std::move(err)); }
 
 }  // namespace
 
@@ -322,15 +322,12 @@ std::vector<uint8_t> LineTableBuilder::Build(LineTableTestSections& sections) co
   return result;
 }
 
-LineTableTestSections::LineTableTestSections() = default;
-LineTableTestSections::~LineTableTestSections() = default;
-
 uint64_t LineTableTestSections::Add(const LineTableBuilder& builder) {
   return AddRaw(builder.Build(*this));
 }
 
 uint64_t LineTableTestSections::AddRaw(const std::vector<uint8_t>& bytes) {
-  FX_CHECK(!context_);
+  FX_CHECK(!finished_);
   uint64_t offset = line_.size();
   line_.insert(line_.end(), bytes.begin(), bytes.end());
   return offset;
@@ -344,79 +341,59 @@ uint8_t LineTableTestSections::AddStrOffset(const std::string& str) {
 
 void LineTableTestSections::AddCompileUnit(uint16_t version, std::optional<uint64_t> line_offset,
                                            const std::vector<uint64_t>& decl_files) {
-  FX_CHECK(!context_);
-  DwarfSectionBuilder writer(info_, Endian::kLittle);
-  auto length = writer.BeginInitialLength(4);
-  writer.Fixed(version, 2);
-  if (version >= 5) {
-    writer.Fixed(kUnitTypeCompile, 1);
-    writer.Fixed(8, 1);   // Address size.
-    writer.Offset(0, 4);  // Abbreviation offset.
-  } else {
-    writer.Offset(0, 4);
-    writer.Fixed(8, 1);
-  }
+  FX_CHECK(!finished_);
+  DwarfSectionBuilder writer(info_, endian_);
+  auto length = writer.BeginUnit({.version = version});
   if (line_offset) {
-    writer.Uleb(1);  // The compile unit abbreviation.
+    writer.Uleb(kUnitWithLineTable);
     writer.Offset(*line_offset, 4);
   } else {
-    writer.Uleb(3);  // The compile unit abbreviation without DW_AT_stmt_list.
+    writer.Uleb(kUnitWithoutLineTable);
   }
   writer.Offset(kStrOffsetsBase, 4);
   for (uint64_t decl_file : decl_files) {
-    writer.Uleb(2);  // The subprogram abbreviation.
+    writer.Uleb(kSubprogram);
     writer.Uleb(decl_file);
   }
   writer.Uleb(0);  // End of the children.
+  writer.EndUnit(length);
+}
+
+void LineTableTestSections::Finish() {
+  FX_CHECK(!finished_);
+  finished_ = true;
+  if (!info_.empty()) {
+    DwarfSectionBuilder table(abbrev_, endian_);
+    constexpr AbbrevTable::AttributeSpec kStrBase{static_cast<uint64_t>(DwarfAttr::kStrOffsetsBase),
+                                                  static_cast<uint64_t>(DwarfForm::kSecOffset)};
+    constexpr AbbrevTable::AttributeSpec kUnitAttrs[] = {
+        {static_cast<uint64_t>(DwarfAttr::kStmtList), static_cast<uint64_t>(DwarfForm::kSecOffset)},
+        kStrBase};
+    constexpr AbbrevTable::AttributeSpec kFile[] = {
+        {static_cast<uint64_t>(DwarfAttr::kDeclFile), static_cast<uint64_t>(DwarfForm::kUdata)}};
+    table.AbbrevDeclaration(kUnitWithLineTable, static_cast<uint64_t>(DwarfTag::kCompileUnit), true,
+                            kUnitAttrs);
+    table.AbbrevDeclaration(kUnitWithoutLineTable, static_cast<uint64_t>(DwarfTag::kCompileUnit),
+                            true, std::span(&kStrBase, 1));
+    table.AbbrevDeclaration(kSubprogram, static_cast<uint64_t>(DwarfTag::kSubprogram), false,
+                            kFile);
+    table.EndAbbrevTable();
+  }
+
+  DwarfSectionBuilder writer(str_offsets_, endian_);
+  auto length = writer.BeginInitialLength(4);
+  writer.Fixed(5, 2);  // Version.
+  writer.Fixed(0, 2);  // Padding.
+  for (const std::string& str : indexed_strings_)
+    writer.Offset(str_.AddString(str), 4);
   writer.EndInitialLength(length);
 }
 
-void LineTableTestSections::Finish(Endian endian, uint8_t address_size) {
-  FX_CHECK(!context_);
-  endian_ = endian;
-
-  auto make_buffer = [](std::span<const uint8_t> data, const char* name) {
-    return llvm::MemoryBuffer::getMemBufferCopy(AsStringView(data), name);
-  };
-  // Abbreviations for AddCompileUnit().
-  std::vector<uint8_t> abbrev = {
-      1,    0x11,
-      1,           // 1: DW_TAG_compile_unit with children.
-      0x10, 0x17,  // DW_AT_stmt_list, DW_FORM_sec_offset.
-      0x72, 0x17,  // DW_AT_str_offsets_base, DW_FORM_sec_offset.
-      0,    0,     //
-      2,    0x2e,
-      0,  // 2: DW_TAG_subprogram without children.
-      0x3a, FormByte(DwarfForm::kUdata),
-      0,    0,  // DW_AT_decl_file.
-      3,    0x11,
-      1,  // 3: DW_TAG_compile_unit without DW_AT_stmt_list.
-      0x72, 0x17,
-      0,    0,  // DW_AT_str_offsets_base, DW_FORM_sec_offset.
-      0,
-  };
-
-  // A DWARF 5 string offsets table for the kStrx1 strings.
-  AppendInteger(str_offsets_, 4 + 4 * indexed_strings_.size(), 4, Endian::kLittle);
-  AppendInteger(str_offsets_, 5, 2, Endian::kLittle);  // Version.
-  AppendInteger(str_offsets_, 0, 2, Endian::kLittle);  // Padding.
-  for (const std::string& str : indexed_strings_)
-    AppendInteger(str_offsets_, str_.AddString(str), 4, Endian::kLittle);
-
-  buffers_["debug_line"] = make_buffer(line_, "debug_line");
-  buffers_["debug_info"] = make_buffer(info_, "debug_info");
-  buffers_["debug_abbrev"] = make_buffer(abbrev, "debug_abbrev");
-  buffers_["debug_str_offsets"] = make_buffer(str_offsets_, "debug_str_offsets");
-  buffers_["debug_line_str"] = make_buffer(line_str_.bytes(), "debug_line_str");
-  buffers_["debug_str"] = make_buffer(str_.bytes(), "debug_str");
-  context_ = llvm::DWARFContext::create(buffers_, address_size, endian == Endian::kLittle,
-                                        IgnoreError, IgnoreError);
-}
-
 DwarfSections LineTableTestSections::sections() const {
+  FX_CHECK(finished_);
   DwarfSections result;
   result.info = info_;
-  result.abbrev = AsBytes(buffers_.find("debug_abbrev")->second->getBuffer());
+  result.abbrev = abbrev_;
   result.str = str_.bytes();
   result.str_offsets = str_offsets_;
   result.line = line_;

@@ -13,12 +13,9 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/variable_location.h"
 
-namespace llvm {
-class DWARFUnit;
-}  // namespace llvm
-
 namespace zxdb {
 
+class DwarfDie;
 struct FormValue;
 
 // Decodes the variable location contained in the given form value. It's assumed the form value
@@ -28,9 +25,9 @@ struct FormValue;
 // VariableLocation.
 //
 // On error this will return an empty VariableLocation.
-VariableLocation DecodeVariableLocation(const DwarfSections& sections, llvm::DWARFUnit* unit,
+VariableLocation DecodeVariableLocation(const DwarfBinary& binary, const DwarfDie& die,
                                         const FormValue& form, const UncachedLazySymbol& source,
-                                        const DwarfBinary* binary, UnitContextSource skeleton = {});
+                                        UnitContextSource skeleton = {});
 
 // Low-level decode for a DWARF 4 variable location description. The data should start at the
 // beginning of the location list to parse, and cover as much data as the location list could

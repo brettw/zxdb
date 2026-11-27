@@ -87,8 +87,8 @@ VariableLocation DwarfSymbolFactory::DecodeLocation(const DwarfDie& die,
                                                     const FormValue& form) const {
   if (!binary_ || !die.belongs_to(*binary_))
     return {};
-  return DecodeVariableLocation(binary_->GetSections(), binary_->GetLLVMUnit(die.unit_index()),
-                                form, MakeUncachedLazy(die), binary_.get(), GetSkeletonUnit());
+  return DecodeVariableLocation(*binary_.get(), die, form, MakeUncachedLazy(die),
+                                GetSkeletonUnit());
 }
 
 DwarfSymbolFactory::ArraySubrange DwarfSymbolFactory::ReadArraySubrange(
@@ -254,7 +254,7 @@ UnitContextSource DwarfSymbolFactory::GetSkeletonUnit() const {
     if (CompileUnit* skeleton = delegate_->GetSkeletonCompileUnit()) {
       auto* unit = skeleton->dwarf_unit();
       if (auto* binary = unit->GetBinary())
-        return {binary->GetLLVMUnit(unit->GetUnitIndex()), binary};
+        return {binary, unit->GetUnitIndex()};
     }
   }
   return {};

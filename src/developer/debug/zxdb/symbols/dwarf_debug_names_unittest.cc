@@ -117,7 +117,7 @@ TEST(DwarfDebugNamesTest, LookupBuiltBinary) {
   std::string long_symbol_prefix =
       std::string(TestSymbolModule::kMyFunctionName) + std::string(4096, 'x');
   EXPECT_TRUE(FindDebugNamesPrefixEntries(*debug_names, long_symbol_prefix).empty());
-  ASSERT_TRUE(module->binary()->GetLLVMContext());
+  ASSERT_FALSE(module->binary()->GetSections().str.empty());
   size_t str_sec_size = module->binary()->GetSections().str.size();
   std::string oversized_prefix(str_sec_size + 1024, 'M');
   EXPECT_TRUE(FindDebugNamesPrefixEntries(*debug_names, oversized_prefix).empty());

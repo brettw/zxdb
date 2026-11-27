@@ -49,7 +49,6 @@ add_library(zxdb_symbols STATIC
   line_details.cc
   line_file_table.cc
   line_program.cc
-  line_program_llvm.cc
   line_table.cc
   line_table_cache.cc
   loaded_module_symbols.cc
@@ -80,8 +79,3 @@ add_library(zxdb_symbols STATIC
   visit_scopes.cc
 )
 target_link_libraries(zxdb_symbols PUBLIC zxdb_common zxdb_dwarf debug_ipc elflib llvm_host rapidjson)
-# LLVM 19's ScopedPrinter header destroys an incomplete unique_ptr in a
-# default argument under C++23. This translation unit needs only C++20.
-if(LLVM_VERSION_MAJOR EQUAL 19)
-  set_source_files_properties(dwarf_binary_impl.cc PROPERTIES COMPILE_OPTIONS -std=c++20)
-endif()

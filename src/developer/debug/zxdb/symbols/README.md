@@ -101,8 +101,8 @@ Public headers expose these symbol classes, factories, and evaluators:
   a line table header and decodes its program without LLVM's line table
   parser. Its header remains immutable. Decode and scan results carry status,
   output, and program-defined files. `LineFileEntries` views the effective
-  file entries without copying the header. `line_program_llvm.h` contains
-  the adapter functions that must run on the LLVM context thread.
+  file entries without copying the header. `DwarfBinary::GetLineProgramSource()`
+  collects the section views and offset on the thread that owns the binary.
   `LineTable::SequenceView` separates ordinary rows from the end marker.
   `StatementSelection` and `LineExtentMode` name the lookup policies.
   `zxdb::SourceFileIndexer` (`source_file_indexer.h`) finds the source files
@@ -144,7 +144,7 @@ Callers and implementations must preserve these invariants:
   an invalid sentinel. Use `std::optional<uint64_t>` and guard accessors with
   `DCHECK(is_valid())`.
 - `DwarfSymbolFactory` handles `DwarfTag::kTypeUnit` alongside
-  `DwarfTag::kCompileUnit` so child DIEs can reach `llvm::DWARFUnit` via
+  `DwarfTag::kCompileUnit` so child DIEs can reach their `DwarfUnit` via
   `CompileUnit`.
 - `DwarfBinaryImpl` reads unit headers from `DwarfSections`. Its unit lists
   put info units before types units for both normal and DWO sections. DIE
@@ -177,7 +177,7 @@ Callers and implementations must preserve these invariants:
   `UnitContext` reads root DIE metadata for string offsets, indexed addresses,
   location lists, range lists, compilation directories, and line table
   offsets. LLVM supplies split package contributions and skeleton links.
-- Each binary caches immutable unit contexts by LLVM unit identity. A split
+- Each binary caches immutable unit contexts by the address of the native unit header. A split
   unit also uses its skeleton identity when it has one. The split unit gets
   the skeleton context from the skeleton binary's cache when possible. The
   skeleton binary keeps its section bytes alive for the split binary.
@@ -267,6 +267,16 @@ Using `zxdb/symbols` produces these disk, cache, and IPC side effects:
   register and memory reads and writes against the target process.
 
 ## Verification
+
+Byte fixtures pass `DwarfSections` to `DwarfBinaryImpl`. Keep the buffers
+alive until the binary and its readers are finished. These tests use the
+same DIE tables, abbreviation cache, unit contexts, and line parser as the
+debugger. Expected values come from the encoded bytes or the DWARF standard.
+
+File fixtures use `DwarfBinaryImpl::Load()`, which uses LLVM to open the
+object and supply its sections. Split-unit tests use this path for skeleton
+links and package contributions. A test can read raw DIEs in split sections
+from memory when it needs only the DIE tree and its encoded attributes.
 
 Run these commands to build and test `zxdb/symbols`:
 

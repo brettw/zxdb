@@ -7,12 +7,11 @@
 #include <limits>
 #include <span>
 
-#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/common/checked_math.h"
 #include "src/developer/debug/zxdb/common/data_extractor.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/form_value.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 
 namespace zxdb {
 
@@ -130,9 +129,9 @@ VariableLocation DecodeDwarf5LocationReference(const UnitContext& context, const
 
 }  // namespace
 
-VariableLocation DecodeVariableLocation(const DwarfSections& sections, llvm::DWARFUnit* unit,
+VariableLocation DecodeVariableLocation(const DwarfBinary& binary, const DwarfDie& die,
                                         const FormValue& form, const UncachedLazySymbol& source,
-                                        const DwarfBinary* binary, UnitContextSource skeleton) {
+                                        UnitContextSource skeleton) {
   if (form.form_class == FormValue::Class::kBlock ||
       form.form_class == FormValue::Class::kExprloc) {
     // These forms are both a block of data which is interpreted as a DWARF expression. There is no
@@ -142,14 +141,12 @@ VariableLocation DecodeVariableLocation(const DwarfSections& sections, llvm::DWA
     return VariableLocation(DwarfExpr(std::vector<uint8_t>(block.begin(), block.end()), source));
   }
 
-  if (!unit)
-    return {};
-  auto context = GetUnitContext(*unit, binary, skeleton, &sections);
+  auto context = binary.GetUnitContext(die, skeleton);
   if (!context)
-    return VariableLocation();
-  if (unit->getVersion() < 5)
-    return DecodeDwarf4LocationReference(sections, *context.value(), unit->getVersion(), form,
-                                         source);
+    return {};
+  if (die.unit_header().version < 5)
+    return DecodeDwarf4LocationReference(binary.GetSections(), *context.value(),
+                                         die.unit_header().version, form, source);
   return DecodeDwarf5LocationReference(*context.value(), form, source);
 }
 

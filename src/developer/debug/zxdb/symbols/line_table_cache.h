@@ -14,18 +14,13 @@
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_table.h"
 
-namespace llvm {
-class DWARFUnit;
-}  // namespace llvm
-
 namespace zxdb {
 
-class DwarfBinary;
 class LineProgram;
-struct DwarfSections;
+struct LineProgramSource;
 
 // Caches the file tables of the line tables of one binary, so that each file table is resolved
-// once. Use it only on the thread that owns the binary's DWARFContext.
+// once. Use it on the thread that owns the binary.
 //
 // The header of a line table has most file entries. A DW_LNE_define_file opcode in the program can
 // add more. Decoding the program is much slower than parsing the header, so the cache first keeps
@@ -35,19 +30,17 @@ struct DwarfSections;
 class LineTableCache {
  public:
   // Returns a file table of the unit's line table that has the given file index if the table has
-  // that index at all. Returns null if the unit has no line table or its header can't be parsed.
+  // that index at all. Returns null if its header can't be parsed.
   // Each result is an immutable snapshot. A later request can replace the cached snapshot with
   // one that includes program-defined files; earlier results remain valid.
-  std::shared_ptr<const LineFileTable> GetFileTable(const DwarfSections& sections,
-                                                    llvm::DWARFUnit& unit, uint64_t file_index,
-                                                    const DwarfBinary* binary);
+  std::shared_ptr<const LineFileTable> GetFileTable(const LineProgramSource& source,
+                                                    uint64_t file_index);
 
   // Decodes the whole line table of the unit. The result uses the cached file table. Returns an
-  // empty table if the unit has no line table or its header can't be parsed. first_code_address is
+  // empty table if its header can't be parsed. first_code_address is
   // the lowest address of a code section of the binary, which finds the stripped sequences (see
   // LineTable).
-  LineTable DecodeLineTable(const DwarfSections& sections, llvm::DWARFUnit& unit,
-                            uint64_t first_code_address, const DwarfBinary* binary);
+  LineTable DecodeLineTable(const LineProgramSource& source, uint64_t first_code_address);
 
   void Clear() { entries_.clear(); }
 

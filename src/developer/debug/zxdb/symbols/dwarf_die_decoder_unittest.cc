@@ -4,14 +4,8 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 
-#include <functional>
-
 #include <gtest/gtest.h>
 
-#include "llvm/ADT/StringMap.h"
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
-#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
-#include "llvm/Support/MemoryBuffer.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
@@ -23,11 +17,6 @@
 namespace zxdb {
 
 namespace {
-
-std::unique_ptr<llvm::MemoryBuffer> MakeBuffer(std::span<const uint8_t> data,
-                                               const char* name = "") {
-  return llvm::MemoryBuffer::getMemBufferCopy(llvm::StringRef(AsStringView(data)), name);
-}
 
 // Abbreviation codes of the test unit.
 enum Abbrev : uint8_t {
@@ -93,10 +82,7 @@ class DwarfDieDecoderTest : public testing::Test {
     WriteAbbrevs();
     WriteInfo();
 
-    buffers_["debug_info"] = MakeBuffer(info_, "debug_info");
-    buffers_["debug_abbrev"] = MakeBuffer(abbrev_, "debug_abbrev");
-    buffers_["debug_addr"] = MakeBuffer(addr_, "debug_addr");
-    binary_.emplace(llvm::DWARFContext::create(buffers_, 8, true));
+    binary_.emplace(DwarfSections{.info = info_, .abbrev = abbrev_, .addr = addr_});
   }
 
   DwarfBinaryImpl& binary() { return *binary_; }
@@ -146,28 +132,15 @@ class DwarfDieDecoderTest : public testing::Test {
   static constexpr unsigned kAfterCorruptUnit = 4;
 
  private:
-  static void AppendString(std::vector<uint8_t>& out, const std::string& str) {
-    out.insert(out.end(), str.begin(), str.end());
-    out.push_back(0);
-  }
-
   void AddAbbrev(uint8_t code, DwarfTag tag, bool has_children,
                  const std::vector<std::pair<DwarfAttr, DwarfForm>>& specs,
                  std::optional<int64_t> implicit_const = std::nullopt) {
-    AppendUleb(abbrev_, code);
-    AppendUleb(abbrev_, static_cast<uint64_t>(tag));
-    abbrev_.push_back(has_children ? 1 : 0);
-    for (const auto& [attr, form] : specs) {
-      AppendUleb(abbrev_, static_cast<uint64_t>(attr));
-      AppendUleb(abbrev_, form);
-      if (form == DwarfForm::kImplicitConst) {
-        // The test values are small positive numbers, so the SLEB128 encoding is one byte.
-        FX_CHECK(implicit_const && *implicit_const >= 0 && *implicit_const < 64);
-        abbrev_.push_back(static_cast<uint8_t>(*implicit_const));
-      }
-    }
-    abbrev_.push_back(0);
-    abbrev_.push_back(0);
+    std::vector<AbbrevTable::AttributeSpec> attrs;
+    for (const auto& [attr, form] : specs)
+      attrs.push_back({static_cast<uint64_t>(attr), static_cast<uint64_t>(form),
+                       form == DwarfForm::kImplicitConst ? implicit_const : std::nullopt});
+    DwarfSectionBuilder(abbrev_, Endian::kLittle)
+        .AbbrevDeclaration(code, static_cast<uint64_t>(tag), has_children, attrs);
   }
 
   void WriteAbbrevs() {
@@ -251,117 +224,112 @@ class DwarfDieDecoderTest : public testing::Test {
   uint64_t NextOffset() const { return info_.size(); }
 
   void WriteInfo() {
-    AppendInteger(info_, 0, 4, Endian::kLittle);  // Unit length, set below.
-    AppendInteger(info_, 5, 2, Endian::kLittle);  // Version.
-    info_.push_back(kUnitTypeCompile);
-    info_.push_back(8);                           // Address size.
-    AppendInteger(info_, 0, 4, Endian::kLittle);  // Abbreviation offset.
+    auto unit = writer_.BeginUnit({});
 
     unit_offset_ = NextOffset();
-    AppendUleb(info_, kCompileUnitAbbrev);
-    AppendString(info_, "unit");
+    writer_.Uleb(kCompileUnitAbbrev);
+    writer_.CString("unit");
 
     namespace_offset_ = NextOffset();
-    AppendUleb(info_, kNamespaceAbbrev);
-    AppendString(info_, "ns");
+    writer_.Uleb(kNamespaceAbbrev);
+    writer_.CString("ns");
 
     origin_offset_ = NextOffset();
-    AppendUleb(info_, kOriginAbbrev);
-    AppendString(info_, "Func");
+    writer_.Uleb(kOriginAbbrev);
+    writer_.CString("Func");
     info_.push_back(10);  // DW_AT_decl_line.
 
     info_.push_back(0);  // End of the namespace children.
 
     concrete_offset_ = NextOffset();
-    AppendUleb(info_, kConcreteAbbrev);
-    AppendInteger(info_, origin_offset_, 4, Endian::kLittle);
-    info_.push_back(20);                               // DW_AT_decl_line overrides the origin.
-    AppendInteger(info_, 0x1000, 8, Endian::kLittle);  // DW_AT_low_pc.
-    AppendInteger(info_, 0x20, 4, Endian::kLittle);    // DW_AT_high_pc.
+    writer_.Uleb(kConcreteAbbrev);
+    writer_.Fixed(origin_offset_, 4);
+    info_.push_back(20);       // DW_AT_decl_line overrides the origin.
+    writer_.Fixed(0x1000, 8);  // DW_AT_low_pc.
+    writer_.Fixed(0x20, 4);    // DW_AT_high_pc.
 
     forms_offset_ = NextOffset();
-    AppendUleb(info_, kFormsAbbrev);
-    info_.push_back(0);     // DW_AT_declaration is false.
-    info_.push_back(1);     // DW_AT_artificial is true.
-    info_.push_back(0x7b);  // DW_AT_const_value is -5 in SLEB128.
-    AppendUleb(info_, 2);   // DW_AT_location length.
+    writer_.Uleb(kFormsAbbrev);
+    info_.push_back(0);  // DW_AT_declaration is false.
+    info_.push_back(1);  // DW_AT_artificial is true.
+    writer_.Sleb(-5);    // DW_AT_const_value.
+    writer_.Uleb(2);     // DW_AT_location length.
     info_.push_back(DwarfOp::kReg0 + 3);
     info_.push_back(DwarfOp::kStackValue);
-    AppendInteger(info_, 0, 4, Endian::kLittle);  // DW_AT_addr_base is offset 0, which is valid.
-    AppendInteger(info_, namespace_offset_, 4, Endian::kLittle);  // DW_AT_type.
+    writer_.Fixed(0, 4);                  // DW_AT_addr_base is offset 0, which is valid.
+    writer_.Fixed(namespace_offset_, 4);  // DW_AT_type.
 
     other_forms_offset_ = NextOffset();
-    AppendUleb(info_, kOtherFormsAbbrev);
-    AppendUleb(info_, 9);                              // DW_AT_const_value.
-    AppendInteger(info_, 0x2000, 8, Endian::kLittle);  // DW_AT_high_pc.
-    info_.push_back(1);                                // DW_AT_location length.
+    writer_.Uleb(kOtherFormsAbbrev);
+    writer_.Uleb(9);           // DW_AT_const_value.
+    writer_.Fixed(0x2000, 8);  // DW_AT_high_pc.
+    info_.push_back(1);        // DW_AT_location length.
     info_.push_back(DwarfOp::kReg0 + 5);
 
     cycle_offset_ = NextOffset();
-    AppendUleb(info_, kCycleAbbrev);
-    AppendInteger(info_, cycle_offset_, 4, Endian::kLittle);
-    AppendString(info_, "cycle");
+    writer_.Uleb(kCycleAbbrev);
+    writer_.Fixed(cycle_offset_, 4);
+    writer_.CString("cycle");
 
     duplicate_offset_ = NextOffset();
-    AppendUleb(info_, kDuplicateAbbrev);
-    AppendString(info_, "first");
-    AppendString(info_, "second");
+    writer_.Uleb(kDuplicateAbbrev);
+    writer_.CString("first");
+    writer_.CString("second");
 
     class_offset_ = NextOffset();
-    AppendUleb(info_, kClassAbbrev);
-    AppendString(info_, "Class");
+    writer_.Uleb(kClassAbbrev);
+    writer_.CString("Class");
 
     decl_offset_ = NextOffset();
-    AppendUleb(info_, kDeclAbbrev);
-    AppendString(info_, "Method");
-    info_.push_back(30);  // DW_AT_decl_line.
-    AppendInteger(info_, class_offset_, 4,
-                  Endian::kLittle);  // DW_AT_sibling. Its value isn't used.
+    writer_.Uleb(kDeclAbbrev);
+    writer_.CString("Method");
+    info_.push_back(30);              // DW_AT_decl_line.
+    writer_.Fixed(class_offset_, 4);  // DW_AT_sibling. Its value isn't used.
 
     info_.push_back(0);  // End of the class children.
 
     spec_abstract_offset_ = NextOffset();
-    AppendUleb(info_, kSpecAbstractAbbrev);
-    AppendInteger(info_, decl_offset_, 4, Endian::kLittle);
+    writer_.Uleb(kSpecAbstractAbbrev);
+    writer_.Fixed(decl_offset_, 4);
     info_.push_back(31);  // DW_AT_decl_line overrides the declaration.
 
     spec_concrete_offset_ = NextOffset();
-    AppendUleb(info_, kSpecConcreteAbbrev);
-    AppendInteger(info_, spec_abstract_offset_, 4, Endian::kLittle);
-    AppendInteger(info_, 0x3000, 8, Endian::kLittle);  // DW_AT_low_pc.
+    writer_.Uleb(kSpecConcreteAbbrev);
+    writer_.Fixed(spec_abstract_offset_, 4);
+    writer_.Fixed(0x3000, 8);  // DW_AT_low_pc.
 
     origin_target_offset_ = NextOffset();
-    AppendUleb(info_, kNameLineAbbrev);
-    AppendString(info_, "origin_name");
+    writer_.Uleb(kNameLineAbbrev);
+    writer_.CString("origin_name");
     info_.push_back(50);
 
     spec_target_offset_ = NextOffset();
-    AppendUleb(info_, kNameLineAbbrev);
-    AppendString(info_, "spec_name");
+    writer_.Uleb(kNameLineAbbrev);
+    writer_.CString("spec_name");
     info_.push_back(60);
 
     // The specification comes first in the DIE, but the abstract origin wins.
     both_links_offset_ = NextOffset();
-    AppendUleb(info_, kBothLinksAbbrev);
-    AppendInteger(info_, spec_target_offset_, 4, Endian::kLittle);
-    AppendInteger(info_, origin_target_offset_, 4, Endian::kLittle);
+    writer_.Uleb(kBothLinksAbbrev);
+    writer_.Fixed(spec_target_offset_, 4);
+    writer_.Fixed(origin_target_offset_, 4);
 
     // cycle_a references cycle_b, which comes after it.
     cycle_a_offset_ = NextOffset();
-    AppendUleb(info_, kSpecCycleAbbrev);
+    writer_.Uleb(kSpecCycleAbbrev);
     size_t cycle_b_ref = info_.size();
-    AppendInteger(info_, 0, 4, Endian::kLittle);  // Set below.
-    AppendString(info_, "cycle_a");
+    writer_.Fixed(0, 4);  // Set below.
+    writer_.CString("cycle_a");
 
     cycle_b_offset_ = NextOffset();
-    AppendUleb(info_, kOriginCycleAbbrev);
-    AppendInteger(info_, cycle_a_offset_, 4, Endian::kLittle);
+    writer_.Uleb(kOriginCycleAbbrev);
+    writer_.Fixed(cycle_a_offset_, 4);
     info_.push_back(70);
     for (size_t i = 0; i < 4; i++)
       info_[cycle_b_ref + i] = static_cast<uint8_t>(cycle_b_offset_ >> (i * 8));
 
     constants_offset_ = NextOffset();
-    AppendUleb(info_, kConstantsAbbrev);
+    writer_.Uleb(kConstantsAbbrev);
     info_.push_back(7);                   // DW_AT_const_value is 7 in SLEB128.
     info_.push_back(0xff);                // DW_AT_byte_size.
     info_.insert(info_.end(), 16, 0x11);  // DW_AT_bit_size, 16 bytes.
@@ -369,83 +337,65 @@ class DwarfDieDecoderTest : public testing::Test {
 
     info_.push_back(0);  // End of the unit children.
 
-    uint64_t unit_length = info_.size() - 4;
-    for (size_t i = 0; i < 4; i++)
-      info_[i] = static_cast<uint8_t>(unit_length >> (i * 8));
+    writer_.EndUnit(unit);
 
     WriteAddressUnits();
     WriteCorruptUnit();
   }
 
-  // Writes a DWARF 5 unit header and returns the offset of the unit.
-  size_t BeginUnit() {
-    size_t start = info_.size();
-    AppendInteger(info_, 0, 4, Endian::kLittle);  // Unit length, set by EndUnit().
-    AppendInteger(info_, 5, 2, Endian::kLittle);
-    info_.push_back(kUnitTypeCompile);
-    info_.push_back(8);
-    AppendInteger(info_, 0, 4, Endian::kLittle);
-    return start;
-  }
-
-  void EndUnit(size_t start) {
-    uint64_t unit_length = info_.size() - start - 4;
-    for (size_t i = 0; i < 4; i++)
-      info_[start + i] = static_cast<uint8_t>(unit_length >> (i * 8));
-  }
-
   void WriteAddressUnits() {
-    // The address table.
-    AppendInteger(addr_, 4 + 8 * std::size(kTableAddresses), 4, Endian::kLittle);  // Unit length.
-    AppendInteger(addr_, 5, 2, Endian::kLittle);                                   // Version.
-    addr_.push_back(8);                                                            // Address size.
-    addr_.push_back(0);  // Segment selector size.
+    DwarfSectionBuilder addresses(addr_, Endian::kLittle);
+    auto length = addresses.BeginInitialLength(4);
+    addresses.Fixed(5, 2);  // Version.
+    addresses.Fixed(8, 1);  // Address size.
+    addresses.Fixed(0, 1);  // Segment selector size.
     for (uint64_t address : kTableAddresses)
-      AppendInteger(addr_, address, 8, Endian::kLittle);
+      addresses.Address(address, 8);
+    addresses.EndInitialLength(length);
 
-    size_t skeleton = BeginUnit();
-    AppendUleb(info_, kSkeletonUnitAbbrev);
-    AppendString(info_, "skeleton");
-    AppendInteger(info_, kAddrBase, 4, Endian::kLittle);
-    EndUnit(skeleton);
+    auto skeleton = writer_.BeginUnit({});
+    writer_.Uleb(kSkeletonUnitAbbrev);
+    writer_.CString("skeleton");
+    writer_.Fixed(kAddrBase, 4);
+    writer_.EndUnit(skeleton);
 
-    size_t dwo = BeginUnit();
-    AppendUleb(info_, kCompileUnitAbbrev);
-    AppendString(info_, "dwo");
+    auto dwo = writer_.BeginUnit({});
+    writer_.Uleb(kCompileUnitAbbrev);
+    writer_.CString("dwo");
     addresses_offset_ = NextOffset();
-    AppendUleb(info_, kAddressesAbbrev);
-    info_.push_back(1);                              // DW_AT_low_pc is entry 1.
-    AppendUleb(info_, 0);                            // DW_AT_high_pc is entry 0...
-    AppendInteger(info_, 0x10, 4, Endian::kLittle);  // ...plus 0x10.
-    AppendUleb(info_, 2);                            // DW_AT_entry_pc is the tombstone.
-    AppendInteger(info_, 0xffffffffffffffff, 8, Endian::kLittle);  // DW_AT_call_return_pc too.
-    info_.push_back(0);                                            // End of the unit children.
-    EndUnit(dwo);
+    writer_.Uleb(kAddressesAbbrev);
+    info_.push_back(1);                    // DW_AT_low_pc is entry 1.
+    writer_.Uleb(0);                       // DW_AT_high_pc is entry 0...
+    writer_.Fixed(0x10, 4);                // ...plus 0x10.
+    writer_.Uleb(2);                       // DW_AT_entry_pc is the tombstone.
+    writer_.Fixed(0xffffffffffffffff, 8);  // DW_AT_call_return_pc too.
+    info_.push_back(0);                    // End of the unit children.
+    writer_.EndUnit(dwo);
   }
 
   void WriteCorruptUnit() {
-    // The block has one byte in this unit and overlaps the next unit's header. LLVM keeps the DIE
-    // because it doesn't bound the block payload.
-    size_t corrupt = BeginUnit();
-    AppendUleb(info_, kCompileUnitAbbrev);
-    AppendString(info_, "corrupt");
+    // The block's second byte would overlap the next unit's header.
+    auto corrupt = writer_.BeginUnit({});
+    writer_.Uleb(kCompileUnitAbbrev);
+    writer_.CString("corrupt");
     corrupt_offset_ = NextOffset();
-    AppendUleb(info_, kCorruptAbbrev);
-    AppendString(info_, "var");
+    writer_.Uleb(kCorruptAbbrev);
+    writer_.CString("var");
     info_.push_back(2);  // DW_AT_location length.
     info_.push_back(DwarfOp::kReg0);
-    EndUnit(corrupt);
+    writer_.EndUnit(corrupt);
 
-    size_t after = BeginUnit();
-    AppendUleb(info_, kCompileUnitAbbrev);
-    AppendString(info_, "after corrupt");
+    auto after = writer_.BeginUnit({});
+    writer_.Uleb(kCompileUnitAbbrev);
+    writer_.CString("after corrupt");
     info_.push_back(0);  // End of the unit children.
-    EndUnit(after);
+    writer_.EndUnit(after);
   }
 
   std::vector<uint8_t> abbrev_;
   std::vector<uint8_t> info_;
   std::vector<uint8_t> addr_;
+  DwarfSectionBuilder writer_{info_, Endian::kLittle};
 
   uint64_t unit_offset_ = 0;
   uint64_t namespace_offset_ = 0;
@@ -468,8 +418,6 @@ class DwarfDieDecoderTest : public testing::Test {
   uint64_t addresses_offset_ = 0;
   uint64_t corrupt_offset_ = 0;
 
-  // The context references these buffers, so they must outlive it.
-  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers_;
   std::optional<DwarfBinaryImpl> binary_;
 };
 
@@ -485,31 +433,21 @@ TEST(DwarfDieDecoder, RefAddrInDwo) {
 
   // Writes a DWARF 4 unit with one variable. Returns the offset of the variable.
   std::vector<uint8_t> info;
-  auto write_unit = [&info](uint8_t variable_abbrev, const std::function<void()>& write_variable) {
-    size_t start = info.size();
-    AppendInteger(info, 0, 4, Endian::kLittle);  // Unit length, set below.
-    AppendInteger(info, 4, 2, Endian::kLittle);  // Version.
-    AppendInteger(info, 0, 4, Endian::kLittle);  // Abbreviation offset.
-    info.push_back(8);                           // Address size.
-    AppendUleb(info, 1);
-    info.insert(info.end(), {'u', 0});
+  DwarfSectionBuilder writer(info, Endian::kLittle);
+  auto write_unit = [&](uint8_t variable_abbrev, auto write_variable) {
+    auto unit = writer.BeginUnit({.version = 4});
+    writer.Uleb(1);
+    writer.CString("u");
     uint64_t variable_offset = info.size();
-    AppendUleb(info, variable_abbrev);
+    writer.Uleb(variable_abbrev);
     write_variable();
-    info.push_back(0);  // End of the unit children.
-    uint64_t length = info.size() - start - 4;
-    for (size_t i = 0; i < 4; i++)
-      info[start + i] = static_cast<uint8_t>(length >> (i * 8));
+    writer.Uleb(0);
+    writer.EndUnit(unit);
     return variable_offset;
   };
-  uint64_t target_offset = write_unit(2, [&info]() { info.insert(info.end(), {'t', 0}); });
-  uint64_t source_offset = write_unit(
-      3, [&info, target_offset]() { AppendInteger(info, target_offset, 4, Endian::kLittle); });
-
-  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
-  buffers["debug_info.dwo"] = MakeBuffer(info, "debug_info.dwo");
-  buffers["debug_abbrev.dwo"] = MakeBuffer(abbrev, "debug_abbrev.dwo");
-  DwarfBinaryImpl binary(llvm::DWARFContext::create(buffers, 8, true));
+  uint64_t target_offset = write_unit(2, [&] { writer.CString("t"); });
+  uint64_t source_offset = write_unit(3, [&] { writer.Offset(target_offset, 4); });
+  DwarfBinaryImpl binary(DwarfSections{.info_dwo = info, .abbrev_dwo = abbrev});
 
   ASSERT_EQ(2u, binary.GetDWOUnitCount());
   DwarfDie source = binary.GetDieAtOffset(DwarfDieRef::Main(source_offset), true);
@@ -546,11 +484,7 @@ TEST(DwarfDieDecoder, SupplementaryStrings) {
                                      attrs);
     abbrev_builder.EndAbbrevTable();
 
-    llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
-    buffers["debug_abbrev"] = MakeBuffer(abbrev);
-    buffers["debug_info"] = MakeBuffer(info);
-    buffers["debug_str"] = MakeBuffer(strings.bytes());
-    DwarfBinaryImpl binary(llvm::DWARFContext::create(buffers, 8, true));
+    DwarfBinaryImpl binary(DwarfSections{.info = info, .abbrev = abbrev, .str = strings.bytes()});
 
     static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName};
     DwarfDieDecoder decoder(binary, kAttrs);
@@ -585,10 +519,7 @@ TEST(DwarfDieDecoder, IndirectConstantAndFullWidthAttribute) {
   info_builder.CString("name");
   info_builder.EndUnit(unit);
 
-  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
-  buffers["debug_abbrev"] = MakeBuffer(abbrev);
-  buffers["debug_info"] = MakeBuffer(info);
-  DwarfBinaryImpl binary(llvm::DWARFContext::create(buffers, 8, true));
+  DwarfBinaryImpl binary(DwarfSections{.info = info, .abbrev = abbrev});
 
   auto root = [&] { return binary.GetUnitDieForRef(DwarfDieRef::Main(root_offset), false); };
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName, DwarfAttr::kConstValue};
@@ -899,8 +830,7 @@ TEST_F(DwarfDieDecoderTest, AddressTableUnit) {
   EXPECT_EQ(std::nullopt, own_table.GetAddress(DwarfAttr::kLowPc));
 
   // With the address table of the skeleton unit, the indices resolve.
-  DwarfDieDecoder decoder(binary(), kAttrs,
-                          {binary().GetLLVMUnit(UnitIndex(false, kSkeletonUnit))});
+  DwarfDieDecoder decoder(binary(), kAttrs, {&binary(), UnitIndex(false, kSkeletonUnit)});
   ASSERT_TRUE(decoder.Decode(die));
   EXPECT_EQ(0x6000u, decoder.GetAddress(DwarfAttr::kLowPc));
 

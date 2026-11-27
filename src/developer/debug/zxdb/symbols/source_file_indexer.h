@@ -21,10 +21,6 @@
 #include "src/developer/debug/zxdb/symbols/line_program.h"
 #include "src/developer/debug/zxdb/symbols/unit_index.h"
 
-namespace llvm {
-class DWARFUnit;
-}
-
 namespace zxdb {
 
 class DwarfBinary;
@@ -41,15 +37,10 @@ class DwarfBinary;
 // The location of the line table of one unit.
 struct LineTableJob {
   UnitIndex unit_index;
-  std::string_view section;  // The line section data.
-  uint64_t offset = 0;
-  Endian endian = Endian::kLittle;
+  LineProgramSource source;
 
   // Bytes of the line table, used to decide how many threads to start.
   uint64_t size = 0;
-
-  // The string sections of the unit, for the names in the line table.
-  LineStringSections strings;
 
   // The lowest address of a code section of the binary. Sequences that start below it are for
   // removed code, and their files aren't indexed. See IsStrippedSequenceStart().
@@ -58,9 +49,8 @@ struct LineTableJob {
 
 // Adds a job for the unit's line table, if it has one. Call it on the thread that owns the
 // context. first_code_address is DwarfBinary::GetFirstCodeAddress().
-void AddLineTableJob(const DwarfSections& sections, UnitIndex unit_index, llvm::DWARFUnit& unit,
-                     uint64_t first_code_address, std::vector<LineTableJob>* jobs,
-                     const DwarfBinary* binary);
+void AddLineTableJob(const DwarfBinary& binary, UnitIndex unit_index, uint64_t first_code_address,
+                     std::vector<LineTableJob>* jobs);
 
 // Finds the line table of every unit of the binary. Call it on the thread that owns the binary's
 // DWARFContext.

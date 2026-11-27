@@ -18,9 +18,6 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/ADT/StringMap.h"
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
-#include "llvm/Support/MemoryBuffer.h"
 #include "src/developer/debug/zxdb/symbols/compile_unit.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
@@ -87,44 +84,46 @@ bool SetDynamicSymbolSize(std::string& elf, std::string_view name, uint64_t size
   return false;
 }
 
+// Wraps DWARF sections in a little-endian ELF file for tests of the object loader.
+std::string MakeElf(
+    std::initializer_list<std::pair<std::string_view, std::span<const uint8_t>>> data) {
+  std::string names("\0.shstrtab\0", 11);
+  std::vector<Elf64_Shdr> sections(1);  // ELF section zero is null.
+  std::string elf(sizeof(Elf64_Ehdr), '\0');
+  for (const auto& [name, bytes] : data) {
+    sections.push_back({.sh_name = static_cast<Elf64_Word>(names.size()),
+                        .sh_type = SHT_PROGBITS,
+                        .sh_offset = elf.size(),
+                        .sh_size = bytes.size()});
+    names.append(name).push_back('\0');
+    elf.append(AsStringView(bytes));
+  }
+  const auto names_index = static_cast<Elf64_Half>(sections.size());
+  sections.push_back(
+      {.sh_name = 1, .sh_type = SHT_STRTAB, .sh_offset = elf.size(), .sh_size = names.size()});
+  elf.append(names);
+  elf.resize((elf.size() + 7) & ~size_t{7});
+  Elf64_Ehdr header = {
+      .e_ident = {ELFMAG0, ELFMAG1, ELFMAG2, ELFMAG3, ELFCLASS64, ELFDATA2LSB, EV_CURRENT},
+      .e_type = ET_REL,
+      .e_machine = EM_X86_64,
+      .e_version = EV_CURRENT,
+      .e_shoff = elf.size(),
+      .e_ehsize = sizeof(Elf64_Ehdr),
+      .e_shentsize = sizeof(Elf64_Shdr),
+      .e_shnum = static_cast<Elf64_Half>(sections.size()),
+      .e_shstrndx = names_index};
+  memcpy(elf.data(), &header, sizeof(header));
+  elf.append(reinterpret_cast<const char*>(sections.data()), sections.size() * sizeof(Elf64_Shdr));
+  return elf;
+}
+
 TEST(DwarfBinaryImpl, RejectsRepeatedDwarfSections) {
   files::ScopedTempDir temp_dir;
   for (std::string_view name : {".debug_types", ".debug_info.dwo", ".debug_line"}) {
     SCOPED_TRACE(name);
-    constexpr std::string_view kStringTablePrefix("\0.shstrtab\0", 11);
-    std::string names(kStringTablePrefix);
-    names.append(name);
-    names.push_back('\0');
-
-    // The file has a null section, a section name table, and two sections with the same name.
-    constexpr uint64_t kNamesOffset = sizeof(Elf64_Ehdr) + 4 * sizeof(Elf64_Shdr);
-    const Elf64_Ehdr header = {
-        .e_ident = {ELFMAG0, ELFMAG1, ELFMAG2, ELFMAG3, ELFCLASS64, ELFDATA2LSB, EV_CURRENT},
-        .e_type = ET_REL,
-        .e_machine = EM_X86_64,
-        .e_version = EV_CURRENT,
-        .e_shoff = sizeof(Elf64_Ehdr),
-        .e_ehsize = sizeof(Elf64_Ehdr),
-        .e_shentsize = sizeof(Elf64_Shdr),
-        .e_shnum = 4,
-        .e_shstrndx = 1,
-    };
-    Elf64_Shdr sections[] = {
-        {},
-        {.sh_name = 1, .sh_type = SHT_STRTAB, .sh_offset = kNamesOffset, .sh_size = names.size()},
-        {.sh_name = kStringTablePrefix.size(),
-         .sh_type = SHT_PROGBITS,
-         .sh_offset = kNamesOffset + names.size(),
-         .sh_size = 1},
-        {.sh_name = kStringTablePrefix.size(),
-         .sh_type = SHT_PROGBITS,
-         .sh_offset = kNamesOffset + names.size() + 1,
-         .sh_size = 1},
-    };
-    std::string elf(reinterpret_cast<const char*>(&header), sizeof(header));
-    elf.append(reinterpret_cast<const char*>(sections), sizeof(sections));
-    elf.append(names).append(2, '\0');
-
+    const uint8_t byte[] = {0};
+    auto elf = MakeElf({{name, byte}, {name, byte}});
     std::string path;
     ASSERT_TRUE(temp_dir.NewTempFileWithData(elf, &path));
     DwarfBinaryImpl binary(path, "", "");
@@ -277,12 +276,8 @@ TEST(DwarfBinaryImpl, SplitTypeSignatureWithOverlappingOffsets) {
   split.Uleb(0);
   split.EndUnit(split_compile);
 
-  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
-  buffers["debug_info"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(info));
-  buffers["debug_info.dwo"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(info_dwo));
-  buffers["debug_abbrev"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(abbrev));
-  buffers["debug_abbrev.dwo"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(abbrev));
-  DwarfBinaryImpl binary(llvm::DWARFContext::create(buffers, 8, true));
+  DwarfBinaryImpl binary(
+      DwarfSections{.info = info, .abbrev = abbrev, .info_dwo = info_dwo, .abbrev_dwo = abbrev});
 
   auto unit = binary.GetUnitAtIndex(UnitIndex(true, 1));
   ASSERT_TRUE(unit);
@@ -329,17 +324,20 @@ TEST(DwarfBinaryImpl, RawPackageDieUsesAbbreviationContribution) {
   index_builder.Fixed(info.size(), 4);
   index_builder.Fixed(abbrev.size() - abbrev_offset, 4);
 
-  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
-  buffers["debug_info.dwo"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(info));
-  buffers["debug_abbrev.dwo"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(abbrev));
-  buffers["debug_cu_index"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(index));
-  DwarfBinaryImpl binary(llvm::DWARFContext::create(buffers, 8, true));
+  files::ScopedTempDir temp_dir;
+  std::string path;
+  ASSERT_TRUE(temp_dir.NewTempFileWithData(
+      MakeElf(
+          {{".debug_info.dwo", info}, {".debug_abbrev.dwo", abbrev}, {".debug_cu_index", index}}),
+      &path));
+  DwarfBinaryImpl binary(path, "", "");
+  ASSERT_TRUE(binary.Load({}, DwarfSymbolFactory::kDWO).ok());
 
   DwarfDie die;
   std::jthread reader([&] { die = binary.GetDieAtOffset(ref, true); });
-  auto* llvm_unit = binary.GetLLVMUnit(UnitIndex(true, 0));
-  ASSERT_TRUE(llvm_unit);
-  auto context = binary.GetUnitContext(*llvm_unit);
+  auto split = binary.GetDwoUnit();
+  ASSERT_TRUE(split);
+  auto context = binary.GetUnitContext(split->GetUnitIndex());
   ASSERT_TRUE(context) << context.err().msg();
   reader.join();
 
@@ -510,24 +508,19 @@ TEST(DwarfBinaryImpl, ElfSymbolsDynamicPrecedence) {
 
 class UnitContextCacheTest : public testing::Test {
  protected:
-  static size_t UnitEntries(const DwarfBinaryImpl& binary, const llvm::DWARFUnit& unit) {
-    return binary.unit_contexts_.units_.count(&unit);
+  static size_t UnitEntries(const DwarfBinaryImpl& binary, UnitIndex index) {
+    auto entry = binary.GetUnitHeader(index);
+    if (!entry)
+      return 0;
+    return index.is_dwo ? binary.unit_contexts_.split_units_.count(&entry->header)
+                        : binary.unit_contexts_.normal_units_.count(&entry->header);
   }
-
-  static size_t AbbrevEntries(const UnitContextCache& cache) { return cache.abbrevs_.size(); }
 
   static size_t AbbrevEntries(const DwarfBinaryImpl& binary) {
-    return AbbrevEntries(binary.unit_contexts_);
+    return binary.unit_contexts_.abbrevs_.size();
   }
 
-  static UnitContextResult GetOrParse(UnitContextCache& cache, const DwarfSections& sections,
-                                      llvm::DWARFUnit& unit) {
-    return cache.GetOrParse(sections, unit, {});
-  }
-
-  static void Clear(UnitContextCache& cache) { cache.Clear(); }
-
-  static void ClearUnitContexts(DwarfBinaryImpl& binary) { Clear(binary.unit_contexts_); }
+  static void ClearUnitContexts(DwarfBinaryImpl& binary) { binary.unit_contexts_.Clear(); }
 };
 
 TEST_F(UnitContextCacheTest, ReusesContextAcrossAttributesAndClears) {
@@ -537,26 +530,26 @@ TEST_F(UnitContextCacheTest, ReusesContextAcrossAttributesAndClears) {
   // The first CU starts at offset zero. Its first function uses addrx for its low PC.
   auto unit = binary.GetUnitAtIndex(UnitIndex(false, 0));
   ASSERT_TRUE(unit);
-  auto& llvm_unit = *binary.GetLLVMUnit(UnitIndex(false, 0));
-  EXPECT_EQ(0u, UnitEntries(binary, llvm_unit));
+  auto index = unit->GetUnitIndex();
+  EXPECT_EQ(0u, UnitEntries(binary, index));
 
   constexpr DwarfAttr kAttrs[] = {DwarfAttr::kLowPc};
   DwarfDieDecoder decoder(binary, kAttrs);
   ASSERT_TRUE(decoder.Decode(binary.GetDieAtOffset(DwarfDieRef::Main(0x2b))));
   EXPECT_EQ(0x1000u, decoder.GetAddress(DwarfAttr::kLowPc));
-  ASSERT_EQ(1u, UnitEntries(binary, llvm_unit));
+  ASSERT_EQ(1u, UnitEntries(binary, index));
 
-  auto first = binary.GetUnitContext(llvm_unit);
+  auto first = binary.GetUnitContext(index);
   ASSERT_TRUE(first) << first.err().msg();
   EXPECT_EQ(0x1000u, first.value()->ReadAddress(0));
   EXPECT_EQ(".", unit->GetCompilationDir());
-  auto second = binary.GetUnitContext(llvm_unit);
+  auto second = binary.GetUnitContext(index);
   ASSERT_TRUE(second);
   EXPECT_EQ(first.value(), second.value());
 
   binary.ClearDwarfCaches();
-  EXPECT_EQ(0u, UnitEntries(binary, llvm_unit));
-  auto rebuilt = binary.GetUnitContext(llvm_unit);
+  EXPECT_EQ(0u, UnitEntries(binary, index));
+  auto rebuilt = binary.GetUnitContext(index);
   ASSERT_TRUE(rebuilt);
   // Keep the first snapshot alive so the allocator cannot reuse its address.
   EXPECT_NE(first.value(), rebuilt.value());
@@ -568,31 +561,29 @@ TEST_F(UnitContextCacheTest, DistinctUnitsShareAbbreviations) {
   LineTableTestSections sections;
   sections.AddCompileUnit(5, 0, {});
   sections.AddCompileUnit(5, 0x20, {});
-  sections.Finish(Endian::kLittle);
-  auto views = sections.sections();
-
-  UnitContextCache cache;
-  auto first = GetOrParse(cache, views, *sections.unit(0));
-  auto second = GetOrParse(cache, views, *sections.unit(1));
+  sections.Finish();
+  DwarfBinaryImpl binary(sections.sections());
+  const UnitIndex first_index(false, 0);
+  auto first = binary.GetUnitContext(first_index);
+  auto second = binary.GetUnitContext(UnitIndex(false, 1));
   ASSERT_TRUE(first) << first.err().msg();
   ASSERT_TRUE(second) << second.err().msg();
   EXPECT_NE(first.value(), second.value());
   EXPECT_EQ(0u, first.value()->stmt_list());
   EXPECT_EQ(0x20u, second.value()->stmt_list());
-  EXPECT_EQ(1u, AbbrevEntries(cache));
+  EXPECT_EQ(1u, AbbrevEntries(binary));
 
-  // A binary's cache must not adopt units from a stand-alone LLVM context.
-  DwarfBinaryImpl binary("", "", "");
-  auto foreign = GetUnitContext(*sections.unit(0), &binary);
-  auto foreign_again = GetUnitContext(*sections.unit(0), &binary);
+  // Binaries with identical section bytes still own independent caches.
+  DwarfBinaryImpl other(sections.sections());
+  auto foreign_die = binary.GetUnitAtIndex(first_index)->GetUnitDie();
+  EXPECT_TRUE(other.GetUnitContext(foreign_die).has_error());
+  EXPECT_EQ(0u, UnitEntries(other, first_index));
+  auto foreign = other.GetUnitContext(first_index);
   ASSERT_TRUE(foreign);
-  ASSERT_TRUE(foreign_again);
   EXPECT_EQ(0u, foreign.value()->stmt_list());
-  EXPECT_NE(foreign.value(), foreign_again.value());
-  EXPECT_EQ(0u, UnitEntries(binary, *sections.unit(0)));
-
-  Clear(cache);
-  EXPECT_EQ(0u, AbbrevEntries(cache));
+  EXPECT_NE(first.value(), foreign.value());
+  binary.ClearDwarfCaches();
+  EXPECT_EQ(0u, AbbrevEntries(binary));
 }
 
 TEST_F(UnitContextCacheTest, LineTableCallersPopulateCache) {
@@ -601,29 +592,29 @@ TEST_F(UnitContextCacheTest, LineTableCallersPopulateCache) {
   auto& binary = *setup.symbols()->binary();
   auto unit = binary.GetUnitAtIndex(UnitIndex(false, 0));
   ASSERT_TRUE(unit);
-  auto* llvm_unit = binary.GetLLVMUnit(UnitIndex(false, 0));
+  auto index = unit->GetUnitIndex();
 
-  EXPECT_EQ(0u, UnitEntries(binary, *llvm_unit));
+  EXPECT_EQ(0u, UnitEntries(binary, index));
   EXPECT_EQ(0u, AbbrevEntries(binary));
-  auto files = binary.GetLineFileTable(llvm_unit, 0);
+  auto files = binary.GetLineFileTable(index, 0);
   ASSERT_TRUE(files);
   ASSERT_TRUE(files->GetFileName(0));
   EXPECT_TRUE(files->GetFileName(0)->ends_with("/line_lookup_symbol_test.cc"));
-  EXPECT_EQ(1u, UnitEntries(binary, *llvm_unit));
+  EXPECT_EQ(1u, UnitEntries(binary, index));
   EXPECT_EQ(1u, AbbrevEntries(binary));
-  EXPECT_EQ(files, binary.GetLineFileTable(llvm_unit, 0));
-  EXPECT_EQ(1u, UnitEntries(binary, *llvm_unit));
+  EXPECT_EQ(files, binary.GetLineFileTable(index, 0));
+  EXPECT_EQ(1u, UnitEntries(binary, index));
   EXPECT_EQ(1u, AbbrevEntries(binary));
 
   // Start with empty caches so DecodeLineTable has to fetch the unit context itself.
   binary.ClearDwarfCaches();
-  EXPECT_EQ(0u, UnitEntries(binary, *llvm_unit));
-  auto lines = binary.DecodeLineTable(llvm_unit);
+  EXPECT_EQ(0u, UnitEntries(binary, index));
+  auto lines = binary.DecodeLineTable(index);
   ASSERT_GT(lines.GetNumSequences(), 0u);
-  EXPECT_EQ(1u, UnitEntries(binary, *llvm_unit));
+  EXPECT_EQ(1u, UnitEntries(binary, index));
   EXPECT_EQ(1u, AbbrevEntries(binary));
-  EXPECT_EQ(lines.GetNumSequences(), binary.DecodeLineTable(llvm_unit).GetNumSequences());
-  EXPECT_EQ(1u, UnitEntries(binary, *llvm_unit));
+  EXPECT_EQ(lines.GetNumSequences(), binary.DecodeLineTable(index).GetNumSequences());
+  EXPECT_EQ(1u, UnitEntries(binary, index));
   EXPECT_EQ(1u, AbbrevEntries(binary));
 }
 
@@ -635,7 +626,7 @@ TEST_F(UnitContextCacheTest, RangedFunctionDecodePopulatesCache) {
   auto& binary = *setup.symbols()->binary();
   auto unit = binary.GetUnitAtIndex(UnitIndex(false, 0));
   ASSERT_TRUE(unit);
-  auto* llvm_unit = binary.GetLLVMUnit(UnitIndex(false, 0));
+  auto index = unit->GetUnitIndex();
 
   // Find the inlined LineTableFixtureSum instance with a range list. The compiler can change its
   // DIE offset.
@@ -651,11 +642,10 @@ TEST_F(UnitContextCacheTest, RangedFunctionDecodePopulatesCache) {
   }
   ASSERT_TRUE(function_ref);
 
-  // Keep the complete line file table while clearing the unit context. With file attributes
-  // served by the line table cache, only range decoding needs the unit context.
-  ASSERT_GT(binary.DecodeLineTable(llvm_unit).GetNumSequences(), 0u);
+  // Keep the complete line file table while testing a cold unit context and abbreviation cache.
+  ASSERT_GT(binary.DecodeLineTable(index).GetNumSequences(), 0u);
   ClearUnitContexts(binary);
-  ASSERT_EQ(0u, UnitEntries(binary, *llvm_unit));
+  ASSERT_EQ(0u, UnitEntries(binary, index));
   ASSERT_EQ(0u, AbbrevEntries(binary));
   for (int i = 0; i < 2; ++i) {
     auto symbol = binary.GetSymbolFactory()->CreateSymbol(function_ref);
@@ -663,7 +653,7 @@ TEST_F(UnitContextCacheTest, RangedFunctionDecodePopulatesCache) {
     ASSERT_TRUE(function);
     EXPECT_TRUE(function->GetAssignedName().starts_with("LineTableFixtureSum"));
     EXPECT_GE(function->code_ranges().size(), 2u);
-    EXPECT_EQ(1u, UnitEntries(binary, *llvm_unit));
+    EXPECT_EQ(1u, UnitEntries(binary, index));
     EXPECT_EQ(1u, AbbrevEntries(binary));
   }
 }
@@ -674,8 +664,8 @@ TEST_F(UnitContextCacheTest, LocationListVariableDecodePopulatesCache) {
   auto& binary = *setup.symbols()->binary();
   auto unit = binary.GetUnitAtIndex(UnitIndex(false, 2));
   ASSERT_TRUE(unit);
-  auto& llvm_unit = *binary.GetLLVMUnit(UnitIndex(false, 2));
-  ASSERT_EQ(0u, UnitEntries(binary, llvm_unit));
+  auto index = unit->GetUnitIndex();
+  ASSERT_EQ(0u, UnitEntries(binary, index));
   ASSERT_EQ(0u, AbbrevEntries(binary));
 
   // The my_class DIE uses DW_FORM_loclistx. Its list contains one entry.
@@ -687,7 +677,7 @@ TEST_F(UnitContextCacheTest, LocationListVariableDecodePopulatesCache) {
     const auto& locations = variable->location().locations();
     ASSERT_EQ(1u, locations.size());
     EXPECT_EQ(AddressRange(0x145b, 0x14cd), locations[0].range);
-    EXPECT_EQ(1u, UnitEntries(binary, llvm_unit));
+    EXPECT_EQ(1u, UnitEntries(binary, index));
     EXPECT_EQ(1u, AbbrevEntries(binary));
   }
 }
@@ -707,7 +697,7 @@ TEST_F(UnitContextCacheTest, SplitFunctionDecodePopulatesSkeletonCache) {
   ASSERT_NE(indexed.dwo_info.end(), dwo);
   auto unit = binary.GetUnitAtIndex(UnitIndex(false, 1));
   ASSERT_TRUE(unit);
-  auto& skeleton = *binary.GetLLVMUnit(UnitIndex(false, 1));
+  auto skeleton = unit->GetUnitIndex();
   ASSERT_EQ(0u, UnitEntries(binary, skeleton));
   ASSERT_EQ(0u, AbbrevEntries(binary));
 
@@ -731,24 +721,25 @@ TEST_F(UnitContextCacheTest, SplitUnitUsesSkeletonCache) {
   auto& main_binary = *setup.symbols()->binary();
   auto main_unit = main_binary.GetUnitAtIndex(UnitIndex(false, 1));
   ASSERT_TRUE(main_unit);
-  auto& skeleton = *main_binary.GetLLVMUnit(UnitIndex(false, 1));
+  auto skeleton = main_unit->GetUnitIndex();
   EXPECT_EQ(0u, UnitEntries(main_binary, skeleton));
 
   DwarfBinaryImpl split_binary(dir + "main.dwo", "", "");
   ASSERT_TRUE(split_binary.Load({}, DwarfSymbolFactory::kDWO).ok());
   auto split_unit = split_binary.GetDwoUnit();
   ASSERT_TRUE(split_unit);
-  auto& split = *split_binary.GetLLVMUnit(UnitIndex(true, 0));
+  auto split = split_unit->GetUnitIndex();
 
   auto unlinked = split_binary.GetUnitContext(split);
   ASSERT_TRUE(unlinked);
   EXPECT_EQ(std::nullopt, unlinked.value()->base_address());
   EXPECT_EQ(std::nullopt, unlinked.value()->ReadAddress(0));
 
-  UnitContextSource source{&skeleton, &main_binary};
+  UnitContextSource source{&main_binary, skeleton};
   auto linked = split_binary.GetUnitContext(split, source);
   ASSERT_TRUE(linked);
   EXPECT_NE(unlinked.value(), linked.value());
+  EXPECT_EQ(2u, UnitEntries(split_binary, split));
   EXPECT_EQ(0x1165u, linked.value()->base_address());
   EXPECT_EQ(0x1165u, linked.value()->ReadAddress(0));
   EXPECT_EQ(".", linked.value()->compilation_dir());
@@ -770,40 +761,38 @@ TEST_F(UnitContextCacheTest, SplitUnitUsesSkeletonCache) {
 }
 
 TEST_F(UnitContextCacheTest, CachesMalformedUnitError) {
-  std::string elf;
-  ASSERT_TRUE(files::ReadFileToString(TestSymbolModule::GetCheckedInTestFileName(), &elf));
-  const auto* bytes = reinterpret_cast<const uint8_t*>(elf.data());
-  auto object = elflib::ElfLib::Create(bytes, elf.size());
-  ASSERT_TRUE(object);
-  auto info = object->GetSectionData(".debug_info");
-  ASSERT_TRUE(info.ptr);
-  ASSERT_GT(info.size, 0xcu);
-  // Replace the first CU's root abbreviation code with zero. Its header stays valid.
-  elf[(info.ptr - bytes) + 0xc] = 0;
-
-  files::ScopedTempDir temp_dir;
-  std::string path;
-  ASSERT_TRUE(temp_dir.NewTempFileWithData(elf, &path));
-  TestSymbolModule setup(path, "");
-  ASSERT_TRUE(setup.Init("", false).ok());
-  auto& binary = *setup.symbols()->binary();
+  std::vector<uint8_t> abbrev, info;
+  DwarfSectionBuilder table(abbrev, Endian::kLittle);
+  const AbbrevTable::AttributeSpec attrs[] = {
+      {static_cast<uint64_t>(DwarfAttr::kStmtList), static_cast<uint64_t>(DwarfForm::kSecOffset)}};
+  table.AbbrevDeclaration(1, static_cast<uint64_t>(DwarfTag::kCompileUnit), false, attrs);
+  table.EndAbbrevTable();
+  DwarfSectionBuilder writer(info, Endian::kLittle);
+  auto bad = writer.BeginUnit({});
+  writer.Uleb(0);  // Invalid root abbreviation, with a valid unit header.
+  writer.EndUnit(bad);
+  auto good = writer.BeginUnit({});
+  writer.Uleb(1);
+  writer.Offset(0xb4, 4);
+  writer.EndUnit(good);
+  DwarfBinaryImpl binary(DwarfSections{.info = info, .abbrev = abbrev});
   auto unit = binary.GetUnitAtIndex(UnitIndex(false, 0));
   ASSERT_TRUE(unit);
-  auto& llvm_unit = *binary.GetLLVMContext()->getUnitAtIndex(0);
+  auto index = unit->GetUnitIndex();
 
-  auto initial = binary.GetUnitContext(llvm_unit);
+  auto initial = binary.GetUnitContext(index);
   ASSERT_TRUE(initial.has_error());
   EXPECT_EQ("DWARF unit DIE for unit at offset 0x0: invalid root abbreviation code",
             initial.err().msg());
-  ASSERT_EQ(1u, UnitEntries(binary, llvm_unit));
-  auto repeated = binary.GetUnitContext(llvm_unit);
+  ASSERT_EQ(1u, UnitEntries(binary, index));
+  auto repeated = binary.GetUnitContext(index);
   ASSERT_TRUE(repeated.has_error());
   EXPECT_EQ(initial.err(), repeated.err());
   EXPECT_EQ("", unit->GetCompilationDir());
 
   auto next_unit = binary.GetUnitAtIndex(UnitIndex(false, 1));
   ASSERT_TRUE(next_unit);
-  auto next = binary.GetUnitContext(*binary.GetLLVMUnit(UnitIndex(false, 1)));
+  auto next = binary.GetUnitContext(next_unit->GetUnitIndex());
   ASSERT_TRUE(next);
   EXPECT_EQ(0xb4u, next.value()->stmt_list());
 }

@@ -13,6 +13,7 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_sections.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/unit_context.h"
+#include "src/developer/debug/zxdb/symbols/unit_index.h"
 
 namespace llvm {
 class DWARFContext;
@@ -29,50 +30,33 @@ class DwarfBinaryImpl;
 DwarfSections GetDwarfSections(const llvm::DWARFObject& object);
 DwarfSections GetDwarfSections(const llvm::DWARFContext& context);
 
-// LLVM gives normal units the main sections and DWO units the corresponding .dwo sections.
-std::span<const uint8_t> GetUnitLineSection(const DwarfSections& sections,
-                                            const llvm::DWARFUnit& unit);
-std::span<const uint8_t> GetUnitStrSection(const DwarfSections& sections,
-                                           const llvm::DWARFUnit& unit);
-std::span<const uint8_t> GetUnitStrOffsetsSection(const DwarfSections& sections,
-                                                  const llvm::DWARFUnit& unit);
-
-// Identifies a skeleton and, when available, its binary. The skeleton binary must outlive the
-// split binary that caches a view of its section data.
+// Identifies an explicit address table provider. Its binary must outlive a split binary that
+// caches views of the provider's sections. A null binary selects the default provider.
 struct UnitContextSource {
-  llvm::DWARFUnit* unit = nullptr;
   const DwarfBinary* binary = nullptr;
+  UnitIndex index;
+  bool operator==(const UnitContextSource&) const = default;
 };
 
 using UnitContextResult = ErrOr<std::shared_ptr<const UnitContext>>;
-
-// Parses the requested unit from these sections without caching it. Call on the LLVM context
-// thread and keep the section bytes alive while using the result.
-UnitContextResult ReadUnitContextUncached(const DwarfSections& sections, llvm::DWARFUnit& unit,
-                                          UnitContextSource skeleton = {});
-
-// Uses the binary's cache if it owns the unit. Otherwise parses from fallback_sections or from
-// the unit's LLVM context if the caller supplies no sections.
-UnitContextResult GetUnitContext(llvm::DWARFUnit& unit, const DwarfBinary* binary,
-                                 UnitContextSource skeleton = {},
-                                 const DwarfSections* fallback_sections = nullptr);
 
 // Caches results for one binary. Unit context access stays on the owner thread.
 class UnitContextCache {
  private:
   friend class DwarfBinaryImpl;
   friend class UnitContextCacheTest;
-  friend UnitContextResult ReadUnitContextUncached(const DwarfSections&, llvm::DWARFUnit&,
-                                                   UnitContextSource);
-
-  UnitContextResult GetOrParse(const DwarfSections& sections, llvm::DWARFUnit& unit,
-                               UnitContextSource skeleton);
+  UnitContextResult GetNormal(const DwarfSections& sections, const UnitHeader& header,
+                              UnitSection kind);
+  UnitContextResult GetSplit(const DwarfBinaryImpl& binary, UnitIndex index,
+                             const UnitHeader& header, UnitSection kind,
+                             UnitContextSource skeleton);
+  UnitContextResult ParseSplit(const DwarfBinaryImpl& binary, const UnitHeader& header,
+                               UnitSection kind, UnitContextSource skeleton, llvm::DWARFUnit& unit,
+                               llvm::DWARFUnit* linked);
+  std::shared_ptr<const UnitContext> GetAddressContext(const DwarfBinaryImpl& binary,
+                                                       UnitContextSource provider,
+                                                       llvm::DWARFUnit* implicit);
   void Clear();
-
-  struct Entry {
-    llvm::DWARFUnit* skeleton;
-    UnitContextResult result;
-  };
 
   struct AbbrevSection {
     std::span<const uint8_t> bytes;
@@ -82,15 +66,20 @@ class UnitContextCache {
   static std::optional<AbbrevSection> GetPackageAbbrev(const DwarfSections& sections,
                                                        llvm::DWARFContext& context,
                                                        const UnitHeader& header);
-  static UnitContextResult Parse(const DwarfSections& sections, llvm::DWARFUnit& unit,
-                                 UnitContextSource skeleton, UnitContextCache* cache);
   std::shared_ptr<const AbbrevTable> GetDieAbbrevs(bool is_dwo, AbbrevSection section);
   std::shared_ptr<const ErrOr<AbbrevTable>> GetAbbrevs(bool is_dwo,
                                                        std::span<const uint8_t> section,
                                                        uint64_t offset);
 
-  // A split unit can be read with a skeleton or before its skeleton is known.
-  std::unordered_multimap<const llvm::DWARFUnit*, Entry> units_;
+  std::unordered_map<const UnitHeader*, UnitContextResult> normal_units_;
+
+  // An explicit skeleton can come from another binary. An implicit LLVM link can change.
+  struct SplitEntry {
+    UnitContextSource skeleton;
+    const llvm::DWARFUnit* linked;
+    UnitContextResult result;
+  };
+  std::unordered_multimap<const UnitHeader*, SplitEntry> split_units_;
 
   // Section kind, table offset, and section or package contribution end. Raw DIE table builds
   // share these abbreviations with the owner thread.

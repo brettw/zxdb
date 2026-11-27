@@ -9,8 +9,8 @@ edge case list current: add a test and an entry for each new edge case.
 
 zxdb parses each line table header and decodes the line program that follows
 it. The parser gets the section bytes and byte order from `DwarfSections`.
-LLVM supplies each unit's line table offset. `UnitContext` reads the string
-offsets contribution.
+`UnitContext` reads the line table offset and the string offsets contribution.
+For a unit in a package, LLVM supplies the start of the line contribution.
 DWO units use the `.dwo` line, string, and string offsets sections. All units
 use the main `.debug_line_str` section.
 
@@ -21,7 +21,7 @@ use the main `.debug_line_str` section.
 | `LineFileTable`, `ResolveLineFileName()` | `line_file_table.*` | Resolved, normalized file names, indexed by the raw file register value. |
 | `LineProgram`, `LineFileEntries` | `line_program.*` | Immutable parsed program, explicit decode results, and views of effective file entries. |
 | Section adapter | `dwarf_sections_llvm.*` | Creates section views and selects the sections for each unit. |
-| Line program adapter | `line_program_llvm.*` | Reads the unit's line table offset and string offsets contribution on the context thread. |
+| Line program source | `DwarfBinary::GetLineProgramSource()` | Collects the unit's line table offset and string sections on the binary's owning thread. |
 | `LineTable` | `line_table.*` | Concrete sequences and rows, address lookup, `GetLineDetails()`. |
 | `LineTableCache` | `line_table_cache.*` | One file table for each line table of a binary, shared by `DW_AT_decl_file` lookups and decoded tables. |
 | `SourceFileIndexer`, `LineFilePathResolver`, `CollectLineTableJobs()` | `source_file_indexer.*` | Parallel file indexing with a path cache. |
@@ -158,8 +158,7 @@ Key decisions:
   to six. See [Measurements](#measurements).
 - **Thread safety.** zxdb creates its `DWARFContext` with
   `ThreadSafe = false`. Workers read immutable section views prepared by
-  the context thread. Functions in `line_program_llvm.h` run on the context
-  thread. The parser header accepts section views.
+  the owning thread. The line parser reads those views.
 - **String forms that need the unit.** `DW_FORM_strx` and similar forms read
   the unit's string offsets table. `CollectLineTableJobs()` records the base,
   the entry size, and the string sections in `LineStringSections` on the
@@ -300,10 +299,9 @@ unit or entry.
 
 The tests must run fast. They build line tables in memory with
 `LineTableBuilder` and `LineTableTestSections` (`line_program_test_util.*`).
-`LineTableTestSections` supplies views of its own buffers. Its in-memory
-`DWARFContext` supplies the units that the zxdb APIs take. The real-binary
-fixtures are small shared libraries that the build compiles once. The 139
-line table tests run in 30 to 50 ms in a debug build.
+`LineTableTestSections` owns the bytes. A `DwarfBinaryImpl` can read the
+units directly from its section views. Tests of real binaries use the
+debugger's object loader.
 
 Each test checks expected rows and file names. The expected values come from
 the DWARF standard and the rules in this document. The tests don't compare

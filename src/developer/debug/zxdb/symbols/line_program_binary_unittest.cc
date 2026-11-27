@@ -6,17 +6,11 @@
 
 #include <gtest/gtest.h>
 
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
-#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
-#include "llvm/Object/ObjectFile.h"
-#include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/index.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
-#include "src/developer/debug/zxdb/symbols/line_program_llvm.h"
 #include "src/developer/debug/zxdb/symbols/line_program_test_util.h"
 #include "src/developer/debug/zxdb/symbols/line_sequence.h"
 #include "src/developer/debug/zxdb/symbols/module_symbols_impl.h"
@@ -31,8 +25,6 @@
 namespace zxdb {
 
 namespace {
-
-void IgnoreError(llvm::Error err) { llvm::consumeError(std::move(err)); }
 
 struct CheckStats {
   size_t tables = 0;
@@ -64,10 +56,8 @@ struct DecodedUnit {
   LineFileTable names;
 };
 
-std::optional<DecodedUnit> DecodeUnit(const DwarfSections& sections, llvm::DWARFUnit& unit) {
-  if (!GetUnitLineTableOffset(unit))
-    return std::nullopt;
-  ErrOr<LineProgram> program = ParseLineProgramForUnit(sections, unit);
+std::optional<DecodedUnit> DecodeUnit(const LineProgramSource& source) {
+  ErrOr<LineProgram> program = source.Parse();
   EXPECT_TRUE(program.ok()) << program.err().msg();
   if (program.has_error())
     return std::nullopt;
@@ -79,9 +69,8 @@ std::optional<DecodedUnit> DecodeUnit(const DwarfSections& sections, llvm::DWARF
   return result;
 }
 
-void CheckUnit(const DwarfSections& sections, llvm::DWARFUnit& unit, uint64_t first_code_address,
-               CheckStats* stats) {
-  std::optional<DecodedUnit> decoded = DecodeUnit(sections, unit);
+void CheckUnit(const LineProgramSource& source, uint64_t first_code_address, CheckStats* stats) {
+  std::optional<DecodedUnit> decoded = DecodeUnit(source);
   if (!decoded)
     return;
   const std::vector<LineRow>& rows = decoded->rows;
@@ -107,9 +96,7 @@ void CheckUnit(const DwarfSections& sections, llvm::DWARFUnit& unit, uint64_t fi
     EXPECT_TRUE(decoded->names.GetFileName(file)) << "file " << file;
 
   // The file scan uses a separate parse without the unit, like the indexer.
-  ErrOr<LineProgram> scan_program = LineProgram::Parse(
-      AsStringView(GetUnitLineSection(sections, unit)), *GetUnitLineTableOffset(unit),
-      sections.endian, GetLineStringSections(sections, unit, nullptr));
+  ErrOr<LineProgram> scan_program = source.Parse();
   ASSERT_TRUE(scan_program.ok());
   auto scan = scan_program.value().ScanFiles(first_code_address);
   EXPECT_EQ(LineProgramStatus::kOk, scan.status);
@@ -122,16 +109,17 @@ void CheckUnit(const DwarfSections& sections, llvm::DWARFUnit& unit, uint64_t fi
 
 // Checks that SourceFileIndexer, which scans the tables and resolves names on worker threads, gives
 // the files of the live rows that the decoder gives.
-void CheckSourceFileIndex(const DwarfSections& sections, llvm::DWARFContext& context,
-                          uint64_t first_code_address) {
-  std::vector<LineTableJob> jobs;
+void CheckSourceFileIndex(DwarfBinary& binary) {
+  auto jobs = CollectLineTableJobs(binary);
+  auto first_code_address = binary.GetFirstCodeAddress();
   SourceFileIndexer::FileIndex expected;
-  auto add_units = [&](bool is_dwo, auto units) {
-    uint32_t index = 0;
-    for (const auto& unit : units) {
-      UnitIndex unit_index(is_dwo, index++);
-      AddLineTableJob(sections, unit_index, *unit, first_code_address, &jobs, nullptr);
-      std::optional<DecodedUnit> decoded = DecodeUnit(sections, *unit);
+  auto add_units = [&](bool is_dwo, uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i) {
+      UnitIndex unit_index(is_dwo, i);
+      auto source = binary.GetLineProgramSource(unit_index);
+      if (!source)
+        continue;
+      auto decoded = DecodeUnit(*source);
       if (!decoded)
         continue;
       for (uint32_t file :
@@ -144,8 +132,8 @@ void CheckSourceFileIndex(const DwarfSections& sections, llvm::DWARFContext& con
       }
     }
   };
-  add_units(false, context.normal_units());
-  add_units(true, context.dwo_units());
+  add_units(false, binary.GetNormalUnitCount());
+  add_units(true, binary.GetDWOUnitCount());
 
   for (size_t threads : {0, 2}) {
     SCOPED_TRACE(threads);
@@ -156,40 +144,24 @@ void CheckSourceFileIndex(const DwarfSections& sections, llvm::DWARFContext& con
   }
 }
 
-using OwningObjectFile = llvm::object::OwningBinary<llvm::object::ObjectFile>;
-
-std::unique_ptr<llvm::DWARFContext> LoadContext(const std::string& path, OwningObjectFile* binary) {
-  auto loaded = llvm::object::ObjectFile::createObjectFile(path);
-  if (!loaded) {
-    ADD_FAILURE() << "Can't load " << path;
-    llvm::consumeError(loaded.takeError());
-    return nullptr;
-  }
-  *binary = std::move(*loaded);
-  return llvm::DWARFContext::create(*binary->getBinary(),
-                                    llvm::DWARFContext::ProcessDebugRelocations::Process, nullptr,
-                                    "", IgnoreError, IgnoreError);
-}
-
 CheckStats CheckBinary(const std::string& path) {
   CheckStats stats;
   SCOPED_TRACE(path);
-  OwningObjectFile binary;
-  std::unique_ptr<llvm::DWARFContext> context = LoadContext(path, &binary);
-  if (!context)
-    return stats;
-
-  auto first_code_address = InspectObjectSections(*binary.getBinary());
-  if (first_code_address.has_error()) {
-    ADD_FAILURE() << first_code_address.err().msg();
+  DwarfBinaryImpl binary(path, "", "");
+  auto err = binary.Load(
+      {}, path.ends_with(".dwo") ? DwarfSymbolFactory::kDWO : DwarfSymbolFactory::kMainBinary);
+  if (err.has_error()) {
+    ADD_FAILURE() << err.msg();
     return stats;
   }
-  const DwarfSections sections = GetDwarfSections(*context);
-  for (const auto& unit : context->normal_units())
-    CheckUnit(sections, *unit, first_code_address.value(), &stats);
-  for (const auto& unit : context->dwo_units())
-    CheckUnit(sections, *unit, first_code_address.value(), &stats);
-  CheckSourceFileIndex(sections, *context, first_code_address.value());
+  for (bool is_dwo : {false, true}) {
+    uint32_t count = is_dwo ? binary.GetDWOUnitCount() : binary.GetNormalUnitCount();
+    for (uint32_t i = 0; i < count; ++i) {
+      if (auto source = binary.GetLineProgramSource(UnitIndex(is_dwo, i)))
+        CheckUnit(*source, binary.GetFirstCodeAddress(), &stats);
+    }
+  }
+  CheckSourceFileIndex(binary);
   return stats;
 }
 
@@ -223,15 +195,18 @@ TEST(LineProgramBinary, DwoTypeUnitLineTable) {
   CheckStats stats = CheckBinary(path);
   EXPECT_GT(stats.tables, 0u);
 
-  OwningObjectFile binary;
-  std::unique_ptr<llvm::DWARFContext> context = LoadContext(path, &binary);
-  ASSERT_TRUE(context);
-  const DwarfSections sections = GetDwarfSections(*context);
+  DwarfBinaryImpl binary(path, "", "");
+  ASSERT_TRUE(binary.Load({}, DwarfSymbolFactory::kDWO).ok());
   bool found_type_unit = false;
-  for (const auto& unit : context->dwo_units()) {
-    if (!unit->isTypeUnit())
+  for (uint32_t i = 0; i < binary.GetDWOUnitCount(); ++i) {
+    UnitIndex index(true, i);
+    auto root = binary.GetUnitAtIndex(index)->GetUnitDie(DwarfDie::Load::kRootOnly);
+    ASSERT_TRUE(root);
+    if (!root.unit_header().is_type_unit())
       continue;
-    ErrOr<LineProgram> program = ParseLineProgramForUnit(sections, *unit);
+    auto source = binary.GetLineProgramSource(index);
+    ASSERT_TRUE(source);
+    auto program = source->Parse();
     ASSERT_TRUE(program.ok()) << program.err().msg();
     LineFileTable files = LineFileTable::FromEntries(program.value().header_files());
     ASSERT_GT(files.size(), 0u);
@@ -315,18 +290,18 @@ TEST(LineProgramBinary, FixtureSourceLines) {
       continue;
     SCOPED_TRACE(entry.path().string());
     fixtures++;
-    OwningObjectFile binary;
-    std::unique_ptr<llvm::DWARFContext> context = LoadContext(entry.path().string(), &binary);
-    ASSERT_TRUE(context);
-    const DwarfSections sections = GetDwarfSections(*context);
-    auto code_address = InspectObjectSections(*binary.getBinary());
-    ASSERT_TRUE(code_address.ok()) << code_address.err().msg();
-    uint64_t first_code_address = code_address.value();
+    DwarfBinaryImpl binary(entry.path().string(), "", "");
+    auto err = binary.Load({}, DwarfSymbolFactory::kMainBinary);
+    ASSERT_TRUE(err.ok()) << err.msg();
+    uint64_t first_code_address = binary.GetFirstCodeAddress();
     EXPECT_GT(first_code_address, 0u);
 
     std::vector<bool> found(std::size(kFunctions));
-    for (const auto& unit : context->normal_units()) {
-      std::optional<DecodedUnit> decoded = DecodeUnit(sections, *unit);
+    for (uint32_t i = 0; i < binary.GetNormalUnitCount(); ++i) {
+      auto source = binary.GetLineProgramSource(UnitIndex(false, i));
+      if (!source)
+        continue;
+      auto decoded = DecodeUnit(*source);
       if (!decoded)
         continue;
       size_t sequence_begin = 0;

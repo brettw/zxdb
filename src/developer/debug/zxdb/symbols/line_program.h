@@ -48,7 +48,7 @@ enum : uint16_t {
 
 // The string sections that the names in a line table can reference. Strings are views into these
 // sections. Collect them on the thread that owns the DWARFContext. After that they don't change,
-// so any thread can use them. See line_program_llvm.h for the LLVM adapter.
+// so any thread can use them.
 struct LineStringSections {
   std::string_view line_str;  // .debug_line_str, for DW_FORM_line_strp.
   std::string_view str;       // The unit's string section, for DW_FORM_strp and DW_FORM_strx.
@@ -186,6 +186,16 @@ class LineProgram {
  private:
   LineProgram() = default;
   LineProgramHeader header_;
+};
+
+// Inputs to one line program. The binary owns the section bytes.
+struct LineProgramSource {
+  std::string_view section;
+  uint64_t offset = 0;
+  Endian endian = Endian::kLittle;
+  LineStringSections strings;
+
+  ErrOr<LineProgram> Parse() const { return LineProgram::Parse(section, offset, endian, strings); }
 };
 
 }  // namespace zxdb

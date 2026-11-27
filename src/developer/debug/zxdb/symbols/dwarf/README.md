@@ -49,8 +49,9 @@
   `ReadParent()` reads the parent record for one entry.
 - `DwarfSectionBuilder` and `DwarfStringSectionBuilder` write section bytes
   for tests. `DwarfSectionBuilder` writes unit headers and abbreviation
-  declarations. It can write raw unit lengths for error tests. The build
-  compiles the builders only into `zxdb_tests`.
+  declarations. Write the abbreviation code and attribute values in DIE
+  order. Use a zero code to end a child list. Use a raw unit length for a
+  malformed header. The build compiles the builders only into `zxdb_tests`.
 
 ## Invariants
 
@@ -58,8 +59,10 @@
 - The reader treats section bytes as untrusted input. It checks each length by
   subtraction before it adds the length. It never allocates from an input count.
 - A reader error is sticky. Later reads return zero or an empty view.
-- `DwarfSections` does not own the bytes. The `DwarfBinary` implementation
-  keeps the bytes alive.
+- `DwarfSections` borrows its bytes. For a byte fixture, finish writing the
+  buffers before constructing the binary. Keep them alive while the binary
+  or a reader uses them. A file fixture gets its bytes from the object loader.
+  The loader and the split-unit metadata adapter still use LLVM.
 - DWARF offset zero and type signature zero are valid.
 - An unknown DWARF 5 unit type uses the compile unit header layout. The list
   uses the declared length to find the next header.
@@ -118,7 +121,9 @@
 - Address indices must fit in the address section. String indices must fit
   in the string offsets contribution. A location list index must fit in the
   offset array, and its target must follow that array in the same
-  contribution. Package contribution bounds come from the caller.
+  contribution. For both direct and indexed location list references, the
+  final offset must be less than the size of the location list section view.
+  Package contribution bounds come from the caller.
   `ResolveString()` leaves supplementary strings unresolved, as LLDB does.
 - A DWARF 5 range list index must fit in the offset array. The list must
   start after the array and end within the same contribution. A direct

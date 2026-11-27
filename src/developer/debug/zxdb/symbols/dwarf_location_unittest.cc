@@ -4,9 +4,15 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf_location.h"
 
+#include <array>
 #include <span>
 
 #include <gtest/gtest.h>
+
+#include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 
 namespace zxdb {
 
@@ -216,6 +222,63 @@ TEST(DwarfLocation, Dwarf5AddrLookup) {
   std::vector<uint8_t> expected_default_expr{0xaa, 0xbb};
   ASSERT_TRUE(result.default_expr());
   EXPECT_EQ(expected_default_expr, result.default_expr()->data());
+}
+
+TEST(DwarfLocation, Dwarf5LocationReferenceBounds) {
+  constexpr size_t kWidth = 8;                               // DWARF64 offset entries.
+  constexpr uint8_t kList[] = {0x05, 1, DwarfOp::kReg0, 0};  // Default location, then end of list.
+  std::vector<uint8_t> loclists;
+  DwarfSectionBuilder lists(loclists, Endian::kLittle);
+  auto length = lists.BeginInitialLength(kWidth);
+  lists.Fixed(5, 2);
+  lists.Fixed(8, 1);  // Address size.
+  lists.Fixed(0, 1);  // Segment selector size.
+  constexpr size_t kCount = 5;
+  lists.Fixed(kCount, 4);
+  const uint64_t base = loclists.size();
+  const uint64_t start = base + kCount * kWidth;
+  const uint64_t end = start + sizeof(kList);
+  const std::array<uint64_t, kCount> targets = {start, end - 1, end, end + 0x10000, UINT64_MAX};
+  for (uint64_t target : targets)
+    lists.Offset(target - base, kWidth);
+  lists.Bytes(kList);
+  lists.EndInitialLength(length);
+  ASSERT_EQ(end, loclists.size());
+
+  std::vector<uint8_t> abbrev, info;
+  DwarfSectionBuilder table(abbrev, Endian::kLittle);
+  const AbbrevTable::AttributeSpec attrs[] = {{static_cast<uint64_t>(DwarfAttr::kLoclistsBase),
+                                               static_cast<uint64_t>(DwarfForm::kSecOffset)}};
+  table.AbbrevDeclaration(1, static_cast<uint64_t>(DwarfTag::kCompileUnit), false, attrs);
+  table.EndAbbrevTable();
+  DwarfSectionBuilder writer(info, Endian::kLittle);
+  auto unit = writer.BeginUnit({.offset_size = kWidth});
+  writer.Uleb(1);
+  writer.Offset(base, kWidth);
+  writer.EndUnit(unit);
+  DwarfBinaryImpl binary(DwarfSections{.info = info, .abbrev = abbrev, .loclists = loclists});
+  auto root = binary.GetUnitAtIndex(UnitIndex(false, 0))->GetUnitDie();
+  ASSERT_TRUE(root);
+  auto context = binary.GetUnitContext(root);
+  ASSERT_TRUE(context);
+  for (size_t i = 0; i < targets.size(); ++i) {
+    uint64_t target = targets[i];
+    SCOPED_TRACE(target);
+    // The last byte is a valid, empty list. An indexed target outside the contribution is invalid.
+    EXPECT_EQ(target < end ? std::optional(target) : std::nullopt,
+              context.value()->ReadLoclistOffset(i));
+    for (const auto& form : {FormValue{DwarfForm::kSecOffset, FormClass::kSectionOffset, target},
+                             FormValue{DwarfForm::kLoclistx, FormClass::kLoclist, uint64_t{i}}}) {
+      SCOPED_TRACE(DwarfFormToString(form.form));
+      auto location = DecodeVariableLocation(binary, root, form, {});
+      if (target == start) {
+        ASSERT_TRUE(location.default_expr());
+        EXPECT_EQ(std::vector<uint8_t>{DwarfOp::kReg0}, location.default_expr()->data());
+      } else {
+        EXPECT_TRUE(location.is_null());
+      }
+    }
+  }
 }
 
 TEST(DwarfLocation, Dwarf5UnterminatedTable) {

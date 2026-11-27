@@ -40,10 +40,10 @@ LineTableJob MakeJob(const LineTableTestSections& test_sections, uint32_t unit, 
   const DwarfSections sections = test_sections.sections();
   LineTableJob job;
   job.unit_index = UnitIndex(false, unit);
-  job.section = AsStringView(sections.line);
-  job.offset = offset;
+  job.source.section = AsStringView(sections.line);
+  job.source.offset = offset;
   job.size = 100;
-  job.strings = GetLineStringSections(sections);
+  job.source.strings = GetLineStringSections(sections);
   return job;
 }
 
@@ -61,7 +61,7 @@ TEST(LineFilePathResolver, CachesMergedStrings) {
   LineTableTestSections sections;
   uint64_t first = sections.Add(MakeTable({"a.cc", "b.h"}));
   uint64_t second = sections.Add(MakeTable({"b.h", "a.cc"}));
-  sections.Finish(Endian::kLittle);
+  sections.Finish();
 
   LineFilePathResolver resolver;
   ErrOr<LineProgram> program1 = sections.Parse(first);
@@ -117,7 +117,7 @@ TEST(LineFilePathResolver, MatchesLineFileTable) {
 
     LineTableTestSections sections;
     uint64_t offset = sections.Add(builder);
-    sections.Finish(Endian::kLittle);
+    sections.Finish();
     ErrOr<LineProgram> program = sections.Parse(offset);
     ASSERT_TRUE(program.ok());
     const LineProgramHeader& header = program.value().header();
@@ -153,7 +153,7 @@ TEST(LineFilePathResolver, SameNameDifferentDirectory) {
 
   LineTableTestSections sections;
   uint64_t offset = sections.Add(builder);
-  sections.Finish(Endian::kLittle);
+  sections.Finish();
   ErrOr<LineProgram> program = sections.Parse(offset);
   ASSERT_TRUE(program.ok());
 
@@ -180,7 +180,7 @@ TEST(LineFilePathResolver, InlineStrings) {
     }
     uint64_t first_offset = sections.Add(first);
     uint64_t second_offset = sections.Add(second);
-    sections.Finish(Endian::kLittle);
+    sections.Finish();
 
     uint64_t file = version >= 5 ? 0 : 1;
     LineFilePathResolver resolver;
@@ -208,7 +208,7 @@ TEST_P(SourceFileIndexerTest, MergesInJobOrder) {
   // Many more units, so the threads share the work.
   for (int i = 3; i < 100; i++)
     offsets.push_back(sections.Add(MakeTable({"common.h", "unit" + std::to_string(i) + ".cc"})));
-  sections.Finish(Endian::kLittle);
+  sections.Finish();
 
   // Add the jobs in reverse order. The merge uses job order, not unit order.
   std::vector<LineTableJob> jobs;
@@ -237,7 +237,7 @@ INSTANTIATE_TEST_SUITE_P(SourceFileIndexer, SourceFileIndexerTest, ::testing::Bo
 
 TEST(SourceFileIndexer, NoJobs) {
   LineTableTestSections sections;
-  sections.Finish(Endian::kLittle);
+  sections.Finish();
 
   SourceFileIndexer indexer({});
   EXPECT_EQ(0u, indexer.worker_count());
@@ -250,7 +250,7 @@ TEST(SourceFileIndexer, NoJobs) {
 TEST(SourceFileIndexer, AddsToExistingIndex) {
   LineTableTestSections sections;
   uint64_t offset = sections.Add(MakeTable({"a.cc"}));
-  sections.Finish(Endian::kLittle);
+  sections.Finish();
 
   SourceFileIndexer::FileIndex files;
   files["src/a.cc"].push_back(UnitIndex(true, 7));
@@ -269,7 +269,7 @@ TEST(SourceFileIndexer, DestroyWithoutFinish) {
   std::vector<uint64_t> offsets;
   for (int i = 0; i < 10; i++)
     offsets.push_back(sections.Add(MakeTable({"a.cc"})));
-  sections.Finish(Endian::kLittle);
+  sections.Finish();
 
   std::vector<LineTableJob> jobs;
   for (size_t i = 0; i < offsets.size(); i++)
@@ -284,7 +284,7 @@ TEST(SourceFileIndexer, DefaultThreadCount) {
   std::vector<uint64_t> offsets;
   for (int i = 0; i < 64; i++)
     offsets.push_back(sections.Add(MakeTable({"a.cc"})));
-  sections.Finish(Endian::kLittle);
+  sections.Finish();
 
   std::vector<LineTableJob> jobs;
   for (size_t i = 0; i < offsets.size(); i++) {
@@ -326,13 +326,12 @@ TEST_P(SourceFileIndexerStrxTest, ResolvesWithUnit) {
   uint64_t plain_offset = sections.Add(MakeTable({"plain.cc"}));
   sections.AddCompileUnit(5, strx_offset, {});
   sections.AddCompileUnit(5, plain_offset, {});
-  sections.Finish(Endian::kLittle);
+  sections.Finish();
 
+  DwarfBinaryImpl binary(sections.sections());
   std::vector<LineTableJob> jobs;
-  AddLineTableJob(sections.sections(), UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs,
-                  nullptr);
-  AddLineTableJob(sections.sections(), UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs,
-                  nullptr);
+  AddLineTableJob(binary, UnitIndex(false, 0), 0x1000, &jobs);
+  AddLineTableJob(binary, UnitIndex(false, 1), 0x1000, &jobs);
   ASSERT_EQ(2u, jobs.size());
   EXPECT_EQ(0x1000u, jobs[0].first_code_address);
 
@@ -344,7 +343,6 @@ TEST_P(SourceFileIndexerStrxTest, ResolvesWithUnit) {
   SourceFileIndexer indexer(std::move(jobs), {.thread_count = threads ? 2 : 0});
 
   // Jobs keep their section views while the main thread uses and evicts the DIE tables.
-  DwarfBinaryImpl binary(sections.TakeContext());
   for (uint32_t i = 0; i < 2; i++) {
     auto unit = binary.GetUnitAtIndex(UnitIndex(false, i));
     ASSERT_TRUE(unit);
@@ -382,7 +380,7 @@ TEST(SourceFileIndexer, StrippedBelowFirstCode) {
   builder.EndSequence();
   LineTableTestSections sections;
   uint64_t offset = sections.Add(builder);
-  sections.Finish(Endian::kLittle);
+  sections.Finish();
 
   for (uint64_t first_code_address : {0, 0x1000}) {
     SCOPED_TRACE(first_code_address);
@@ -402,14 +400,13 @@ TEST(SourceFileIndexer, UnitWithoutLineTable) {
   uint64_t offset = sections.Add(MakeTable({"a.cc"}));
   sections.AddCompileUnit(5, std::nullopt, {});
   sections.AddCompileUnit(5, offset, {});
-  sections.Finish(Endian::kLittle);
+  sections.Finish();
 
+  DwarfBinaryImpl binary(sections.sections());
   std::vector<LineTableJob> jobs;
-  AddLineTableJob(sections.sections(), UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs,
-                  nullptr);
+  AddLineTableJob(binary, UnitIndex(false, 0), 0x1000, &jobs);
   EXPECT_TRUE(jobs.empty());
-  AddLineTableJob(sections.sections(), UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs,
-                  nullptr);
+  AddLineTableJob(binary, UnitIndex(false, 1), 0x1000, &jobs);
   ASSERT_EQ(1u, jobs.size());
 
   SourceFileIndexer indexer(std::move(jobs));

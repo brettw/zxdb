@@ -503,7 +503,3 @@ target_link_libraries(debug_agent_tests PRIVATE debug_agent debug_shared_test_su
 target_compile_definitions(debug_agent_tests PRIVATE LINUX_LIFECYCLE_INFERIOR="$<TARGET_FILE:linux_lifecycle_inferior>")
 add_dependencies(debug_agent_tests linux_lifecycle_inferior)
 gtest_discover_tests(debug_agent_tests DISCOVERY_TIMEOUT 30 PROPERTIES TIMEOUT 15)
-
-if(LLVM_VERSION_MAJOR EQUAL 19)
-  set_source_files_properties(symbols/test_symbol_module.cc PROPERTIES COMPILE_OPTIONS -std=c++20)
-endif()

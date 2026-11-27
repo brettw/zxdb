@@ -8,20 +8,15 @@
 #include <stdint.h>
 
 #include <map>
-#include <memory>
 #include <optional>
 #include <ostream>
 #include <span>
 #include <string>
 #include <vector>
 
-#include "llvm/ADT/StringMap.h"
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
-#include "llvm/Support/MemoryBuffer.h"
 #include "src/developer/debug/zxdb/common/endian.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_sections.h"
-#include "src/developer/debug/zxdb/symbols/dwarf/unit_header.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
@@ -60,7 +55,7 @@ class LineTableBuilder {
 
   explicit LineTableBuilder(uint16_t version, Format format = Format::kDwarf32);
 
-  // Sets the byte order before adding opcodes. LineTableTestSections::Finish() must use the
+  // Sets the byte order before adding opcodes. LineTableTestSections must use the
   // same byte order.
   void set_endian(Endian endian);
 
@@ -175,12 +170,11 @@ class LineTableBuilder {
   std::vector<uint8_t> program_;
 };
 
-// In-memory .debug_line, .debug_line_str, and .debug_str sections with an LLVM DWARFContext.
+// In-memory .debug_line, .debug_line_str, and .debug_str sections for the native reader.
 // Strings are merged like a linker does, so equal strings have one offset.
 class LineTableTestSections {
  public:
-  LineTableTestSections();
-  ~LineTableTestSections();
+  explicit LineTableTestSections(Endian endian = Endian::kLittle) : endian_(endian) {}
 
   // Appends a table and returns its section offset.
   uint64_t Add(const LineTableBuilder& builder);
@@ -197,15 +191,8 @@ class LineTableTestSections {
   void AddCompileUnit(uint16_t version, std::optional<uint64_t> line_offset,
                       const std::vector<uint64_t>& decl_files);
 
-  // Creates the context. Call once, after all tables are added.
-  void Finish(Endian endian, uint8_t address_size = 8);
-
-  const llvm::DWARFContext& context() const { return *context_; }
-  // Transfers the context to the caller. These section buffers must outlive it.
-  std::unique_ptr<llvm::DWARFContext> TakeContext() { return std::move(context_); }
-
-  // Returns the unit in the order AddCompileUnit() added it.
-  llvm::DWARFUnit* unit(size_t index) { return context_->getUnitAtIndex(index); }
+  // Writes the abbreviations and string offsets. Call once, after adding all units and tables.
+  void Finish();
 
   // Views the section bytes after Finish().
   DwarfSections sections() const;
@@ -222,13 +209,12 @@ class LineTableTestSections {
   DwarfStringSectionBuilder line_str_;
   DwarfStringSectionBuilder str_;
   std::vector<uint8_t> info_;
+  std::vector<uint8_t> abbrev_;
   std::vector<std::string> indexed_strings_;  // Strings for kStrx1, by index.
   std::vector<uint8_t> str_offsets_;
   Endian endian_ = Endian::kLittle;
 
-  // The context references these buffers, so they must outlive it.
-  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers_;
-  std::unique_ptr<llvm::DWARFContext> context_;
+  bool finished_ = false;
 };
 
 }  // namespace zxdb

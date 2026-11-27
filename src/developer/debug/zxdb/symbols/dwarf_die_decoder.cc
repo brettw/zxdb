@@ -133,9 +133,8 @@ std::optional<uint64_t> DwarfDieDecoder::DecodeAddress(const AttributeValue& val
   } else {
     // An explicitly supplied address table takes precedence over the unit's table. A DWO
     // without an explicit provider uses its linked skeleton, when present.
-    auto context = address_table_.unit
-                       ? GetUnitContext(*address_table_.unit,
-                                        address_table_.binary ? address_table_.binary : &binary_)
+    auto context = address_table_.binary
+                       ? address_table_.binary->GetUnitContext(address_table_.index)
                        : GetAttributeUnitContext(value);
     if (context)
       address = context.value()->ResolveAddress(value.form);

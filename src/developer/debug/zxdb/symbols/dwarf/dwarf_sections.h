@@ -13,9 +13,8 @@
 
 namespace zxdb {
 
-// Views of DWARF section bytes owned by the DwarfBinary implementation. The implementation
-// keeps the object file and LLVM DWARFContext alive. The context owns any decompressed and
-// relocated copies.
+// Non-owning views of DWARF bytes. A file-backed binary keeps the object and its decompressed
+// sections alive. An in-memory fixture owns its section buffers.
 struct DwarfSections {
   std::span<const uint8_t> info;
   std::span<const uint8_t> abbrev;

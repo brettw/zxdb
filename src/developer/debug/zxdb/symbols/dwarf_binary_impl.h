@@ -12,7 +12,6 @@
 #include <optional>
 #include <vector>
 
-#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/common/err.h"
 #include "src/developer/debug/zxdb/common/err_or.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/debug_names_reader.h"
@@ -24,7 +23,6 @@
 
 namespace llvm {
 
-class DWARFCompileUnit;
 class DWARFContext;
 class MemoryBuffer;
 
@@ -37,18 +35,14 @@ class ObjectFile;
 
 namespace zxdb {
 
-// Rejects repeated DWARF sections and returns the lowest address of a code section, or 0 if
-// there is no code section. This matches LLDB's InitializeFirstCodeAddress(). A separate debug
-// file preserves the addresses and flags of the code sections.
-ErrOr<uint64_t> InspectObjectSections(const llvm::object::ObjectFile& object);
-
 class DwarfBinaryImpl final : public DwarfBinary {
  public:
   // Callers must call Load() to complete initialization (which can fail).
   DwarfBinaryImpl(const std::string& name, const std::string& binary_name,
                   const std::string& build_id);
-  // For byte fixtures with in-memory DWARF sections. The fixture owns the section buffers.
-  explicit DwarfBinaryImpl(std::unique_ptr<llvm::DWARFContext> context);
+  // For byte fixtures. The section buffers must outlive the binary and its readers.
+  // Load split units from a file when they need skeleton or package metadata.
+  explicit DwarfBinaryImpl(DwarfSections sections);
   ~DwarfBinaryImpl();
 
   fxl::WeakPtr<DwarfBinaryImpl> GetWeakPtr();
@@ -65,10 +59,9 @@ class DwarfBinaryImpl final : public DwarfBinary {
   llvm::object::ObjectFile* GetLLVMObjectFile() override;
   llvm::DWARFContext* GetLLVMContext() const override;
   const DwarfSections& GetSections() const override;
-  UnitContextResult GetUnitContext(llvm::DWARFUnit& unit,
-                                   UnitContextSource skeleton = {}) const override;
+  UnitContextResult GetUnitContext(UnitIndex index, UnitContextSource skeleton = {}) const override;
   using DwarfBinary::GetUnitContext;
-  llvm::DWARFUnit* GetLLVMUnit(UnitIndex index) const override;
+  std::optional<LineProgramSource> GetLineProgramSource(UnitIndex index) const override;
   uint64_t GetMappedLength() const override;
   const std::map<std::string, ElfTableSymbol>& GetELFSymbols() const override;
   const std::map<std::string, uint64_t> GetPLTSymbols() const override;
@@ -82,14 +75,14 @@ class DwarfBinaryImpl final : public DwarfBinary {
   DwarfDieRef GetDieRefForSignature(uint64_t signature) const override;
   DwarfDie GetDieForSignature(uint64_t signature, bool is_dwo) const override;
   const DebugNamesReader* GetDebugNames() const override;
-  std::shared_ptr<const LineFileTable> GetLineFileTable(llvm::DWARFUnit* unit,
+  std::shared_ptr<const LineFileTable> GetLineFileTable(UnitIndex unit,
                                                         uint64_t file_index) const override;
   uint64_t GetFirstCodeAddress() const override { return first_code_address_; }
   using DwarfBinary::GetLineFileTable;
   void ClearDwarfCaches() override;
 
   // Decodes the whole line table of the unit. The file table is shared with GetLineFileTable().
-  LineTable DecodeLineTable(llvm::DWARFUnit* unit) const;
+  LineTable DecodeLineTable(UnitIndex unit) const;
 
   // Restrict lookup to the selected file sections. These lookups do not create a unit wrapper.
   DwarfDie GetUnitDieForRef(DwarfDieRef die_ref, bool is_dwo) const;
@@ -99,6 +92,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
   fxl::RefPtr<DwarfUnit> CreateUncachedUnit(const DwarfDie& die);
 
  private:
+  friend class UnitContextCache;
   friend class UnitContextCacheTest;
   friend class DwarfUnitImpl;
 
@@ -109,6 +103,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
 
   std::optional<IndexedUnit> GetUnitHeader(UnitIndex index) const;
   void InitUnitLists();
+  llvm::DWARFUnit* GetLLVMUnit(UnitIndex index) const;
   const UnitList& GetUnitList(bool is_dwo, UnitSection section) const;
   llvm::DWARFUnit* FindLLVMUnit(bool is_dwo, UnitSection section, uint64_t unit_offset) const;
 
@@ -130,7 +125,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
   std::unique_ptr<llvm::MemoryBuffer> binary_buffer_;  // Backing for binary_.
   std::unique_ptr<llvm::object::Binary> binary_;
   std::unique_ptr<llvm::DWARFContext> context_;  // binary_ must outlive this.
-  DwarfSections sections_;                       // Views into the sections of context_.
+  DwarfSections sections_;                       // Borrows bytes from the context or the fixture.
   std::optional<DebugNamesReader> debug_names_;
   UnitList info_units_;
   UnitList types_units_;

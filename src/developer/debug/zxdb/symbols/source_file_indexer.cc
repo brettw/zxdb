@@ -8,12 +8,9 @@
 
 #include <algorithm>
 
-#include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
-#include "src/developer/debug/zxdb/symbols/line_program_llvm.h"
 
 namespace zxdb {
 
@@ -66,32 +63,25 @@ std::optional<std::pair<const char*, const char*>> GetFileNameKey(LineFileEntrie
 
 }  // namespace
 
-void AddLineTableJob(const DwarfSections& sections, UnitIndex unit_index, llvm::DWARFUnit& unit,
-                     uint64_t first_code_address, std::vector<LineTableJob>* jobs,
-                     const DwarfBinary* binary) {
-  std::optional<uint64_t> offset = GetUnitLineTableOffset(unit, binary);
-  if (!offset)
+void AddLineTableJob(const DwarfBinary& binary, UnitIndex unit_index, uint64_t first_code_address,
+                     std::vector<LineTableJob>* jobs) {
+  auto source = binary.GetLineProgramSource(unit_index);
+  if (!source)
     return;
-
   LineTableJob& job = jobs->emplace_back();
   job.unit_index = unit_index;
-  job.section = AsStringView(GetUnitLineSection(sections, unit));
-  job.offset = *offset;
-  job.endian = sections.endian;
-  job.size = GetLineTableSize(job.section, job.offset, job.endian);
-  job.strings = GetLineStringSections(sections, unit, binary);
+  job.source = *source;
+  job.size = GetLineTableSize(source->section, source->offset, source->endian);
   job.first_code_address = first_code_address;
 }
 
 std::vector<LineTableJob> CollectLineTableJobs(DwarfBinary& binary) {
   std::vector<LineTableJob> jobs;
-  const DwarfSections& sections = binary.GetSections();
 
   auto add_units = [&](bool is_dwo, uint32_t count) {
     for (uint32_t i = 0; i < count; i++) {
       UnitIndex unit_index(is_dwo, i);
-      if (auto* unit = binary.GetLLVMUnit(unit_index))
-        AddLineTableJob(sections, unit_index, *unit, binary.GetFirstCodeAddress(), &jobs, &binary);
+      AddLineTableJob(binary, unit_index, binary.GetFirstCodeAddress(), &jobs);
     }
   };
   add_units(false, binary.GetNormalUnitCount());
@@ -165,7 +155,7 @@ void SourceFileIndexer::RunJobs(LineFilePathResolver& resolver) {
 
 void SourceFileIndexer::RunJob(size_t index, LineFilePathResolver& resolver) {
   const LineTableJob& job = jobs_[index];
-  ErrOr<LineProgram> program = LineProgram::Parse(job.section, job.offset, job.endian, job.strings);
+  ErrOr<LineProgram> program = job.source.Parse();
   if (program.has_error())
     return;
 

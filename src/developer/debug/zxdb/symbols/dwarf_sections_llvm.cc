@@ -10,7 +10,7 @@
 #include "llvm/DebugInfo/DWARF/DWARFObject.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 
 namespace zxdb {
 
@@ -30,12 +30,9 @@ std::span<const uint8_t> GetSingleSection(const llvm::DWARFObject& object,
   return count == 1 ? result : std::span<const uint8_t>();
 }
 
-const llvm::DWARFUnitIndex::Entry* GetPackageEntry(llvm::DWARFContext* context,
-                                                   const UnitHeader& header, bool is_dwo) {
-  if (!context || !is_dwo)
-    return nullptr;
-
-  const auto& index = header.is_type_unit() ? context->getTUIndex() : context->getCUIndex();
+const llvm::DWARFUnitIndex::Entry* GetPackageEntry(llvm::DWARFContext& context,
+                                                   const UnitHeader& header) {
+  const auto& index = header.is_type_unit() ? context.getTUIndex() : context.getCUIndex();
   auto signature = header.is_type_unit() ? header.type_signature : header.dwo_id;
   if (signature && index) {
     if (auto* entry = index.getFromHash(*signature))
@@ -44,21 +41,8 @@ const llvm::DWARFUnitIndex::Entry* GetPackageEntry(llvm::DWARFContext* context,
   return index.getFromOffset(header.offset);
 }
 
-UnitContextSource GetLinkedSkeleton(llvm::DWARFUnit& unit, UnitContextSource skeleton) {
-  if (!unit.isDWOUnit())
-    return {};
-  return skeleton.unit ? skeleton : UnitContextSource{unit.getLinkedUnit()};
-}
-
 UnitSection GetUnitSection(const llvm::DWARFUnit& unit) {
   return unit.isTypeUnit() && unit.getVersion() < 5 ? UnitSection::kTypes : UnitSection::kInfo;
-}
-
-std::span<const uint8_t> GetInfoSection(const DwarfSections& sections, bool is_dwo,
-                                        UnitSection kind) {
-  if (kind == UnitSection::kTypes)
-    return is_dwo ? sections.types_dwo : sections.types;
-  return is_dwo ? sections.info_dwo : sections.info;
 }
 
 struct UnitSections {
@@ -67,12 +51,10 @@ struct UnitSections {
   std::optional<UnitContext::PackageContributions> package;
 };
 
-ErrOr<UnitSections> GetUnitSections(const DwarfSections& sections, llvm::DWARFContext* context,
-                                    UnitHeader header, bool is_dwo) {
-  UnitSections result{.header = header,
-                      .abbrev = is_dwo ? sections.abbrev_dwo : sections.abbrev,
-                      .package = std::nullopt};
-  if (const auto* entry = GetPackageEntry(context, header, is_dwo)) {
+ErrOr<UnitSections> GetSplitUnitSections(const DwarfSections& sections, llvm::DWARFContext& context,
+                                         UnitHeader header) {
+  UnitSections result{.header = header, .abbrev = sections.abbrev_dwo, .package = std::nullopt};
+  if (const auto* entry = GetPackageEntry(context, header)) {
     auto contribution =
         [entry](llvm::DWARFSectionKind section) -> std::optional<UnitContext::Contribution> {
       if (const auto* part = entry->getContribution(section))
@@ -94,6 +76,12 @@ ErrOr<UnitSections> GetUnitSections(const DwarfSections& sections, llvm::DWARFCo
     };
   }
   return result;
+}
+
+UnitContextResult ShareContext(ErrOr<UnitContext> context) {
+  if (!context)
+    return context.err();
+  return std::make_shared<const UnitContext>(context.take_value());
 }
 
 }  // namespace
@@ -131,67 +119,16 @@ DwarfSections GetDwarfSections(const llvm::DWARFContext& context) {
   return GetDwarfSections(context.getDWARFObj());
 }
 
-std::span<const uint8_t> GetUnitLineSection(const DwarfSections& sections,
-                                            const llvm::DWARFUnit& unit) {
-  return unit.isDWOUnit() ? sections.line_dwo : sections.line;
-}
-
-std::span<const uint8_t> GetUnitStrSection(const DwarfSections& sections,
-                                           const llvm::DWARFUnit& unit) {
-  return unit.isDWOUnit() ? sections.str_dwo : sections.str;
-}
-
-std::span<const uint8_t> GetUnitStrOffsetsSection(const DwarfSections& sections,
-                                                  const llvm::DWARFUnit& unit) {
-  return unit.isDWOUnit() ? sections.str_offsets_dwo : sections.str_offsets;
-}
-
-UnitContextResult ReadUnitContextUncached(const DwarfSections& sections, llvm::DWARFUnit& unit,
-                                          UnitContextSource skeleton) {
-  return UnitContextCache::Parse(sections, unit, GetLinkedSkeleton(unit, skeleton), nullptr);
-}
-
-UnitContextResult GetUnitContext(llvm::DWARFUnit& unit, const DwarfBinary* binary,
-                                 UnitContextSource skeleton,
-                                 const DwarfSections* fallback_sections) {
-  if (binary && binary->GetLLVMContext() == &unit.getContext())
-    return binary->GetUnitContext(unit, skeleton);
-  if (fallback_sections)
-    return ReadUnitContextUncached(*fallback_sections, unit, skeleton);
-  return ReadUnitContextUncached(GetDwarfSections(unit.getContext()), unit, skeleton);
-}
-
-UnitContextResult UnitContextCache::GetOrParse(const DwarfSections& sections, llvm::DWARFUnit& unit,
-                                               UnitContextSource skeleton) {
-  skeleton = GetLinkedSkeleton(unit, skeleton);
-  // A foreign skeleton without a known owner can disappear while this cache still exists.
-  if (skeleton.unit && &skeleton.unit->getContext() != &unit.getContext() &&
-      (!skeleton.binary || skeleton.binary->GetLLVMContext() != &skeleton.unit->getContext())) {
-    return Parse(sections, unit, skeleton, this);
-  }
-
-  auto [begin, end] = units_.equal_range(&unit);
-  for (auto it = begin; it != end; ++it) {
-    const auto& entry = it->second;
-    if (entry.skeleton == skeleton.unit)
-      return entry.result;
-  }
-
-  // Section data is immutable. Keep parse errors too, so a bad unit costs one parse.
-  auto result = Parse(sections, unit, skeleton, this);
-  units_.emplace(&unit, Entry{skeleton.unit, result});
-  return result;
-}
-
 void UnitContextCache::Clear() {
-  units_ = decltype(units_)();
+  normal_units_ = decltype(normal_units_)();
+  split_units_ = decltype(split_units_)();
   std::lock_guard lock(abbrev_mutex_);
   abbrevs_.clear();
 }
 
 std::optional<UnitContextCache::AbbrevSection> UnitContextCache::GetPackageAbbrev(
     const DwarfSections& sections, llvm::DWARFContext& context, const UnitHeader& header) {
-  auto data = GetUnitSections(sections, &context, header, true);
+  auto data = GetSplitUnitSections(sections, context, header);
   if (!data)
     return std::nullopt;
   return AbbrevSection{data.value().abbrev, data.value().header.abbrev_offset};
@@ -218,59 +155,98 @@ std::shared_ptr<const ErrOr<AbbrevTable>> UnitContextCache::GetAbbrevs(
       .first->second;
 }
 
-UnitContextResult UnitContextCache::Parse(const DwarfSections& sections, llvm::DWARFUnit& unit,
-                                          UnitContextSource skeleton, UnitContextCache* cache) {
-  bool is_dwo = unit.isDWOUnit();
-  UnitSection kind = GetUnitSection(unit);
-  auto header = ReadUnitHeader(GetInfoSection(sections, is_dwo, kind), unit.getOffset(),
-                               sections.endian, kind);
-  if (!header)
-    return header.err();
-  auto data = GetUnitSections(sections, &unit.getContext(), header.value(), is_dwo);
-  if (!data)
-    return data.err();
+UnitContextResult UnitContextCache::GetNormal(const DwarfSections& sections,
+                                              const UnitHeader& header, UnitSection kind) {
+  auto found = normal_units_.find(&header);
+  if (found != normal_units_.end())
+    return found->second;
+  auto abbrevs = GetAbbrevs(false, sections.abbrev, header.abbrev_offset);
+  auto result = ShareContext(UnitContext::Parse(sections, header, kind, {}, abbrevs.get()));
+  return normal_units_.emplace(&header, std::move(result)).first->second;
+}
 
-  DwarfSections unit_sections = sections;
-  if (is_dwo)
-    unit_sections.abbrev_dwo = data.value().abbrev;
-  UnitContext::Options options;
-  options.is_dwo = is_dwo;
-  options.package = data.value().package;
-
-  std::shared_ptr<const UnitContext> address_context;
-  if (is_dwo) {
-    auto* address_unit = skeleton.unit;
-    if (!address_unit) {
-      // LLVM's address lookup uses the sole main info unit when there is no explicit link.
-      auto main_units = unit.getContext().info_section_units();
-      if (main_units.begin() != main_units.end() &&
-          std::next(main_units.begin()) == main_units.end()) {
-        address_unit = main_units.begin()->get();
-      }
-    }
-    if (address_unit && !address_unit->isDWOUnit()) {
-      if (&address_unit->getContext() == &unit.getContext()) {
-        address_context = (cache ? cache->GetOrParse(sections, *address_unit, {})
-                                 : ReadUnitContextUncached(sections, *address_unit))
-                              .take_value_or_empty();
-      } else {
-        address_context = GetUnitContext(*address_unit, skeleton.binary).take_value_or_empty();
-      }
-      if (skeleton.unit)
-        options.skeleton = address_context.get();
-      else
-        options.address_table = address_context.get();
+UnitContextResult UnitContextCache::GetSplit(const DwarfBinaryImpl& binary, UnitIndex index,
+                                             const UnitHeader& header, UnitSection kind,
+                                             UnitContextSource skeleton) {
+  auto* unit = binary.GetLLVMUnit(index);
+  if (!unit)
+    return Err("Missing split DWARF unit metadata.");
+  auto* linked = skeleton.binary ? nullptr : unit->getLinkedUnit();
+  // A foreign implicit skeleton has no known owner to keep it alive in this cache.
+  bool cacheable = !linked || &linked->getContext() == binary.GetLLVMContext();
+  if (cacheable) {
+    auto [begin, end] = split_units_.equal_range(&header);
+    for (auto it = begin; it != end; ++it) {
+      if (it->second.skeleton == skeleton && it->second.linked == linked)
+        return it->second.result;
     }
   }
 
-  auto abbrevs =
-      cache ? cache->GetAbbrevs(is_dwo, data.value().abbrev, data.value().header.abbrev_offset)
-            : nullptr;
-  auto context =
-      UnitContext::Parse(unit_sections, data.value().header, kind, options, abbrevs.get());
-  if (context.has_error())
-    return context.err();
-  return std::make_shared<const UnitContext>(context.take_value());
+  auto result = ParseSplit(binary, header, kind, skeleton, *unit, linked);
+  if (cacheable)
+    split_units_.emplace(&header, SplitEntry{skeleton, linked, result});
+  return result;
+}
+
+UnitContextResult UnitContextCache::ParseSplit(const DwarfBinaryImpl& binary,
+                                               const UnitHeader& header, UnitSection kind,
+                                               UnitContextSource skeleton, llvm::DWARFUnit& unit,
+                                               llvm::DWARFUnit* linked) {
+  auto sections = binary.GetSections();
+  auto data = GetSplitUnitSections(sections, unit.getContext(), header);
+  if (!data)
+    return data.err();
+  sections.abbrev_dwo = data.value().abbrev;
+  auto* address_unit = linked;
+  if (!skeleton.binary && !address_unit) {
+    // LLVM uses the sole main info unit as the address table when there is no link.
+    auto units = unit.getContext().info_section_units();
+    if (units.begin() != units.end() && std::next(units.begin()) == units.end())
+      address_unit = units.begin()->get();
+  }
+  auto address = GetAddressContext(binary, skeleton, address_unit);
+  UnitContext::Options options{.is_dwo = true, .package = data.value().package};
+  if (skeleton.binary || linked)
+    options.skeleton = address.get();
+  else
+    options.address_table = address.get();
+  auto abbrevs = GetAbbrevs(true, sections.abbrev_dwo, data.value().header.abbrev_offset);
+  return ShareContext(
+      UnitContext::Parse(sections, data.value().header, kind, options, abbrevs.get()));
+}
+
+std::shared_ptr<const UnitContext> UnitContextCache::GetAddressContext(
+    const DwarfBinaryImpl& binary, UnitContextSource provider, llvm::DWARFUnit* implicit) {
+  if (!provider.binary) {
+    if (!implicit || implicit->isDWOUnit())
+      return {};
+    UnitSection kind = GetUnitSection(*implicit);
+    uint64_t offset = implicit->getOffset();
+    if (&implicit->getContext() != binary.GetLLVMContext()) {
+      // The foreign unit has no known binary to cache its context.
+      auto sections = GetDwarfSections(implicit->getContext());
+      auto info = kind == UnitSection::kInfo ? sections.info : sections.types;
+      auto header = ReadUnitHeader(info, offset, sections.endian, kind);
+      if (!header)
+        return {};
+      return ShareContext(UnitContext::Parse(sections, header.value(), kind)).take_value_or_empty();
+    }
+    auto index = binary.FindUnitForRef(
+        kind == UnitSection::kInfo ? DwarfDieRef::Main(offset) : DwarfDieRef::Type(offset), false);
+    if (!index)
+      return {};
+    provider = {&binary, *index};
+  }
+
+  if (provider.index.is_dwo)
+    return {};
+  if (provider.binary != &binary)
+    return provider.binary->GetUnitContext(provider.index).take_value_or_empty();
+  // This binary already holds its owner-thread cache guard.
+  auto entry = binary.GetUnitHeader(provider.index);
+  return entry
+             ? GetNormal(binary.GetSections(), entry->header, entry->section).take_value_or_empty()
+             : nullptr;
 }
 
 }  // namespace zxdb

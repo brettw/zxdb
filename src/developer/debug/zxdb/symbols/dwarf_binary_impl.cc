@@ -16,17 +16,16 @@
 #include <unordered_set>
 
 #include <llvm/DebugInfo/DIContext.h>
-#include <llvm/DebugInfo/DWARF/DWARFCompileUnit.h>
 #include <llvm/DebugInfo/DWARF/DWARFContext.h>
 #include <llvm/DebugInfo/DWARF/DWARFDataExtractor.h>
 #include <llvm/DebugInfo/DWARF/DWARFObject.h>
 #include <llvm/DebugInfo/DWARF/DWARFUnit.h>
 #include <llvm/Object/Binary.h>
-#include <llvm/Object/ELFObjectFile.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Support/Error.h>
 
 #include "src/developer/debug/shared/logging/logging.h"
+#include "src/developer/debug/zxdb/common/checked_math.h"
 #include "src/developer/debug/zxdb/common/file_util.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/aranges_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
@@ -116,6 +115,34 @@ void LLVMErrorHandler(llvm::Error error) {
   });
 }
 
+// Reject repeated DWARF sections and find the lowest executable section address. Separate debug
+// files preserve section addresses and flags.
+ErrOr<uint64_t> InspectObjectSections(const llvm::object::ObjectFile& object) {
+  std::optional<uint64_t> first;
+  std::unordered_set<std::string_view> dwarf_sections;
+  for (const llvm::object::SectionRef& section : object.sections()) {
+    // For ELF, a text section is one with SHF_EXECINSTR.
+    if (section.isText())
+      first = std::min(first.value_or(std::numeric_limits<uint64_t>::max()), section.getAddress());
+
+    auto name = section.getName();
+    if (!name) {
+      llvm::consumeError(name.takeError());
+      continue;
+    }
+    // GNU compression changes the prefix but preserves the DWARF section kind.
+    if ((name->consume_front(".debug_") || name->consume_front(".zdebug_")) &&
+        !dwarf_sections.insert(*name).second) {
+      return Err(
+          "The object \"%s\" has more than one .debug_%s section. "
+          "This usually means a relocatable (.o) file. Link it first. "
+          "zxdb reads linked executables, shared libraries, and their separate debug files.",
+          object.getFileName().str().c_str(), name->str().c_str());
+    }
+  }
+  return first.value_or(0);
+}
+
 }  // namespace
 
 // To work around https://github.com/llvm/llvm-project/issues/58641.
@@ -149,10 +176,13 @@ class DwarfBinaryImpl::DebugAranges {
 
     // Generate aranges from compile units because .debug_aranges could be incomplete.
     // But we can skip those units that we have parsed.
-    for (const auto& compile_unit : binary.GetLLVMContext()->compile_units()) {
-      uint64_t offset = compile_unit->getOffset();
+    for (uint32_t i = 0; i < binary.info_units_.size(); ++i) {
+      const auto& header = binary.info_units_[i];
+      if (header.is_type_unit())
+        continue;
+      uint64_t offset = header.offset;
       if (parsed_units.insert(offset).second) {
-        auto unit = binary.GetUnitContext(*compile_unit);
+        auto unit = binary.GetUnitContext(UnitIndex(false, i));
         if (unit.has_error()) {
           LOGS(Error) << unit.err().msg();
           continue;
@@ -206,8 +236,8 @@ DwarfBinaryImpl::DwarfBinaryImpl(const std::string& name, const std::string& bin
                                  const std::string& build_id)
     : name_(name), binary_name_(binary_name), build_id_(build_id), weak_factory_(this) {}
 
-DwarfBinaryImpl::DwarfBinaryImpl(std::unique_ptr<llvm::DWARFContext> context)
-    : context_(std::move(context)), sections_(GetDwarfSections(*context_)), weak_factory_(this) {
+DwarfBinaryImpl::DwarfBinaryImpl(DwarfSections sections)
+    : sections_(sections), weak_factory_(this) {
   InitUnitLists();
 }
 
@@ -233,32 +263,6 @@ bool DwarfBinaryImpl::HasBinary() const {
     return debug->ProbeHasProgramBits();
 
   return false;
-}
-
-ErrOr<uint64_t> InspectObjectSections(const llvm::object::ObjectFile& object) {
-  std::optional<uint64_t> first;
-  std::unordered_set<std::string_view> dwarf_sections;
-  for (const llvm::object::SectionRef& section : object.sections()) {
-    // For ELF, a text section is one with SHF_EXECINSTR.
-    if (section.isText())
-      first = std::min(first.value_or(std::numeric_limits<uint64_t>::max()), section.getAddress());
-
-    auto name = section.getName();
-    if (!name) {
-      llvm::consumeError(name.takeError());
-      continue;
-    }
-    // GNU compression changes the prefix but preserves the DWARF section kind.
-    if ((name->consume_front(".debug_") || name->consume_front(".zdebug_")) &&
-        !dwarf_sections.insert(*name).second) {
-      return Err(
-          "The object \"%s\" has more than one .debug_%s section. "
-          "This usually means a relocatable (.o) file. Link it first. "
-          "zxdb reads linked executables, shared libraries, and their separate debug files.",
-          object.getFileName().str().c_str(), name->str().c_str());
-    }
-  }
-  return first.value_or(0);
 }
 
 Err DwarfBinaryImpl::Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
@@ -326,6 +330,8 @@ void DwarfBinaryImpl::InitUnitLists() {
   die_tables_[false].resize(GetNormalUnitCount());
   die_tables_[true].resize(GetDWOUnitCount());
 
+  if (!context_)
+    return;
   const auto& object = context_->getDWARFObj();
   if (!object.getCUIndexSection().empty() || !object.getTUIndexSection().empty()) {
     // LLVM can mutate its indexes during lookup. Resolve the bounds before raw DIE lookups
@@ -599,30 +605,55 @@ const DebugNamesReader* DwarfBinaryImpl::GetDebugNames() const {
   return debug_names_ && debug_names_->index_count() != 0 ? &*debug_names_ : nullptr;
 }
 
-UnitContextResult DwarfBinaryImpl::GetUnitContext(llvm::DWARFUnit& unit,
+UnitContextResult DwarfBinaryImpl::GetUnitContext(UnitIndex index,
                                                   UnitContextSource skeleton) const {
-  FX_CHECK(&unit.getContext() == context_.get());
 #ifndef NDEBUG
   // Same-binary skeleton lookups stay inside UnitContextCache. A different binary has its own
   // guard. Release the guard on return so a DWO index worker can hand the binary to the module.
   auto access = CheckUnitContextCacheAccess(unit_context_cache_active_);
 #endif
-  return unit_contexts_.GetOrParse(sections_, unit, skeleton);
+  auto unit = GetUnitHeader(index);
+  if (!unit)
+    return Err("Unknown DWARF unit.");
+  if (index.is_dwo)
+    return unit_contexts_.GetSplit(*this, index, unit->header, unit->section, skeleton);
+  return unit_contexts_.GetNormal(sections_, unit->header, unit->section);
 }
 
-std::shared_ptr<const LineFileTable> DwarfBinaryImpl::GetLineFileTable(llvm::DWARFUnit* unit,
+std::optional<LineProgramSource> DwarfBinaryImpl::GetLineProgramSource(UnitIndex index) const {
+  auto context = GetUnitContext(index);
+  if (!context || !context.value()->stmt_list())
+    return std::nullopt;
+  uint64_t offset = *context.value()->stmt_list();
+  if (index.is_dwo) {
+    auto* unit = GetLLVMUnit(index);
+    auto adjusted = CheckedAdd(offset, unit->getLineTableOffset());
+    if (!adjusted)
+      return std::nullopt;
+    offset = *adjusted;
+  }
+  LineStringSections strings = GetLineStringSections(sections_);
+  if (index.is_dwo)
+    strings.str = AsStringView(sections_.str_dwo);
+  if (auto contribution = context.value()->string_offsets()) {
+    auto bytes = index.is_dwo ? sections_.str_offsets_dwo : sections_.str_offsets;
+    strings.str_offsets = AsStringView(bytes.first(contribution->end));
+    strings.str_offsets_base = contribution->base;
+    strings.str_offset_size = contribution->entry_size;
+  }
+  return LineProgramSource{AsStringView(index.is_dwo ? sections_.line_dwo : sections_.line), offset,
+                           sections_.endian, strings};
+}
+
+std::shared_ptr<const LineFileTable> DwarfBinaryImpl::GetLineFileTable(UnitIndex unit,
                                                                        uint64_t file_index) const {
-  if (!unit)
-    return nullptr;
-  FX_DCHECK(&unit->getContext() == context_.get());
-  return line_tables_.GetFileTable(sections_, *unit, file_index, this);
+  auto source = GetLineProgramSource(unit);
+  return source ? line_tables_.GetFileTable(*source, file_index) : nullptr;
 }
 
-LineTable DwarfBinaryImpl::DecodeLineTable(llvm::DWARFUnit* unit) const {
-  if (!unit)
-    return LineTable();
-  FX_DCHECK(&unit->getContext() == context_.get());
-  return line_tables_.DecodeLineTable(sections_, *unit, first_code_address_, this);
+LineTable DwarfBinaryImpl::DecodeLineTable(UnitIndex unit) const {
+  auto source = GetLineProgramSource(unit);
+  return source ? line_tables_.DecodeLineTable(*source, first_code_address_) : LineTable();
 }
 
 void DwarfBinaryImpl::ClearDwarfCaches() {

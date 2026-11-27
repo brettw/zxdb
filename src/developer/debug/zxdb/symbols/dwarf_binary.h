@@ -15,6 +15,7 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
+#include "src/developer/debug/zxdb/symbols/line_program.h"
 #include "src/developer/debug/zxdb/symbols/symbol_context.h"
 #include "src/developer/debug/zxdb/symbols/unit_index.h"
 
@@ -36,21 +37,8 @@ class DwarfSymbolFactory;
 class LineFileTable;
 class SymbolContext;
 
-// Represents the low-level DWARF file. It provides a mockable wrapper around a llvm::DWARFContext.
-//
-// Unlike LLVM, a DwarfBinary represents one DWARF file on disk. In the case of Debug Fission
-// (--gsplit-dwarf mode where each compilation unit has its own symbols in a .dwo file), there will
-// be a separate DwarfBinary for each .dwo file as well as the main binary. These are linked
-// together by ModuleSymbols which represents the symbols for a .so or executable file.
-//
-// In LLVM there will be one llvm::DWARFContext that covers everything but their support for Debug
-// Fission is not complete enough for our use case so we roll our own.
-//
-// This is currently a very leaky abstraction because a lot of code was written before it was
-// created and that coded uses llvm objects directly. As a result, this has some accessors for
-// the underlying LLVM objects. Mocks may return null for these. If a new test needs to be written
-// for such code, wrappers should be added so that the code no longer needs the llvm objects and
-// can use the mockable wrappers.
+// Represents one DWARF file or one set of in-memory sections. ModuleSymbols connects a
+// main binary to the separate .dwo files that its skeleton units reference.
 //
 // Call on the binary's owning thread except for the raw DIE and type signature lookups below.
 // Immutable section views and DIE snapshots can be read from other threads while the binary
@@ -85,8 +73,7 @@ class DwarfBinary {
   // itself, such as PLT entries.
   virtual bool HasBinary() const = 0;
 
-  // Returns underlying LLVM objects. May be null in tests since the mock won't have this. See the
-  // class comment above.
+  // File-backed binaries expose the LLVM objects that own their sections.
   virtual llvm::object::ObjectFile* GetLLVMObjectFile() = 0;
   virtual llvm::DWARFContext* GetLLVMContext() const = 0;
 
@@ -94,17 +81,17 @@ class DwarfBinary {
   // exists. A view is empty when its section is absent.
   virtual const DwarfSections& GetSections() const = 0;
 
-  // Returns cached metadata for a unit of this binary. Call on its LLVM context thread.
-  virtual UnitContextResult GetUnitContext(llvm::DWARFUnit& unit,
+  // Returns cached metadata for a unit of this binary. Call on its owning thread.
+  virtual UnitContextResult GetUnitContext(UnitIndex index,
                                            UnitContextSource skeleton = {}) const = 0;
 
   UnitContextResult GetUnitContext(const DwarfDie& die, UnitContextSource skeleton = {}) const {
-    auto* unit = die.belongs_to(*this) ? GetLLVMUnit(die.unit_index()) : nullptr;
-    return unit ? GetUnitContext(*unit, skeleton) : UnitContextResult(Err("Unknown DWARF unit."));
+    return die.belongs_to(*this) ? GetUnitContext(die.unit_index(), skeleton)
+                                 : UnitContextResult(Err("Unknown DWARF unit."));
   }
 
-  // Supplies the remaining LLVM unit metadata while the split DWARF and line adapters use it.
-  virtual llvm::DWARFUnit* GetLLVMUnit(UnitIndex index) const = 0;
+  // Returns the section views and offset for the unit's line program, if present.
+  virtual std::optional<LineProgramSource> GetLineProgramSource(UnitIndex index) const = 0;
 
   // Returns the extent of the mapped segments in memory.
   virtual uint64_t GetMappedLength() const = 0;
@@ -168,13 +155,12 @@ class DwarfBinary {
   // Returns the resolved file name table of the line table of the given unit of this binary, or
   // null if the unit has no line table. The table has the given file index if the line table has
   // it. Usually this parses only the line table header. See LineTableCache.
-  virtual std::shared_ptr<const LineFileTable> GetLineFileTable(llvm::DWARFUnit* unit,
+  virtual std::shared_ptr<const LineFileTable> GetLineFileTable(UnitIndex unit,
                                                                 uint64_t file_index) const = 0;
 
   std::shared_ptr<const LineFileTable> GetLineFileTable(const DwarfDie& die,
                                                         uint64_t file_index) const {
-    return die.belongs_to(*this) ? GetLineFileTable(GetLLVMUnit(die.unit_index()), file_index)
-                                 : nullptr;
+    return die.belongs_to(*this) ? GetLineFileTable(die.unit_index(), file_index) : nullptr;
   }
 
   // Returns the lowest address of a code section of the binary, or 0 if it has none. Line table

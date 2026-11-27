@@ -43,10 +43,7 @@ std::string DwarfUnitImpl::GetCompilationDir() const {
   if (!binary_)
     return std::string();
 
-  auto* unit = binary_->GetLLVMUnit(index_);
-  if (!unit)
-    return std::string();
-  auto context = binary_->GetUnitContext(*unit);
+  auto context = binary_->GetUnitContext(index_);
   return context ? std::string(context.value()->compilation_dir().value_or(std::string_view()))
                  : std::string();
 }
@@ -54,7 +51,7 @@ std::string DwarfUnitImpl::GetCompilationDir() const {
 const LineTable& DwarfUnitImpl::GetLineTable() const {
   if (!line_table_) {
     if (binary_)
-      line_table_.emplace(binary_->DecodeLineTable(binary_->GetLLVMUnit(index_)));
+      line_table_.emplace(binary_->DecodeLineTable(index_));
     else
       line_table_.emplace();
   }

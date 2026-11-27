@@ -5,16 +5,12 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 
 #include <latch>
-#include <memory>
+#include <optional>
 #include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
 
-#include "llvm/ADT/StringMap.h"
-#include "llvm/DebugInfo/DWARF/DWARFContext.h"
-#include "llvm/Support/MemoryBuffer.h"
-#include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
@@ -30,8 +26,7 @@ class DieTree {
  public:
   explicit DieTree(bool leading_unknown_tag = false) {
     constexpr Endian kEndian = Endian::kLittle;
-    std::vector<uint8_t> abbrev;
-    DwarfSectionBuilder table(abbrev, kEndian);
+    DwarfSectionBuilder table(abbrev_, kEndian);
     table.AbbrevDeclaration(1, static_cast<uint64_t>(DwarfTag::kCompileUnit), true);
     table.AbbrevDeclaration(2, static_cast<uint64_t>(DwarfTag::kNamespace), true);
     table.AbbrevDeclaration(3, static_cast<uint64_t>(DwarfTag::kVariable), false);
@@ -47,29 +42,25 @@ class DieTree {
       table.AbbrevDeclaration(5, uint64_t{1} << 32, false);
     table.EndAbbrevTable();
 
-    std::vector<uint8_t> info;
-    DwarfSectionBuilder writer(info, kEndian);
+    DwarfSectionBuilder writer(info_, kEndian);
     auto unit = writer.BeginUnit({});
-    root_offset = info.size();
+    root_offset = info_.size();
     writer.Uleb(1);
     if (leading_unknown_tag)
       writer.Uleb(5);
-    namespace_offset = info.size();
+    namespace_offset = info_.size();
     writer.Uleb(2);
-    variable_offset = info.size();
+    variable_offset = info_.size();
     writer.Uleb(3);
     writer.Uleb(0);  // End of namespace children.
-    function_offset = info.size();
+    function_offset = info_.size();
     writer.Uleb(4);
     writer.CString("f");
     writer.CString("_Z1fv");
     writer.Uleb(0);  // End of unit children.
     writer.EndUnit(unit);
 
-    buffers_["debug_info"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(info));
-    buffers_["debug_abbrev"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(abbrev));
-    binary_ = std::make_unique<DwarfBinaryImpl>(
-        llvm::DWARFContext::create(buffers_, 8, kEndian == Endian::kLittle));
+    binary_.emplace(DwarfSections{.info = info_, .abbrev = abbrev_});
   }
 
   DwarfBinaryImpl& binary() { return *binary_; }
@@ -82,8 +73,8 @@ class DieTree {
   size_t function_offset;
 
  private:
-  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers_;
-  std::unique_ptr<DwarfBinaryImpl> binary_;
+  std::vector<uint8_t> info_, abbrev_;
+  std::optional<DwarfBinaryImpl> binary_;
 };
 
 TEST(DwarfDie, Navigation) {
@@ -266,10 +257,7 @@ TEST(DwarfDie, NameLookupPrecedence) {
   writer.Uleb(0);
   writer.EndUnit(unit);
 
-  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
-  buffers["debug_info"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(info));
-  buffers["debug_abbrev"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(abbrev));
-  DwarfBinaryImpl binary(llvm::DWARFContext::create(buffers, 8, true));
+  DwarfBinaryImpl binary(DwarfSections{.info = info, .abbrev = abbrev});
   auto die = binary.GetDieAtOffset(DwarfDieRef::Main(target));
   ASSERT_TRUE(die);
   EXPECT_STREQ("spec", die.short_name());
@@ -346,10 +334,7 @@ TEST(DwarfDie, NameFromTypeSignature) {
   writer.Uleb(0);
   writer.EndUnit(type_unit);
 
-  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
-  buffers["debug_info"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(info));
-  buffers["debug_abbrev"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(abbrev));
-  DwarfBinaryImpl binary(llvm::DWARFContext::create(buffers, 8, true));
+  DwarfBinaryImpl binary(DwarfSections{.info = info, .abbrev = abbrev});
   auto declaration = binary.GetDieAtOffset(DwarfDieRef::Main(declaration_offset));
   ASSERT_TRUE(declaration);
   EXPECT_STREQ("SignatureType", declaration.short_name());

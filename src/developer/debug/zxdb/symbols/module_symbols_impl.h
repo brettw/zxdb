@@ -10,7 +10,6 @@
 #include <unordered_map>
 
 #include "gtest/gtest_prod.h"
-#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/common/err.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_symbol_factory.h"
 #include "src/developer/debug/zxdb/symbols/elf_symbol_record.h"
@@ -19,18 +18,6 @@
 #include "src/developer/debug/zxdb/symbols/module_symbols.h"
 #include "src/lib/fxl/macros.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
-
-namespace llvm {
-
-class DWARFCompileUnit;
-class DWARFContext;
-class MemoryBuffer;
-
-namespace object {
-class Binary;
-}  // namespace object
-
-}  // namespace llvm
 
 namespace zxdb {
 
