@@ -192,6 +192,9 @@ Callers and implementations must preserve these invariants:
 
 - `Session` and `System` maintain a 1:1 lifecycle correspondence, and `Session`
   owns the `System` instance.
+- `ArchInfo` holds the target ABI, page size, and instruction size and alignment.
+  `Disassembler` shares read-only LLVM target data per architecture and owns
+  its context, decoder, and printer.
 - `System` always contains at least one `Target`. `System::DeleteTarget` fails
   if the target is running or is the only remaining `Target` in `System`.
 - A `Target` persists across process runs (`State::kNone`, `kStarting`,

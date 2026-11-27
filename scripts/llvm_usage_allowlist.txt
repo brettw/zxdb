@@ -2,10 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-src/developer/debug/zxdb/client/arch_info.cc
-src/developer/debug/zxdb/client/arch_info.h
 src/developer/debug/zxdb/client/disassembler.cc
-src/developer/debug/zxdb/client/disassembler.h
 src/developer/debug/zxdb/console/commands/verb_sym_info.cc
 src/developer/debug/zxdb/symbols/elf_symbol_record.cc
 src/developer/debug/zxdb/symbols/function_name_index.cc

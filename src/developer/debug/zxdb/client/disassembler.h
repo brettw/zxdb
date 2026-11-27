@@ -16,13 +16,6 @@
 #include "src/developer/debug/zxdb/common/err.h"
 #include "src/lib/fxl/macros.h"
 
-namespace llvm {
-class MCContext;
-class MCDisassembler;
-class MCInst;
-class MCInstPrinter;
-}  // namespace llvm
-
 namespace zxdb {
 
 class ArchInfo;
@@ -79,9 +72,8 @@ class Disassembler {
   Disassembler();
   ~Disassembler();
 
-  // The ArchInfo pointer must outlive this class. Since typically this will come from the Session
-  // object which can destroy the LLVM context when the agent is disconnected, you will not want to
-  // store Disassembler objects.
+  // Initializes the disassembler for the given architecture. ArchInfo only needs to live
+  // through this call.
   Err Init(const ArchInfo* arch);
 
   // Disassembles one machine instruction, setting the required information the to columns of the
@@ -115,19 +107,8 @@ class Disassembler {
                          size_t max_instructions, std::vector<Row>* out) const;
 
  private:
-  // Computes the instruction type for the given instruction. If this is a direction call
-  // instruction it will compute the destination of the call.
-  //
-  // The address is the address of the beginning of the instruction. It is needed to decode relative
-  // addresses. The data and data_len indicates the array of bytes that makes up the instruction.
-  void FillInstructionInfo(uint64_t address, const uint8_t* data, uint64_t data_len,
-                           const llvm::MCInst& inst, Row* row) const;
-
-  const ArchInfo* arch_ = nullptr;
-
-  std::unique_ptr<llvm::MCContext> context_;
-  std::unique_ptr<llvm::MCDisassembler> disasm_;
-  std::unique_ptr<llvm::MCInstPrinter> printer_;
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
 
   FXL_DISALLOW_COPY_AND_ASSIGN(Disassembler);
 };

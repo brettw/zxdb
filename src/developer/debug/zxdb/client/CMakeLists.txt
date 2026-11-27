@@ -74,6 +74,9 @@ add_library(zxdb_client STATIC
   until_process_controller.cc
   until_thread_controller.cc
 )
-target_link_libraries(zxdb_client PUBLIC zxdb_format zxdb_expr zxdb_symbols analytics uuid zstd llvm_host)
+target_link_libraries(zxdb_client
+  PUBLIC zxdb_format zxdb_expr zxdb_symbols analytics uuid zstd
+  PRIVATE llvm_host
+)
 target_sources(zxdb_client PRIVATE minidump_memory.cc minidump_remote_api.cc)
 target_link_libraries(zxdb_client PUBLIC crashpad)

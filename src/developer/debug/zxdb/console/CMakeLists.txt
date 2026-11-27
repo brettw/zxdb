@@ -99,4 +99,7 @@ add_library(zxdb_console STATIC
   verbs.cc
   verbs_settings.cc
 )
-target_link_libraries(zxdb_console PUBLIC zxdb_client zxdb_format cmdline line_input analytics llvm_host)
+target_link_libraries(zxdb_console
+  PUBLIC zxdb_client zxdb_format cmdline line_input analytics
+  PRIVATE llvm_host
+)

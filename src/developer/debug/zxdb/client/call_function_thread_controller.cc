@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "src/developer/debug/ipc/records.h"
+#include "src/developer/debug/shared/arch.h"
 #include "src/developer/debug/shared/register_info.h"
 #include "src/developer/debug/shared/register_value.h"
 #include "src/developer/debug/zxdb/client/call_function_thread_controller_arm64.h"
@@ -76,8 +77,8 @@ Err CallFunctionThreadController::WriteParametersToRegisters() {
   auto argument_registers = *arg_regs_opt;
   if (parameters_.size() > argument_registers.size()) {
     return Err("Only %zu arguments are supported functions on %s, but was given %zu",
-               argument_registers.size(), thread()->session()->arch_info().triple_name().c_str(),
-               parameters_.size());
+               argument_registers.size(),
+               debug::ArchToString(thread()->session()->arch_info().arch()), parameters_.size());
   }
 
   for (size_t i = 0; i < parameters_.size(); i++) {

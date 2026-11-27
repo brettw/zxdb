@@ -78,4 +78,7 @@ add_library(zxdb_symbols STATIC
   variant_part.cc
   visit_scopes.cc
 )
-target_link_libraries(zxdb_symbols PUBLIC zxdb_common zxdb_dwarf debug_ipc elflib llvm_host rapidjson)
+target_link_libraries(zxdb_symbols
+  PUBLIC zxdb_common zxdb_dwarf debug_ipc elflib rapidjson
+  PRIVATE llvm_host
+)

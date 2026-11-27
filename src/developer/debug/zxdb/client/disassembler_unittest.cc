@@ -16,6 +16,15 @@ namespace zxdb {
 
 using Row = Disassembler::Row;
 
+TEST(Disassembler, UnknownArchitecture) {
+  ArchInfo arch;
+  Err err = arch.Init(debug::Arch::kUnknown, 4096);
+  ASSERT_FALSE(err.has_error()) << err.msg();
+
+  Disassembler d;
+  EXPECT_TRUE(d.Init(&arch).has_error());
+}
+
 TEST(Disassembler, X64Individual) {
   ArchInfo arch;
   Err err = arch.Init(debug::Arch::kX64, 4096);
@@ -262,6 +271,31 @@ TEST(Disassembler, Arm64Many) {
   EXPECT_EQ(Row(0x123456788, &sve_data[8], 4, "bext", "z0.b, z1.b, z2.b", ""), out[2]);
 }
 
+TEST(Disassembler, Riscv64Many) {
+  ArchInfo arch;
+  Err err = arch.Init(debug::Arch::kRiscv64, 4096);
+  ASSERT_FALSE(err.has_error()) << err.msg();
+
+  Disassembler d;
+  err = d.Init(&arch);
+  ASSERT_FALSE(err.has_error()) << err.msg();
+
+  // Assembled with llvm-mc-19 -triple=riscv64 and checked with llvm-objdump-19 -d.
+  // Both commands use -mattr=+m,+a,+f,+d,+c,+zicsr,+zifencei.
+  const uint8_t data[] = {
+      0x05, 0x05,              // c.addi a0, 1
+      0x13, 0x05, 0xa5, 0x02,  // addi a0, a0, 42
+      0x33, 0x85, 0xc5, 0x02,  // mul a0, a1, a2
+  };
+
+  std::vector<Row> out;
+  EXPECT_EQ(std::size(data), d.DisassembleMany(data, std::size(data), 0x1234, {}, 0, &out));
+  ASSERT_EQ(3u, out.size());
+  EXPECT_EQ(Row(0x1234, &data[0], 2, "addi", "a0, a0, 0x1", ""), out[0]);
+  EXPECT_EQ(Row(0x1236, &data[2], 4, "addi", "a0, a0, 0x2a", ""), out[1]);
+  EXPECT_EQ(Row(0x123a, &data[6], 4, "mul", "a0, a1, a2", ""), out[2]);
+}
+
 TEST(Disassembler, CallX64) {
   ArchInfo arch;
   Err err = arch.Init(debug::Arch::kX64, 4096);
@@ -271,37 +305,28 @@ TEST(Disassembler, CallX64) {
   err = d.Init(&arch);
   ASSERT_FALSE(err.has_error()) << err.msg();
 
-  Disassembler::Options opts;
-  std::vector<Row> out;
-
-  // Make a little memory block with valid instructions in it.
-  debug_ipc::MemoryBlock block_with_data;
-  block_with_data.address = 0x123456780;
-  block_with_data.valid = true;
-  block_with_data.data = std::vector<uint8_t>{
-      0xe8, 0xce, 0x00, 0x00, 0x00,  // call +0xce (relative to next instruction).
-      0xe8, 0xf4, 0xff, 0xff, 0xff,  // call -0x0c (relative to next instruction).
-      0xff, 0xd0                     // call rax (indirect call to register value).
+  // Assembled with llvm-mc-19 -triple=x86_64 and checked with
+  // llvm-objdump-19 -d --x86-asm-syntax=intel --adjust-vma=0x123456780.
+  const uint8_t data[] = {
+      0xe8, 0xce, 0x00, 0x00, 0x00,  // call .+0xd3
+      0xe8, 0xf4, 0xff, 0xff, 0xff,  // call .-7
+      0xff, 0xd0,                    // call *%rax
+      0xff, 0xe0,                    // jmp *%rax
   };
-  block_with_data.size = static_cast<uint32_t>(block_with_data.data.size());
 
-  std::vector<debug_ipc::MemoryBlock> vect;
-  vect.push_back(block_with_data);
-
-  MemoryDump dump(std::move(vect));
-  size_t consumed = d.DisassembleDump(dump, block_with_data.address, opts, 0, &out);
-  EXPECT_EQ(12u, consumed);
-  ASSERT_EQ(3u, out.size());
-  EXPECT_EQ(Row(0x123456780, &block_with_data.data[0], 5, "call", "0xce", "",
-                Disassembler::InstructionType::kCallDirect,
-                block_with_data.address + 5 /* = length of instruction */ + 0xce),
+  std::vector<Row> out;
+  EXPECT_EQ(std::size(data), d.DisassembleMany(data, std::size(data), 0x123456780, {}, 0, &out));
+  ASSERT_EQ(4u, out.size());
+  EXPECT_EQ(Row(0x123456780, &data[0], 5, "call", "0xce", "",
+                Disassembler::InstructionType::kCallDirect, 0x123456853),
             out[0]);
-  EXPECT_EQ(Row(0x123456785, &block_with_data.data[5], 5, "call", "-0xc", "",
-                Disassembler::InstructionType::kCallDirect, block_with_data.address + 10 - 12),
+  EXPECT_EQ(Row(0x123456785, &data[5], 5, "call", "-0xc", "",
+                Disassembler::InstructionType::kCallDirect, 0x12345677e),
             out[1]);
-  EXPECT_EQ(Row(0x12345678a, &block_with_data.data[10], 2, "call", "rax", "",
+  EXPECT_EQ(Row(0x12345678a, &data[10], 2, "call", "rax", "",
                 Disassembler::InstructionType::kCallIndirect),
             out[2]);
+  EXPECT_EQ(Row(0x12345678c, &data[12], 2, "jmp", "rax", ""), out[3]);
 }
 
 TEST(Disassembler, CallArm64) {
@@ -313,33 +338,28 @@ TEST(Disassembler, CallArm64) {
   err = d.Init(&arch);
   ASSERT_FALSE(err.has_error()) << err.msg();
 
-  Disassembler::Options opts;
-  std::vector<Row> out;
-
-  // Make a little memory block with valid instructions in it.
-  debug_ipc::MemoryBlock block_with_data;
-  block_with_data.address = 0xc55f8;
-  block_with_data.valid = true;
-  block_with_data.data = std::vector<uint8_t>{
-      0x06, 0x00, 0x00, 0x94,  // bl +0x06 (relative to this instruction)
+  // Assembled with llvm-mc-19 -triple=aarch64 and checked with
+  // llvm-objdump-19 -d --adjust-vma=0xc55f8.
+  const uint8_t data[] = {
+      0x06, 0x00, 0x00, 0x94,  // bl #0x18
+      0xfe, 0xff, 0xff, 0x97,  // bl #-0x8
       0x00, 0x00, 0x3f, 0xd6,  // blr x0
+      0x00, 0x00, 0x1f, 0xd6,  // br x0
   };
-  block_with_data.size = static_cast<uint32_t>(block_with_data.data.size());
 
-  std::vector<debug_ipc::MemoryBlock> vect;
-  vect.push_back(block_with_data);
-
-  MemoryDump dump(std::move(vect));
-  size_t consumed = d.DisassembleDump(dump, block_with_data.address, opts, 4, &out);
-  EXPECT_EQ(8u, consumed);
-  ASSERT_EQ(2u, out.size());
-  EXPECT_EQ(Row(0xc55f8, &block_with_data.data[0], 4, "bl", "#0x18", "",
-                Disassembler::InstructionType::kCallDirect, 0xc5610),
+  std::vector<Row> out;
+  EXPECT_EQ(std::size(data), d.DisassembleMany(data, std::size(data), 0xc55f8, {}, 0, &out));
+  ASSERT_EQ(4u, out.size());
+  EXPECT_EQ(Row(0xc55f8, &data[0], 4, "bl", "#0x18", "", Disassembler::InstructionType::kCallDirect,
+                0xc5610),
             out[0]);
-  EXPECT_EQ(Row(0xc55fc, &block_with_data.data[4], 4, "blr", "x0", "",
-                Disassembler::InstructionType::kCallIndirect),
+  EXPECT_EQ(Row(0xc55fc, &data[4], 4, "bl", "#-0x8", "", Disassembler::InstructionType::kCallDirect,
+                0xc55f4),
             out[1]);
-  std::ignore = *out[0].call_dest;
+  EXPECT_EQ(
+      Row(0xc5600, &data[8], 4, "blr", "x0", "", Disassembler::InstructionType::kCallIndirect),
+      out[2]);
+  EXPECT_EQ(Row(0xc5604, &data[12], 4, "br", "x0", ""), out[3]);
 }
 
 }  // namespace zxdb

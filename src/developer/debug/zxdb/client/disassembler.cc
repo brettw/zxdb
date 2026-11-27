@@ -7,17 +7,29 @@
 #include <inttypes.h>
 
 #include <limits>
+#include <mutex>
 #include <ostream>
 
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/MC/MCAsmInfo.h"
 #include "llvm/MC/MCContext.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
+#include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstPrinter.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCTargetOptions.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 #include "src/developer/debug/ipc/records.h"
 #include "src/developer/debug/zxdb/client/arch_info.h"
 #include "src/developer/debug/zxdb/client/memory_dump.h"
+#include "src/developer/debug/zxdb/common/err_or.h"
 #include "src/developer/debug/zxdb/common/string_util.h"
 #include "src/lib/fxl/strings/string_printf.h"
 #include "src/lib/fxl/strings/trim.h"
@@ -25,6 +37,81 @@
 namespace zxdb {
 
 namespace {
+
+// The decoder and printer read this setup. Each disassembler owns its mutable MC state.
+struct MCTargetInfo {
+  llvm::Triple triple;
+  const llvm::Target* target;
+  std::unique_ptr<const llvm::MCInstrInfo> instr_info;
+  std::unique_ptr<const llvm::MCRegisterInfo> register_info;
+  std::unique_ptr<const llvm::MCSubtargetInfo> subtarget_info;
+  std::unique_ptr<const llvm::MCAsmInfo> asm_info;
+};
+
+ErrOr<MCTargetInfo> CreateMCTargetInfo(const char* triple_name, const char* processor_name,
+                                       const char* features) {
+  static std::once_flag targets_initialized;
+  std::call_once(targets_initialized, [] {
+    llvm::InitializeAllTargetInfos();
+    llvm::InitializeAllTargetMCs();
+    llvm::InitializeAllDisassemblers();
+  });
+
+  MCTargetInfo info;
+  info.triple = llvm::Triple(triple_name);
+#if LLVM_VERSION_MAJOR == 19
+  const auto& llvm_triple = info.triple.getTriple();
+#else
+  const auto& llvm_triple = info.triple;
+#endif
+
+  std::string err_msg;
+  info.target = llvm::TargetRegistry::lookupTarget(llvm_triple, err_msg);
+  if (!info.target)
+    return Err("Error initializing LLVM: " + err_msg);
+
+  info.instr_info.reset(info.target->createMCInstrInfo());
+  info.register_info.reset(info.target->createMCRegInfo(llvm_triple));
+  info.subtarget_info.reset(
+      info.target->createMCSubtargetInfo(llvm_triple, processor_name, features));
+  if (!info.instr_info || !info.register_info || !info.subtarget_info)
+    return Err("Error initializing LLVM.");
+
+  info.asm_info.reset(
+      info.target->createMCAsmInfo(*info.register_info, llvm_triple, llvm::MCTargetOptions()));
+  if (!info.asm_info)
+    return Err("Couldn't create LLVM assembly info.");
+
+  return info;
+}
+
+const ErrOr<MCTargetInfo>& GetMCTargetInfo(debug::Arch arch) {
+  // Function-local statics synchronize initialization. Keep the LLVM objects alive until exit
+  // to avoid dependencies on LLVM's static destruction order.
+  switch (arch) {
+    case debug::Arch::kX64: {
+      static const auto& info =
+          *new const ErrOr<MCTargetInfo>(CreateMCTargetInfo("x86_64", "x86-64", ""));
+      return info;
+    }
+    case debug::Arch::kArm64: {
+      static const auto& info =
+          *new const ErrOr<MCTargetInfo>(CreateMCTargetInfo("aarch64", "generic", "+all"));
+      return info;
+    }
+    case debug::Arch::kRiscv64: {
+      // RV64GC includes compressed instructions, which allow 2-byte alignment.
+      static const auto& info = *new const ErrOr<MCTargetInfo>(
+          CreateMCTargetInfo("riscv64", "generic", "+m,+a,+f,+d,+c,+zicsr,+zifencei"));
+      return info;
+    }
+    case debug::Arch::kUnknown:
+      break;
+  }
+  static const auto& error =
+      *new const ErrOr<MCTargetInfo>(Err("Cannot disassemble unknown architecture."));
+  return error;
+}
 
 // In-place replaces instances of ANY of the characters in "search_for" with the given replacement
 // in the given string.
@@ -71,6 +158,35 @@ void SplitInstruction(std::string* instruction, std::string* params) {
 }
 
 }  // namespace
+
+struct Disassembler::Impl {
+  Impl(const ArchInfo& arch_info, const MCTargetInfo& target_info)
+      : arch(arch_info.arch()),
+        instr_align(arch_info.instr_align()),
+        target_info(target_info),
+#if LLVM_VERSION_MAJOR == 19
+        context(target_info.triple, target_info.asm_info.get(), target_info.register_info.get(),
+                target_info.subtarget_info.get())
+#else
+        context(target_info.triple, *target_info.asm_info, *target_info.register_info,
+                *target_info.subtarget_info)
+#endif
+  {
+  }
+
+  // Classifies a decoded instruction and computes the destination for a direct call.
+  void FillInstructionInfo(uint64_t address, const uint8_t* data, uint64_t data_len,
+                           const llvm::MCInst& inst, Row* row) const;
+
+  debug::Arch arch;
+  size_t instr_align;
+  const MCTargetInfo& target_info;
+  llvm::MCContext context;
+  // llvm::nulls() is shared. A separate sink lets each disassembler write on its own thread.
+  llvm::raw_null_ostream ignored_comments;
+  std::unique_ptr<llvm::MCDisassembler> disasm;
+  std::unique_ptr<llvm::MCInstPrinter> printer;
+};
 
 Disassembler::Row::Row() = default;
 
@@ -132,27 +248,26 @@ Disassembler::Disassembler() = default;
 Disassembler::~Disassembler() = default;
 
 Err Disassembler::Init(const ArchInfo* arch) {
-  arch_ = arch;
+  const auto& target_info = GetMCTargetInfo(arch->arch());
+  if (target_info.has_error())
+    return target_info.err();
+  const auto& info = target_info.value();
 
-#if LLVM_VERSION_MAJOR == 19
-  context_ = std::make_unique<llvm::MCContext>(*arch_->triple(), arch_->asm_info(),
-                                               arch_->register_info(), arch_->subtarget_info());
-#else
-  context_ = std::make_unique<llvm::MCContext>(*arch_->triple(), *arch_->asm_info(),
-                                               *arch_->register_info(), *arch_->subtarget_info());
-#endif
-  disasm_.reset(arch_->target()->createMCDisassembler(*arch_->subtarget_info(), *context_));
-  if (!disasm_)
+  auto impl = std::make_unique<Impl>(*arch, info);
+  impl->disasm.reset(info.target->createMCDisassembler(*info.subtarget_info, impl->context));
+  if (!impl->disasm)
     return Err("Couldn't create LLVM disassembler.");
 
   constexpr int kAssemblyFlavor = 1;  // 1 means "Intel" (not AT&T).
-  printer_.reset(arch_->target()->createMCInstPrinter(*arch_->triple(), kAssemblyFlavor,
-                                                      *arch_->asm_info(), *arch_->instr_info(),
-                                                      *arch_->register_info()));
-  printer_->setPrintHexStyle(llvm::HexStyle::C);  // ::C = 0xff-style.
-  printer_->setPrintImmHex(true);
-  printer_->setUseMarkup(false);
+  impl->printer.reset(info.target->createMCInstPrinter(info.triple, kAssemblyFlavor, *info.asm_info,
+                                                       *info.instr_info, *info.register_info));
+  if (!impl->printer)
+    return Err("Couldn't create LLVM instruction printer.");
+  impl->printer->setPrintHexStyle(llvm::HexStyle::C);  // ::C = 0xff-style.
+  impl->printer->setPrintImmHex(true);
+  impl->printer->setUseMarkup(false);
 
+  impl_ = std::move(impl);
   return Err();
 }
 
@@ -163,8 +278,8 @@ size_t Disassembler::DisassembleOne(const uint8_t* data, size_t data_len, uint64
   // Decode.
   llvm::MCInst inst;
   uint64_t consumed = 0;
-  auto status = disasm_->getInstruction(inst, consumed, llvm::ArrayRef<uint8_t>(data, data_len),
-                                        address, llvm::nulls());
+  auto status = impl_->disasm->getInstruction(
+      inst, consumed, llvm::ArrayRef<uint8_t>(data, data_len), address, impl_->ignored_comments);
   if (status == llvm::MCDisassembler::Success) {
     // Print the instruction. Note that LLVM appends to the strings so we need to make sure they're
     // empty before using.
@@ -173,20 +288,21 @@ size_t Disassembler::DisassembleOne(const uint8_t* data, size_t data_len, uint64
     llvm::raw_string_ostream inst_stream(out->op);
     llvm::raw_string_ostream comment_stream(out->comment);
 
-    printer_->setCommentStream(comment_stream);
-    printer_->printInst(&inst, 0, llvm::StringRef(), *arch_->subtarget_info(), inst_stream);
-    printer_->setCommentStream(llvm::nulls());
+    impl_->printer->setCommentStream(comment_stream);
+    impl_->printer->printInst(&inst, 0, llvm::StringRef(), *impl_->target_info.subtarget_info,
+                              inst_stream);
+    impl_->printer->setCommentStream(impl_->ignored_comments);
 
     inst_stream.flush();
     comment_stream.flush();
 
     SplitInstruction(&out->op, &out->params);
-    FillInstructionInfo(address, data, consumed, inst, out);
+    impl_->FillInstructionInfo(address, data, consumed, inst, out);
   } else {
     // Failure decoding.
     if (!options.emit_undecodable)
       return 0;
-    consumed = std::min(data_len, arch_->instr_align());
+    consumed = std::min(data_len, impl_->instr_align);
     GetInvalidInstructionStrs(data, consumed, &out->op, &out->params, &out->comment);
   }
 
@@ -197,7 +313,7 @@ size_t Disassembler::DisassembleOne(const uint8_t* data, size_t data_len, uint64
     out->comment = fxl::TrimString(out->comment, "\r\n ");
     ReplaceAllInstancesOf("\r\n", ' ', &out->comment);
 
-    out->comment = arch_->asm_info()->getCommentString().str() + " " + out->comment;
+    out->comment = impl_->target_info.asm_info->getCommentString().str() + " " + out->comment;
   }
 
   out->bytes = std::vector<uint8_t>(data, data + consumed);
@@ -242,7 +358,8 @@ size_t Disassembler::DisassembleDump(const MemoryDump& dump, uint64_t start_addr
 
     if (!block.valid) {
       // Invalid region.
-      std::string comment = arch_->asm_info()->getCommentString().str() + " Invalid memory @ ";
+      std::string comment =
+          impl_->target_info.asm_info->getCommentString().str() + " Invalid memory @ ";
 
       if (block_i == dump.blocks().size() - 1) {
         // If the last block, just show the starting address because the size will normally be
@@ -284,8 +401,9 @@ size_t Disassembler::DisassembleDump(const MemoryDump& dump, uint64_t start_addr
   return static_cast<size_t>(dump.size());
 }
 
-void Disassembler::FillInstructionInfo(uint64_t address, const uint8_t* data, uint64_t data_len,
-                                       const llvm::MCInst& inst, Row* row) const {
+void Disassembler::Impl::FillInstructionInfo(uint64_t address, const uint8_t* data,
+                                             uint64_t data_len, const llvm::MCInst& inst,
+                                             Row* row) const {
   row->type = InstructionType::kOther;  // Default to "other" for early returns below.
 
   // inst.getOpcode() returns an LLVM enum value that's defined in an internal header not included
@@ -295,7 +413,7 @@ void Disassembler::FillInstructionInfo(uint64_t address, const uint8_t* data, ui
     return;  // All instructions we care about have one operand.
   const llvm::MCOperand& operand = inst.getOperand(0);
 
-  if (arch_->arch() == debug::Arch::kX64) {
+  if (arch == debug::Arch::kX64) {
     // On x64, almost all of our calls use the 32-bit instruction-relative variant. Most of the
     // other variants are indirect so can't be decoded statically. Therefore this is the only
     // variant we're worrying about here.
@@ -323,10 +441,10 @@ void Disassembler::FillInstructionInfo(uint64_t address, const uint8_t* data, ui
       row->type = InstructionType::kCallIndirect;
       return;
     }
-  } else if (arch_->arch() == debug::Arch::kArm64 && data_len == sizeof(uint32_t)) {
+  } else if (arch == debug::Arch::kArm64 && data_len == sizeof(uint32_t)) {
     // The BL instruction has the high 6 bits 0b100101 (in data[3] for little-endian).
     if ((data[3] & 0b11111100) == 0b10010100) {
-      // Opcode has one operand which is a 24-bit signed offset from the address of this
+      // Opcode has one operand which is a 26-bit signed offset from the address of this
       // instruction, divided by 4.
       if (!operand.isImm())
         return;  // Invalid.
