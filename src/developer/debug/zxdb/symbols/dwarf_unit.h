@@ -48,6 +48,10 @@ class DwarfUnit : public fxl::RefCountedThreadSafe<DwarfUnit> {
   // By default, load the full tree so callers can walk the children of the root.
   virtual DwarfDie GetUnitDie(DwarfDie::Load load = DwarfDie::Load::kAllDies) const = 0;
 
+  // Loads the full tree once and walks its entries in section order, including null entries.
+  // Copy an entry to keep it after advancing or destroying the iterator.
+  auto GetDies() const { return GetUnitDie().unit_dies(); }
+
   // Returns the innermost function covering the given module-relative address, if any.
   // Returns an invalid LazySymbol on failure.
   virtual LazySymbol FunctionForRelativeAddress(uint64_t relative_address) const = 0;
@@ -77,7 +81,7 @@ class DwarfUnit : public fxl::RefCountedThreadSafe<DwarfUnit> {
   //
   // The byte offset is the absolute offset within the entire binary, but it must be a member of
   // this unit. See DwarfBinary::GetDieAtOffset() to query across units.
-  // For an indexed lookup, first call GetDieCount() and use an index below that count.
+  // An out-of-range index returns an empty handle.
   virtual DwarfDie GetDieAtIndex(uint64_t index) const = 0;
   virtual DwarfDie GetDieAtOffset(DwarfDieRef die_ref) const = 0;
 

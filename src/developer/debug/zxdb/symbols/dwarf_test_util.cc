@@ -13,7 +13,7 @@ namespace {
 
 constexpr DwarfAttr kNameAttr[] = {DwarfAttr::kName};
 
-std::string_view GetDieName(DwarfDieDecoder& decoder, DwarfDie die) {
+std::string_view GetDieName(DwarfDieDecoder& decoder, const DwarfDie& die) {
   if (die && decoder.Decode(die))
     return decoder.GetCString(DwarfAttr::kName).value_or("");
   return {};
@@ -35,8 +35,7 @@ fxl::RefPtr<DwarfUnit> GetUnitWithNameEndingIn(DwarfBinary& binary, bool is_dwo,
 
 DwarfDie GetFirstDieOfTagAndName(const DwarfUnit& unit, DwarfTag tag, std::string_view name) {
   DwarfDieDecoder decoder(*unit.GetBinary(), kNameAttr);
-  for (uint64_t i = 0, count = unit.GetDieCount(); i < count; ++i) {
-    DwarfDie die = unit.GetDieAtIndex(i);
+  for (const DwarfDie& die : unit.GetDies()) {
     if (die.tag() == tag && GetDieName(decoder, die) == name)
       return die;
   }

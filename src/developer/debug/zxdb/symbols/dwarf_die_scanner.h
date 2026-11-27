@@ -40,18 +40,17 @@ class DwarfDieScanner {
 
   ~DwarfDieScanner();
 
-  // Requires !done(). Call before Advance() to update the current DIE and its scope. The reference
-  // is valid until the next call to Prepare() or until the scanner is destroyed.
+  // Requires !done(). Call before Advance() to compute the current DIE's scope. The reference
+  // is valid until the scanner advances or is destroyed.
   const DwarfDie& Prepare();
 
   // Advances to the next DIE.
-  void Advance();
+  void Advance() { ++current_; }
 
-  uint32_t die_index() const { return die_index_; }
-  uint32_t die_count() const { return die_count_; }
-  DwarfDie GetDieAtIndex(uint64_t index) const { return current_die_.die_at_index(index); }
+  uint32_t die_count() const { return root_.unit_die_count(); }
+  DwarfDie GetDieAtIndex(uint64_t index) const { return root_.die_at_index(index); }
 
-  bool done() const { return die_index_ == die_count_; }
+  bool done() const { return current_ == std::default_sentinel; }
 
   // Returns true if the current stack position is considered to be directly inside a function.
   // Lexical blocks count as being inside a function, but if a new type is defined inside a function
@@ -77,10 +76,9 @@ class DwarfDieScanner {
     bool inside_function;
   };
 
-  DwarfDie current_die_;
-
-  uint64_t die_count_ = 0;
-  uint64_t die_index_ = 0;
+  // Keep the snapshot for random access after the iterator reaches the end.
+  DwarfDie root_;
+  DwarfDie::UnitIterator current_;
 
   std::vector<StackEntry> tree_stack_;
 };

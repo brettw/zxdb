@@ -26,9 +26,9 @@ bool HasCodeRangeAttributes(const DwarfDie& die) {
 
 }  // namespace
 
-FunctionAddressMap::FunctionAddressMap(DwarfDie die, const DwarfBinary& binary,
+FunctionAddressMap::FunctionAddressMap(const DwarfDie& root, const DwarfBinary& binary,
                                        UnitContextSource skeleton) {
-  if (!die)
+  if (!root)
     return;
 
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kLowPc, DwarfAttr::kHighPc, DwarfAttr::kRanges,
@@ -39,8 +39,7 @@ FunctionAddressMap::FunctionAddressMap(DwarfDie die, const DwarfBinary& binary,
   decoder.set_follow_specifications(false);
 
   std::vector<Entry> ranges;
-  for (uint32_t i = 0, count = die.unit_die_count(); i < count; ++i) {
-    die.SetIndexUnchecked(i);
+  for (const DwarfDie& die : root.unit_dies()) {
     DwarfTag tag = die.tag();
     if (tag != DwarfTag::kSubprogram && tag != DwarfTag::kInlinedSubroutine)
       continue;

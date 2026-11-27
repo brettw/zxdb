@@ -339,13 +339,13 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
     // or .debug_info-relative (global).
     DwarfDie decl = decoder.GetReference(DwarfAttr::kSpecification);
 
-    FX_DCHECK(scanner_.die_index() < indexable_.size());
+    FX_DCHECK(die.index() < indexable_.size());
     std::optional<bool> is_declaration = decoder.GetBool(DwarfAttr::kDeclaration);
     auto ref_kind = is_declaration && *is_declaration ? IndexNode::SymbolRef::kDwarfDeclaration
                                                       : IndexNode::SymbolRef::kDwarf;
 
     std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
-    indexable_[scanner_.die_index()] =
+    indexable_[die.index()] =
         NamedSymbolRef(ref_kind, dwo_index_, die.ref(), kind, name ? *name : "", decl,
                        decoder.Has(DwarfAttr::kAbstractOrigin));
 
@@ -364,7 +364,7 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
 void UnitIndexer::IndexFunctionNames(FunctionNameIndex& names, const DwarfDie& die,
                                      const DwarfDie& scope, const DwarfDieDecoder& decoder,
                                      std::optional<const char*> name) {
-  const NamedSymbolRef& ref = indexable_[scanner_.die_index()];
+  const NamedSymbolRef& ref = indexable_[die.index()];
   auto is_direct = [&](DwarfAttr attr) {
     const auto* value = decoder.GetValue(attr);
     return value && value->die() == die;

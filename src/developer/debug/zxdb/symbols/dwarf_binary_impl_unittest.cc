@@ -642,8 +642,7 @@ TEST_F(UnitContextCacheTest, RangedFunctionDecodePopulatesCache) {
   constexpr DwarfAttr kAttrs[] = {DwarfAttr::kRanges, DwarfAttr::kLowPc};
   DwarfDieDecoder decoder(binary, kAttrs);
   DwarfDieRef function_ref;
-  for (uint64_t i = 0, count = unit->GetDieCount(); i < count; ++i) {
-    DwarfDie die = unit->GetDieAtIndex(i);
+  for (const DwarfDie& die : unit->GetDies()) {
     if (die.tag() == DwarfTag::kInlinedSubroutine && decoder.Decode(die) &&
         decoder.GetValue(DwarfAttr::kRanges) && !decoder.GetValue(DwarfAttr::kLowPc)) {
       function_ref = die.ref();

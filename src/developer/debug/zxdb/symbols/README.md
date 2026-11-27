@@ -78,6 +78,11 @@ Public headers expose these symbol classes, factories, and evaluators:
   when it is cached. `GetDieAtIndex()` and `GetDieAtOffset()` return handles
   in that unit. To find a DIE across units, pass its `DwarfDieRef` to
   `DwarfBinary::GetDieAtOffset()`.
+- `DwarfUnit::GetDies()` walks one full DIE table snapshot in section
+  order, including null entries. `DwarfDie::unit_dies()` walks the snapshot
+  that a handle already owns. Each iterator reuses its entry handle as it
+  advances. Copy the handle to keep an entry past the current iteration
+  or through cache eviction.
 - `DwarfUnit::FunctionForRelativeAddress()` uses the unit's
   `FunctionAddressMap` to find a function or inline instance.
 - The index scans each unit in table order. It uses parent indices to track

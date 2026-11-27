@@ -21,7 +21,7 @@ struct UnitContextSource;
 // take precedence over earlier ones in overlapping ranges, so inline instances cover their callers.
 class FunctionAddressMap {
  public:
-  FunctionAddressMap(DwarfDie die, const DwarfBinary& binary, UnitContextSource skeleton);
+  FunctionAddressMap(const DwarfDie& root, const DwarfBinary& binary, UnitContextSource skeleton);
 
   std::optional<uint64_t> Lookup(uint64_t relative_address) const;
 

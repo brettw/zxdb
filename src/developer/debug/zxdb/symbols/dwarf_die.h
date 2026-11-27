@@ -13,6 +13,7 @@
 #include <optional>
 #include <ranges>
 #include <span>
+#include <utility>
 
 #include "src/developer/debug/zxdb/symbols/dwarf/die_table.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
@@ -33,6 +34,7 @@ class DwarfDie {
   using Load = DieTable::Load;
 
   class ChildIterator;
+  class UnitIterator;
 
   DwarfDie() = default;
 
@@ -56,11 +58,9 @@ class DwarfDie {
   uint64_t unit_die_count() const { return table_ ? table_->size() : 0; }
   uint32_t index() const { return index_; }
 
-  // Reuses this handle's table while scanning. Requires index < unit_die_count().
-  void SetIndexUnchecked(uint32_t index) {
-    FX_DCHECK(index < unit_die_count());
-    index_ = index;
-  }
+  // Walks the entries in this handle's snapshot from its root, including null entries.
+  // Copy an entry to keep it after advancing or destroying the iterator.
+  auto unit_dies() const;
 
   // Resolves a unit-relative offset in the handle's table or loads the full tree if needed.
   DwarfDie GetUnitRelativeDie(uint64_t offset) const;
@@ -111,6 +111,7 @@ class DwarfDie {
 
   DwarfDie(std::shared_ptr<const UnitTable> table, uint32_t index)
       : table_(std::move(table)), index_(index) {}
+
   const DieTable::Entry& entry() const {
     FX_DCHECK(is_valid());
     return *table_->Get(index_);
@@ -122,6 +123,38 @@ class DwarfDie {
   std::shared_ptr<const UnitTable> table_;
   uint32_t index_ = 0;
 };
+
+class DwarfDie::UnitIterator {
+ public:
+  using iterator_concept = std::input_iterator_tag;
+  using value_type = DwarfDie;
+  using difference_type = std::ptrdiff_t;
+
+  const DwarfDie& operator*() const {
+    FX_DCHECK(remaining_);
+    return die_;
+  }
+  UnitIterator& operator++() {
+    FX_DCHECK(remaining_);
+    if (--remaining_)
+      ++die_.index_;
+    return *this;
+  }
+  void operator++(int) { ++*this; }
+  bool operator==(std::default_sentinel_t) const { return remaining_ == 0; }
+
+ private:
+  friend class DwarfDie;
+
+  explicit UnitIterator(DwarfDie root) : die_(std::move(root)), remaining_(die_.unit_die_count()) {}
+
+  DwarfDie die_;
+  uint64_t remaining_;
+};
+
+inline auto DwarfDie::unit_dies() const {
+  return std::ranges::subrange(UnitIterator(unit_root()), std::default_sentinel);
+}
 
 class DwarfDie::ChildIterator {
  public:

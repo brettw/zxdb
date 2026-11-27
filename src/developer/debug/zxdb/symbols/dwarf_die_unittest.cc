@@ -138,6 +138,35 @@ TEST(DwarfDie, UnknownTagKeepsLaterChildren) {
   EXPECT_EQ((std::vector{DwarfTag::kNone, DwarfTag::kNamespace, DwarfTag::kSubprogram}), tags);
 }
 
+TEST(DwarfDie, UnitWalkKeepsSnapshotThroughEviction) {
+  EXPECT_TRUE(DwarfDie().unit_dies().empty());
+  DieTree tree;
+  auto unit = tree.unit();
+  DwarfDie root_only = unit->GetUnitDie(DwarfDie::Load::kRootOnly);
+  DwarfDie retained;
+  {
+    auto dies = unit->GetDies();
+    unit->ClearDieCache();
+
+    std::vector<DwarfTag> tags;
+    for (const DwarfDie& die : dies) {
+      EXPECT_EQ(tags.size(), die.index());
+      tags.push_back(die.tag());
+      if (die.tag() == DwarfTag::kSubprogram)
+        retained = die;
+    }
+    EXPECT_EQ((std::vector{DwarfTag::kCompileUnit, DwarfTag::kNamespace, DwarfTag::kVariable,
+                           DwarfTag::kNone, DwarfTag::kSubprogram, DwarfTag::kNone}),
+              tags);
+  }
+
+  ASSERT_TRUE(retained);
+  EXPECT_EQ(tree.function_offset, retained.offset());
+  EXPECT_STREQ("f", retained.short_name());
+  EXPECT_EQ(1, std::ranges::distance(root_only.unit_dies()));
+  EXPECT_FALSE(unit->GetUnitDie(DwarfDie::Load::kRootOnly).first_child());
+}
+
 TEST(DwarfDie, Attributes) {
   DieTree tree;
   DwarfDie root = tree.root();

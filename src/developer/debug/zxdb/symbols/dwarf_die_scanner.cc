@@ -4,15 +4,13 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf_die_scanner.h"
 
-#include <lib/syslog/cpp/macros.h>
-
 #include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 
 namespace zxdb {
 
 DwarfDieScanner::DwarfDieScanner(const DwarfUnit& unit)
-    : current_die_(unit.GetUnitDie()), die_count_(current_die_.unit_die_count()) {
+    : root_(unit.GetUnitDie()), current_(root_.unit_dies().begin()) {
   // We prefer not to reallocate and normally the C++ component depth is < 8.
   tree_stack_.reserve(8);
 }
@@ -20,16 +18,15 @@ DwarfDieScanner::DwarfDieScanner(const DwarfUnit& unit)
 DwarfDieScanner::~DwarfDieScanner() = default;
 
 const DwarfDie& DwarfDieScanner::Prepare() {
-  FX_DCHECK(!done());
-  current_die_.SetIndexUnchecked(die_index_);
-  uint32_t parent_idx = current_die_.parent_index().value_or(kNoParent);
+  const DwarfDie& die = *current_;
+  uint32_t parent_idx = die.parent_index().value_or(kNoParent);
 
   while (!tree_stack_.empty() && tree_stack_.back().index != parent_idx)
     tree_stack_.pop_back();
-  tree_stack_.emplace_back(die_index_, false);
+  tree_stack_.emplace_back(die.index(), false);
 
   // Fix up the inside function flag.
-  switch (current_die_.tag()) {
+  switch (die.tag()) {
     case DwarfTag::kLexicalBlock:
     case DwarfTag::kVariable:
       // Inherits from previous. For a block and a variable there should always be the parent,
@@ -46,17 +43,11 @@ const DwarfDie& DwarfDieScanner::Prepare() {
       break;
   }
 
-  return current_die_;
-}
-
-void DwarfDieScanner::Advance() {
-  FX_DCHECK(!done());
-
-  die_index_++;
+  return die;
 }
 
 uint32_t DwarfDieScanner::GetParentIndex(uint32_t index) const {
-  return current_die_.parent_index_at(index).value_or(kNoParent);
+  return root_.parent_index_at(index).value_or(kNoParent);
 }
 
 }  // namespace zxdb
