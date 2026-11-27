@@ -1190,7 +1190,6 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeVariant(const DwarfDie& die) const
       members.push_back(MakeLazy(child));
   }
 
-  // Convert from LLVM-style to C++-style optional.
   std::optional<uint64_t> discr;
   if (discr_value)
     discr = *discr_value;

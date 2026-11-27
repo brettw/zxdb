@@ -47,8 +47,8 @@ enum : uint16_t {
 };
 
 // The string sections that the names in a line table can reference. Strings are views into these
-// sections. Collect them on the thread that owns the DWARFContext. After that they don't change,
-// so any thread can use them.
+// sections. Collect the immutable views on the binary's owning thread and keep the section data
+// alive while other threads use them.
 struct LineStringSections {
   std::string_view line_str;  // .debug_line_str, for DW_FORM_line_strp.
   std::string_view str;       // The unit's string section, for DW_FORM_strp and DW_FORM_strx.
@@ -142,8 +142,7 @@ enum class LineProgramStatus {
 
 // One line table in a .debug_line section, with its parsed header.
 //
-// This class uses only section data, not LLVM objects. Worker threads can use it while other
-// threads use the same DWARFContext. See SourceFileIndexer.
+// Worker threads can decode it from immutable section data. See SourceFileIndexer.
 class LineProgram {
  public:
   // Parses the header of the line table at the given section offset. The section data must outlive

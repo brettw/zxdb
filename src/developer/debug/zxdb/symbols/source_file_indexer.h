@@ -28,11 +28,8 @@ class DwarfBinary;
 // Finds the source files that each unit of a binary has code for. The symbol index uses the result
 // to find the units for a file name.
 //
-// The work for each unit is independent, so it runs on worker threads. Workers read only immutable
-// section data, and they don't use LLVM objects. The DWARFContext of a binary isn't thread-safe,
-// so the thread that owns the context collects the line table locations and string sections first
-// (CollectLineTableJobs()). This includes the string offsets base of each unit for
-// DW_FORM_strx. The thread can then continue to use the context while the workers run.
+// CollectLineTableJobs() prepares line table locations and string section views on the binary's
+// owning thread. Workers read these immutable views while that thread continues indexing.
 
 // The location of the line table of one unit.
 struct LineTableJob {
@@ -47,13 +44,12 @@ struct LineTableJob {
   uint64_t first_code_address = 0;
 };
 
-// Adds a job for the unit's line table, if it has one. Call it on the thread that owns the
-// context. first_code_address is DwarfBinary::GetFirstCodeAddress().
+// Adds a job for the unit's line table, if it has one. Call on the binary's owning thread.
+// first_code_address is DwarfBinary::GetFirstCodeAddress().
 void AddLineTableJob(const DwarfBinary& binary, UnitIndex unit_index, uint64_t first_code_address,
                      std::vector<LineTableJob>* jobs);
 
-// Finds the line table of every unit of the binary. Call it on the thread that owns the binary's
-// DWARFContext.
+// Finds the line table of every unit. Call on the binary's owning thread.
 std::vector<LineTableJob> CollectLineTableJobs(DwarfBinary& binary);
 
 // Resolves file table entries to normalized file names and caches the result.
@@ -101,8 +97,8 @@ class SourceFileIndexer {
   // Waits for any workers that are still running.
   ~SourceFileIndexer();
 
-  // Waits for the work and adds the results to the index. Call it once, on the thread that owns
-  // the context. Each unit is added at most once for each file, and units are added in job order.
+  // Waits for the work and adds the results to the index. Call once on the binary's owning thread.
+  // Each unit is added at most once for each file, and units are added in job order.
   void FinishInto(FileIndex* files);
 
   // The number of worker threads. For testing.

@@ -1,4 +1,8 @@
 find_package(GTest CONFIG REQUIRED)
+find_package(Python3 3.8 REQUIRED COMPONENTS Interpreter)
+add_test(NAME llvm_usage
+  COMMAND Python3::Interpreter "${PROJECT_SOURCE_DIR}/scripts/check_llvm_usage.py")
+
 add_executable(zxdb_tests
   "${PROJECT_SOURCE_DIR}/src/lib/elflib/elflib_unittest.cc"
   client/minidump_memory_unittest.cc

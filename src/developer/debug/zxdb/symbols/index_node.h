@@ -36,15 +36,9 @@ class IndexNode {
                          // actually indexed, and will never have children nodes.
   };
 
-  // A reference to a DIE that doesn't need the unit or the underlying llvm::DwarfDebugInfoEntry to
-  // be kept. This allows the discarding of the full parsed DIE structures after indexing. It can be
-  // converted back to a DIE, which will cause the DWARFUnit to be re-parsed.
-  //
-  // The offset stored in this structure is the offset from the beginning of the .debug_info
-  // section, which is the same as the offset stored in the llvm::DWARFDebugInfoEntry.
-  //
-  // Random code reading the index can convert a SymbolRef to a Symbol object using
-  // ModuleSymbols::IndexSymbolRefToSymbol().
+  // Identifies a DIE by its binary and DwarfDieRef (section and byte offset). The index can
+  // release parsed DIE tables and use ModuleSymbols::IndexSymbolRefToSymbol() to look up a symbol
+  // later.
   //
   // TODO(bug 53091) in the future we may want to add ELF symbol support to this class.
   class SymbolRef {

@@ -20,18 +20,8 @@ class DwarfBinary;
 class LazySymbol;
 class LineTable;
 
-// Represents a DWARF unit in the binary file. The primary purpose of this class is to allow
-// mocking the LLVM libraries. It corresponds to what we need from llvm::DWARFUnit and is consumed
-// primarily by ModuleSymbolsImpl which provides the high-level symbol interface.
-//
-// This is a toplevel DWARF concept that contains all the different data types associated with the
-// compilation unit like line tables and abbreviation tables. The main thing it contains is the
-// Debug Information Entry (DIE) tree for the unit. This tree uses a root of DW_TAG_compilation_unit
-// and is represented in our system by the CompileUnit class.
-//
-// These are similarly named so can be confusing, but this class is the higher-level construct.
-// Usually when something ion DWARF is "relative to the compilation unit" it means this class and
-// not the CompileUnit DIE.
+// Represents a DWARF unit and provides access to its DIEs and line table.
+// CompileUnit is the decoded symbol for a compilation unit's root DIE.
 class DwarfUnit : public fxl::RefCountedThreadSafe<DwarfUnit> {
  public:
   // Creates a weak pointer to this class. The units can get removed when modules or process are

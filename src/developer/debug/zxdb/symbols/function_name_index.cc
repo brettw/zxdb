@@ -8,18 +8,23 @@
 #include <cstdlib>
 #include <memory>
 
-#include "llvm/ADT/StringExtras.h"
 #include "llvm/Demangle/Demangle.h"
 #include "src/developer/debug/zxdb/symbols/elf_symbol_record.h"
 
 namespace zxdb {
 namespace {
 
+bool IsAsciiDigit(char c) { return c >= '0' && c <= '9'; }
+
+bool IsIdentifierChar(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || IsAsciiDigit(c) || c == '_';
+}
+
 bool IsUnqualifiedName(std::string_view name) {
   if (name.starts_with('~'))
     name.remove_prefix(1);
-  return !name.empty() && !llvm::isDigit(name.front()) &&
-         std::ranges::all_of(name, [](char c) { return llvm::isAlnum(c) || c == '_'; });
+  return !name.empty() && !IsAsciiDigit(name.front()) &&
+         std::ranges::all_of(name, IsIdentifierChar);
 }
 
 using DemangledName = std::unique_ptr<char, decltype(&std::free)>;

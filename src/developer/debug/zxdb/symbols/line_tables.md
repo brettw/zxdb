@@ -158,9 +158,8 @@ Key decisions:
   Below 256 KB of line tables (about 1 ms of work), the work runs on the
   calling thread. Above that there is one worker, plus one for each 2 MB, up
   to six. See [Measurements](#measurements).
-- **Thread safety.** zxdb creates its `DWARFContext` with
-  `ThreadSafe = false`. Workers read immutable section views prepared by
-  the owning thread. The line parser reads those views.
+- **Thread safety.** The binary's owning thread prepares immutable section
+  views. Worker threads use those views to parse line tables.
 - **String forms that need the unit.** `DW_FORM_strx` and similar forms read
   the unit's string offsets table. `CollectLineTableJobs()` records the base,
   the entry size, and the string sections in `LineStringSections` on the

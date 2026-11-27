@@ -31,8 +31,8 @@ struct ModuleIndexerResult {
 
 // Index the given DwarfBinary, loading and indexing any .dwo files it references.
 //
-// Note the usage of the DwarfBinary doesn't really change anything but it causes a bunch of caching
-// stuff on the LLVM objects that require a non-const reference.
+// Call on the binary's owning thread. Indexing populates its DWARF caches and clears them before
+// returning.
 ModuleIndexerResult IndexModule(fxl::WeakPtr<ModuleSymbols> module_symbols, DwarfBinary& binary,
                                 const std::string& build_dir,
                                 FunctionNameParser function_name_parser);

@@ -10,6 +10,8 @@ Entries (DIEs), line tables, and ELF symbols into a reference-counted object
 graph, and evaluates DWARF location expressions (`DwarfExprEval`).
 
 The [DWARF reader](dwarf/README.md) provides the section views and byte reader.
+The symbol library uses LLVM only to demangle C++ and Rust names. It links the
+demangler from `libLLVM`.
 
 For lookup behavior with incomplete DWARF or ELF symbols alone, see
 [Finding a breakpoint by function name](name_lookup.md).

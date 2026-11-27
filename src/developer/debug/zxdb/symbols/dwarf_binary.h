@@ -34,9 +34,7 @@ class SymbolContext;
 // stays alive.
 class DwarfBinary {
  public:
-  // A symbol from the ELF symbol tables. It has the fields that the symbol index uses. It doesn't
-  // use the ELF structure because this header must not include the system ELF header while LLVM
-  // object headers are also in use. The macros in the system header break the LLVM header.
+  // The fields from an ELF symbol table entry that the symbol index uses.
   struct ElfTableSymbol {
     enum class Type { kOther, kObject, kFunction, kTls };
 

@@ -25,9 +25,9 @@ namespace zxdb {
 // We choose not to be very smart about how to store integer data. Theoretically, the types might
 // not be completely known when decoding a variable. There might be forward-defined types that need
 // the symbol index, and resolving things like typedefs can be complicated. We choose to punt that
-// to a higher layer and only store the data here with minimal semantic knowledge. Numbers come
-// out of LLVM's decoder as 64-bit integers so this is what we handle. Anything larger than this
-// must be expressed as a "block" and have the correct size.
+// to a higher layer and only store the data here with minimal semantic knowledge.
+// DwarfDieDecoder stores LEB128 constants as 64-bit integers and preserves the size of fixed-width
+// constants and blocks.
 class ConstValue {
  public:
   // Initializes has having no const value.

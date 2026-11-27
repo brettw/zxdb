@@ -96,11 +96,8 @@ class Index {
   IndexNode root_ = IndexNode(IndexNode::Kind::kRoot);
   FunctionNameIndex function_names_;
 
-  // Maps full path names to compile units that reference them. This must not be mutated once the
-  // file_name_index_ is built.
-  //
-  // The contents of the vector are indices into the compilation unit array. (see
-  // llvm::DWARFContext::get[DWO]UnitAtIndex).
+  // Maps full paths to the UnitIndex values of the units that reference them. Look up a unit with
+  // DwarfBinary::GetUnitAtIndex(). The map must stay unchanged after file_name_index_ is built.
   //
   // This is a map, not a multimap because some files will appear in many compilation units. I
   // suspect it's better to avoid duplicating the names (like a multimap would) and eating the cost
