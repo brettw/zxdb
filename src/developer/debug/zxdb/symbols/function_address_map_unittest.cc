@@ -6,7 +6,7 @@
 
 #include <gtest/gtest.h>
 
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/lazy_symbol.h"

@@ -6,8 +6,9 @@
 
 #include <gtest/gtest.h>
 
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/line_program_test_util.h"
 
 namespace zxdb {
@@ -52,7 +53,7 @@ TEST(LineTableCache, HeaderOnlyUntilNeeded) {
   uint64_t offset = AddDefineFileTable(sections);
   sections.AddCompileUnit(4, offset, {});
   sections.Finish();
-  DwarfBinaryImpl binary(sections.sections());
+  DwarfBinary binary(sections.sections());
   const UnitIndex unit(false, 0);
 
   // A header entry uses the header's table, which doesn't have the defined file.
@@ -85,7 +86,7 @@ TEST(LineTableCache, DecodeFirst) {
   uint64_t offset = AddDefineFileTable(sections);
   sections.AddCompileUnit(4, offset, {});
   sections.Finish();
-  DwarfBinaryImpl binary(sections.sections());
+  DwarfBinary binary(sections.sections());
   const UnitIndex unit(false, 0);
 
   LineTable table = binary.DecodeLineTable(unit);
@@ -107,7 +108,7 @@ TEST(LineTableCache, SharesHeaderTableWithoutDefineFile) {
   uint64_t offset = sections.Add(builder);
   sections.AddCompileUnit(5, offset, {});
   sections.Finish();
-  DwarfBinaryImpl binary(sections.sections());
+  DwarfBinary binary(sections.sections());
   const UnitIndex unit(false, 0);
 
   std::shared_ptr<const LineFileTable> files = binary.GetLineFileTable(unit, 0);
@@ -125,7 +126,7 @@ TEST(LineTableCache, BadLineTable) {
   sections.Add(Builder(5));
   sections.AddCompileUnit(5, 100000, {});
   sections.Finish();
-  DwarfBinaryImpl binary(sections.sections());
+  DwarfBinary binary(sections.sections());
   const UnitIndex unit(false, 0);
 
   EXPECT_FALSE(binary.GetLineFileTable(unit, 0));
@@ -138,7 +139,7 @@ TEST(LineTableCache, UnitWithoutLineTable) {
   sections.Add(Builder(5));
   sections.AddCompileUnit(5, std::nullopt, {1});
   sections.Finish();
-  DwarfBinaryImpl binary(sections.sections());
+  DwarfBinary binary(sections.sections());
   const UnitIndex unit(false, 0);
 
   EXPECT_FALSE(binary.GetLineFileTable(unit, 1));
@@ -154,7 +155,7 @@ TEST(DwarfDieDecoder, GetFileDefinedByProgram) {
   uint64_t offset = AddDefineFileTable(sections);
   sections.AddCompileUnit(4, offset, {1, 2, 9});
   sections.Finish();
-  DwarfBinaryImpl binary(sections.sections());
+  DwarfBinary binary(sections.sections());
   EXPECT_EQ("a.cc", DecodeDeclFile(binary, 0));
   EXPECT_EQ("inc/defined.h", DecodeDeclFile(binary, 1));
   EXPECT_EQ(std::nullopt, DecodeDeclFile(binary, 2));
@@ -172,7 +173,7 @@ TEST(DwarfDieDecoder, GetFileStrx) {
   uint64_t offset = sections.Add(builder);
   sections.AddCompileUnit(5, offset, {0});
   sections.Finish();
-  DwarfBinaryImpl binary(sections.sections());
+  DwarfBinary binary(sections.sections());
   EXPECT_EQ("src/indexed.cc", DecodeDeclFile(binary, 0));
 }
 

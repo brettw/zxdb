@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 
 #include <lib/fit/defer.h>
 #include <lib/syslog/cpp/macros.h>
@@ -21,7 +21,8 @@
 #include "src/developer/debug/zxdb/symbols/dwarf/aranges_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/range_list_reader.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_unit_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
+#include "src/developer/debug/zxdb/symbols/symbol_context.h"
 #include "src/lib/elflib/elflib.h"
 
 namespace zxdb {
@@ -186,9 +187,9 @@ DwarfSections ReadDwarfSections(elflib::ElfLib& elf, const std::string& path) {
 
 // Maps code addresses to compilation units using .debug_aranges and root DIE ranges.
 // Omit ranges that start at zero because linkers can leave these behind for discarded code.
-class DwarfBinaryImpl::DebugAranges {
+class DwarfBinary::DebugAranges {
  public:
-  explicit DebugAranges(const DwarfBinaryImpl& binary) {
+  explicit DebugAranges(const DwarfBinary& binary) {
     const auto& sections = binary.GetSections();
     std::unordered_set<uint64_t> parsed_units;
 
@@ -272,35 +273,32 @@ class DwarfBinaryImpl::DebugAranges {
   std::vector<Range> ranges_;
 };
 
-DwarfBinaryImpl::DwarfBinaryImpl(const std::string& name, const std::string& binary_name,
-                                 const std::string& build_id)
+DwarfBinary::DwarfBinary(const std::string& name, const std::string& binary_name,
+                         const std::string& build_id)
     : name_(name), binary_name_(binary_name), build_id_(build_id), weak_factory_(this) {}
 
-DwarfBinaryImpl::DwarfBinaryImpl(DwarfSections sections)
-    : sections_(sections), weak_factory_(this) {
+DwarfBinary::DwarfBinary(DwarfSections sections) : sections_(sections), weak_factory_(this) {
   InitUnitLists();
 }
 
-DwarfBinaryImpl::~DwarfBinaryImpl() {}
+DwarfBinary::~DwarfBinary() = default;
 
-fxl::WeakPtr<DwarfBinaryImpl> DwarfBinaryImpl::GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
+fxl::WeakPtr<DwarfBinary> DwarfBinary::GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
 
-std::string DwarfBinaryImpl::GetName() const { return name_; }
+std::string DwarfBinary::GetName() const { return name_; }
 
-std::string DwarfBinaryImpl::GetBuildID() const { return build_id_; }
+std::string DwarfBinary::GetBuildID() const { return build_id_; }
 
-std::time_t DwarfBinaryImpl::GetModificationTime() const { return modification_time_; }
+std::time_t DwarfBinary::GetModificationTime() const { return modification_time_; }
 
-const DwarfSymbolFactory* DwarfBinaryImpl::GetSymbolFactory() const {
-  return symbol_factory_.get();
-}
+const DwarfSymbolFactory* DwarfBinary::GetSymbolFactory() const { return symbol_factory_.get(); }
 
-bool DwarfBinaryImpl::HasBinary() const {
+bool DwarfBinary::HasBinary() const {
   return !binary_name_.empty() || (object_ && object_->ProbeHasProgramBits());
 }
 
-Err DwarfBinaryImpl::Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
-                          DwarfSymbolFactory::FileType file_type) {
+Err DwarfBinary::Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
+                      DwarfSymbolFactory::FileType file_type) {
   symbol_factory_ = fxl::MakeRefCounted<DwarfSymbolFactory>(weak_factory_.GetWeakPtr(),
                                                             std::move(delegate), file_type);
 
@@ -334,7 +332,7 @@ Err DwarfBinaryImpl::Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
   return Err();
 }
 
-void DwarfBinaryImpl::InitUnitLists() {
+void DwarfBinary::InitUnitLists() {
   info_units_ = UnitList::Parse(sections_.info, sections_.endian, UnitSection::kInfo);
   types_units_ = UnitList::Parse(sections_.types, sections_.endian, UnitSection::kTypes);
   info_dwo_units_ = UnitList::Parse(sections_.info_dwo, sections_.endian, UnitSection::kInfo);
@@ -358,7 +356,7 @@ void DwarfBinaryImpl::InitUnitLists() {
   }
 }
 
-DwarfBinaryImpl::PackageUnitResult DwarfBinaryImpl::ReadPackageUnit(
+DwarfBinary::PackageUnitResult DwarfBinary::ReadPackageUnit(
     const ErrOr<PackageIndex>& package_index, const UnitHeader& header, UnitSection kind) const {
   if (!package_index)
     return package_index.err();
@@ -395,33 +393,31 @@ DwarfBinaryImpl::PackageUnitResult DwarfBinaryImpl::ReadPackageUnit(
   });
 }
 
-const DwarfSections& DwarfBinaryImpl::GetSections() const { return sections_; }
+const DwarfSections& DwarfBinary::GetSections() const { return sections_; }
 
-uint64_t DwarfBinaryImpl::GetMappedLength() const { return mapped_length_; }
+uint64_t DwarfBinary::GetMappedLength() const { return mapped_length_; }
 
-const std::map<std::string, DwarfBinary::ElfTableSymbol>& DwarfBinaryImpl::GetELFSymbols() const {
+const std::map<std::string, DwarfBinary::ElfTableSymbol>& DwarfBinary::GetELFSymbols() const {
   return elf_symbols_;
 }
 
-const std::map<std::string, uint64_t> DwarfBinaryImpl::GetPLTSymbols() const {
-  return plt_symbols_;
-}
+const std::map<std::string, uint64_t> DwarfBinary::GetPLTSymbols() const { return plt_symbols_; }
 
-uint32_t DwarfBinaryImpl::GetNormalUnitCount() const {
+uint32_t DwarfBinary::GetNormalUnitCount() const {
   return info_units_.size() + types_units_.size();
 }
 
-uint32_t DwarfBinaryImpl::GetDWOUnitCount() const {
+uint32_t DwarfBinary::GetDWOUnitCount() const {
   return info_dwo_units_.size() + types_dwo_units_.size();
 }
 
-const UnitList& DwarfBinaryImpl::GetUnitList(bool is_dwo, UnitSection section) const {
+const UnitList& DwarfBinary::GetUnitList(bool is_dwo, UnitSection section) const {
   if (section == UnitSection::kInfo)
     return is_dwo ? info_dwo_units_ : info_units_;
   return is_dwo ? types_dwo_units_ : types_units_;
 }
 
-std::optional<DwarfBinaryImpl::IndexedUnit> DwarfBinaryImpl::GetUnitHeader(UnitIndex index) const {
+std::optional<DwarfBinary::IndexedUnit> DwarfBinary::GetUnitHeader(UnitIndex index) const {
   // Match LLVM's section order for both normal and DWO units.
   const UnitList& info = GetUnitList(index.is_dwo, UnitSection::kInfo);
   if (index.index < info.size())
@@ -434,7 +430,7 @@ std::optional<DwarfBinaryImpl::IndexedUnit> DwarfBinaryImpl::GetUnitHeader(UnitI
   return std::nullopt;
 }
 
-fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::GetUnitAtIndex(UnitIndex i) {
+fxl::RefPtr<DwarfUnit> DwarfBinary::GetUnitAtIndex(UnitIndex i) {
   auto entry = GetUnitHeader(i);
   if (!entry)
     return nullptr;
@@ -443,12 +439,17 @@ fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::GetUnitAtIndex(UnitIndex i) {
   if (found != unit_map_.end())
     return found->second;
 
-  auto unit = fxl::MakeRefCounted<DwarfUnitImpl>(this, i, entry->section, entry->header);
+  auto unit = fxl::MakeRefCounted<DwarfUnit>(this, i, entry->section, entry->header);
   unit_map_.emplace(i, unit);
   return unit;
 }
 
-fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::UnitForRelativeAddress(uint64_t relative_address) {
+fxl::RefPtr<DwarfUnit> DwarfBinary::UnitForAddress(const SymbolContext& symbol_context,
+                                                   TargetPointer absolute_address) {
+  return UnitForRelativeAddress(symbol_context.AbsoluteToRelative(absolute_address));
+}
+
+fxl::RefPtr<DwarfUnit> DwarfBinary::UnitForRelativeAddress(uint64_t relative_address) {
   if (!debug_aranges_) {
     debug_aranges_ = std::make_unique<DebugAranges>(*this);
   }
@@ -461,16 +462,17 @@ fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::UnitForRelativeAddress(uint64_t relative
   return GetUnitAtIndex(UnitIndex(false, *index));
 }
 
-fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::CreateUncachedUnit(const DwarfDie& die) {
+fxl::RefPtr<DwarfUnit> DwarfBinary::GetDwoUnit() { return GetUnitAtIndex(UnitIndex(true, 0)); }
+
+fxl::RefPtr<DwarfUnit> DwarfBinary::CreateUncachedUnit(const DwarfDie& die) {
   if (!die.belongs_to(*this))
     return nullptr;
   UnitIndex index = die.unit_index();
   auto entry = GetUnitHeader(index);
-  return fxl::MakeRefCounted<DwarfUnitImpl>(this, index, entry->section, entry->header);
+  return fxl::MakeRefCounted<DwarfUnit>(this, index, entry->section, entry->header);
 }
 
-std::optional<uint64_t> DwarfBinaryImpl::GetDebugAddrEntry(uint64_t addr_base,
-                                                           uint64_t index) const {
+std::optional<uint64_t> DwarfBinary::GetDebugAddrEntry(uint64_t addr_base, uint64_t index) const {
   // DW_AT_addr_base gives the byte offset of the first entry after the header. The index counts
   // entries from that offset. This lookup assumes 8-byte addresses.
   constexpr uint64_t kEntrySize = 8;
@@ -490,7 +492,7 @@ std::optional<uint64_t> DwarfBinaryImpl::GetDebugAddrEntry(uint64_t addr_base,
   return result;
 }
 
-std::optional<UnitIndex> DwarfBinaryImpl::FindUnitForRef(DwarfDieRef die_ref, bool is_dwo) const {
+std::optional<UnitIndex> DwarfBinary::FindUnitForRef(DwarfDieRef die_ref, bool is_dwo) const {
   if (!die_ref)
     return std::nullopt;
   UnitSection section =
@@ -503,8 +505,8 @@ std::optional<UnitIndex> DwarfBinaryImpl::FindUnitForRef(DwarfDieRef die_ref, bo
                                : GetUnitList(is_dwo, UnitSection::kInfo).size() + *index);
 }
 
-std::shared_ptr<const DwarfDie::UnitTable> DwarfBinaryImpl::GetDieTable(UnitIndex index,
-                                                                        DwarfDie::Load load) const {
+std::shared_ptr<const DwarfDie::UnitTable> DwarfBinary::GetDieTable(UnitIndex index,
+                                                                    DwarfDie::Load load) const {
   auto& entries = die_tables_[index.is_dwo];
   if (index.index >= entries.size())
     return nullptr;
@@ -540,13 +542,13 @@ std::shared_ptr<const DwarfDie::UnitTable> DwarfBinaryImpl::GetDieTable(UnitInde
   return snapshot;
 }
 
-DwarfDie DwarfBinaryImpl::GetDieAtIndex(UnitIndex index, uint64_t die_index,
-                                        DwarfDie::Load load) const {
+DwarfDie DwarfBinary::GetDieAtIndex(UnitIndex index, uint64_t die_index,
+                                    DwarfDie::Load load) const {
   auto table = GetDieTable(index, load);
   return table && table->Get(die_index) ? DwarfDie(std::move(table), die_index) : DwarfDie();
 }
 
-DwarfDie DwarfBinaryImpl::GetDieAtOffset(UnitIndex index, uint64_t die_offset) const {
+DwarfDie DwarfBinary::GetDieAtOffset(UnitIndex index, uint64_t die_offset) const {
   auto table = GetDieTable(index, DwarfDie::Load::kAllDies);
   if (table) {
     if (auto die_index = table->Find(die_offset))
@@ -555,29 +557,29 @@ DwarfDie DwarfBinaryImpl::GetDieAtOffset(UnitIndex index, uint64_t die_offset) c
   return {};
 }
 
-void DwarfBinaryImpl::ClearDieCache(UnitIndex index) const {
+void DwarfBinary::ClearDieCache(UnitIndex index) const {
   std::lock_guard lock(die_cache_mutex_);
   die_tables_[index.is_dwo][index.index].reset();
 }
 
-DwarfDie DwarfBinaryImpl::GetDieAtOffset(DwarfDieRef die_ref) const {
+DwarfDie DwarfBinary::GetDieAtOffset(DwarfDieRef die_ref) const {
   if (auto unit = FindUnitForRef(die_ref, false))
     return GetDieAtOffset(*unit, die_ref.offset());
   return GetDieAtOffset(die_ref, true);
 }
 
-DwarfDie DwarfBinaryImpl::GetDieAtOffset(DwarfDieRef die_ref, bool is_dwo) const {
+DwarfDie DwarfBinary::GetDieAtOffset(DwarfDieRef die_ref, bool is_dwo) const {
   if (auto unit = FindUnitForRef(die_ref, is_dwo))
     return GetDieAtOffset(*unit, die_ref.offset());
   return {};
 }
 
-DwarfDie DwarfBinaryImpl::GetUnitDieForRef(DwarfDieRef die_ref, bool is_dwo) const {
+DwarfDie DwarfBinary::GetUnitDieForRef(DwarfDieRef die_ref, bool is_dwo) const {
   auto unit = FindUnitForRef(die_ref, is_dwo);
   return unit ? GetDieAtIndex(*unit, 0, DwarfDie::Load::kRootOnly) : DwarfDie();
 }
 
-void DwarfBinaryImpl::EnsureSignatureMap() const {
+void DwarfBinary::EnsureSignatureMap() const {
   if (signature_to_die_)
     return;
 
@@ -598,7 +600,7 @@ void DwarfBinaryImpl::EnsureSignatureMap() const {
   add_units(maps[true], types_dwo_units_, UnitSection::kTypes);
 }
 
-DwarfDieRef DwarfBinaryImpl::FindSignature(uint64_t signature, bool is_dwo) const {
+DwarfDieRef DwarfBinary::FindSignature(uint64_t signature, bool is_dwo) const {
   std::lock_guard lock(die_cache_mutex_);
   EnsureSignatureMap();
   const auto& map = (*signature_to_die_)[is_dwo];
@@ -606,24 +608,23 @@ DwarfDieRef DwarfBinaryImpl::FindSignature(uint64_t signature, bool is_dwo) cons
   return found == map.end() ? DwarfDieRef() : found->second;
 }
 
-DwarfDieRef DwarfBinaryImpl::GetDieRefForSignature(uint64_t signature) const {
+DwarfDieRef DwarfBinary::GetDieRefForSignature(uint64_t signature) const {
   if (DwarfDieRef ref = FindSignature(signature, true))
     return ref;
   return FindSignature(signature, false);
 }
 
-DwarfDie DwarfBinaryImpl::GetDieForSignature(uint64_t signature, bool is_dwo) const {
+DwarfDie DwarfBinary::GetDieForSignature(uint64_t signature, bool is_dwo) const {
   if (DwarfDieRef ref = FindSignature(signature, is_dwo))
     return GetDieAtOffset(ref, is_dwo);
   return GetDieAtOffset(FindSignature(signature, !is_dwo), !is_dwo);
 }
 
-const DebugNamesReader* DwarfBinaryImpl::GetDebugNames() const {
+const DebugNamesReader* DwarfBinary::GetDebugNames() const {
   return debug_names_ && debug_names_->index_count() != 0 ? &*debug_names_ : nullptr;
 }
 
-UnitContextResult DwarfBinaryImpl::GetUnitContext(UnitIndex index,
-                                                  UnitContextSource skeleton) const {
+UnitContextResult DwarfBinary::GetUnitContext(UnitIndex index, UnitContextSource skeleton) const {
 #ifndef NDEBUG
   // Same-binary skeleton lookups stay inside UnitContextCache. A different binary has its own
   // guard. Release the guard on return so a DWO index worker can hand the binary to the module.
@@ -637,7 +638,7 @@ UnitContextResult DwarfBinaryImpl::GetUnitContext(UnitIndex index,
   return unit_contexts_.GetNormal(sections_, unit->header, unit->section);
 }
 
-std::optional<LineProgramSource> DwarfBinaryImpl::GetLineProgramSource(UnitIndex index) const {
+std::optional<LineProgramSource> DwarfBinary::GetLineProgramSource(UnitIndex index) const {
   auto context = GetUnitContext(index);
   if (!context || !context.value()->stmt_list())
     return std::nullopt;
@@ -672,18 +673,18 @@ std::optional<LineProgramSource> DwarfBinaryImpl::GetLineProgramSource(UnitIndex
   return LineProgramSource{AsStringView(line), offset, sections_.endian, strings};
 }
 
-std::shared_ptr<const LineFileTable> DwarfBinaryImpl::GetLineFileTable(UnitIndex unit,
-                                                                       uint64_t file_index) const {
+std::shared_ptr<const LineFileTable> DwarfBinary::GetLineFileTable(UnitIndex unit,
+                                                                   uint64_t file_index) const {
   auto source = GetLineProgramSource(unit);
   return source ? line_tables_.GetFileTable(*source, file_index) : nullptr;
 }
 
-LineTable DwarfBinaryImpl::DecodeLineTable(UnitIndex unit) const {
+LineTable DwarfBinary::DecodeLineTable(UnitIndex unit) const {
   auto source = GetLineProgramSource(unit);
   return source ? line_tables_.DecodeLineTable(*source, first_code_address_) : LineTable();
 }
 
-void DwarfBinaryImpl::ClearDwarfCaches() {
+void DwarfBinary::ClearDwarfCaches() {
 #ifndef NDEBUG
   auto access = CheckUnitContextCacheAccess(unit_context_cache_active_);
 #endif

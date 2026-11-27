@@ -6,6 +6,7 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 
 namespace zxdb {
 

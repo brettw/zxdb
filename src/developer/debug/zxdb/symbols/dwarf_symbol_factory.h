@@ -18,7 +18,7 @@ namespace zxdb {
 
 class BaseType;
 class CompileUnit;
-class DwarfBinaryImpl;
+class DwarfBinary;
 class DwarfDie;
 class DwarfDieDecoder;
 struct FormValue;
@@ -65,7 +65,7 @@ class DwarfSymbolFactory : public SymbolFactory {
   FRIEND_REF_COUNTED_THREAD_SAFE(DwarfSymbolFactory);
   FRIEND_MAKE_REF_COUNTED(DwarfSymbolFactory);
 
-  DwarfSymbolFactory(fxl::WeakPtr<DwarfBinaryImpl> binary, fxl::WeakPtr<Delegate> delegate,
+  DwarfSymbolFactory(fxl::WeakPtr<DwarfBinary> binary, fxl::WeakPtr<Delegate> delegate,
                      FileType file_type);
   ~DwarfSymbolFactory() override;
 
@@ -136,7 +136,7 @@ class DwarfSymbolFactory : public SymbolFactory {
 
   // These can be null if the module is unloaded but there are still some dangling type references
   // to them.
-  fxl::WeakPtr<DwarfBinaryImpl> binary_;
+  fxl::WeakPtr<DwarfBinary> binary_;
   fxl::WeakPtr<Delegate> delegate_;
 
   FileType file_type_;

@@ -23,7 +23,6 @@
 namespace zxdb {
 
 class DwarfBinary;
-class DwarfBinaryImpl;
 enum class DwarfAttr : int;
 
 // Keeps an immutable DIE table alive through cache eviction. The owning binary must stay alive
@@ -89,7 +88,7 @@ class DwarfDie {
   std::optional<std::span<const AbbrevTable::AttributeSpec>> attributes() const;
 
  private:
-  friend class DwarfBinaryImpl;
+  friend class DwarfBinary;
   friend class DwarfDieDecoder;
 
   struct UnitTable : DieTable {

@@ -13,8 +13,9 @@
 #include <gtest/gtest.h>
 
 #include "src/developer/debug/shared/string_util.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/line_table.h"
 #include "src/developer/debug/zxdb/symbols/module_symbols_impl.h"
 #include "src/developer/debug/zxdb/symbols/source_file_indexer.h"
@@ -348,18 +349,18 @@ TEST(Index, CreateIndexEvictsUnitCaches) {
   EXPECT_GT(unit0->GetLineTable().files().size(), 0u);
 }
 
-// Verifies that DwarfBinaryImpl::ClearDwarfCaches drops cached DwarfUnit wrappers from unit_map_
+// Verifies that DwarfBinary::ClearDwarfCaches drops cached DwarfUnit wrappers from unit_map_
 // without re-populating them while iterating, and that subsequent unit queries lazily re-create
 // the unit wrapper and re-parse its line table on demand.
 TEST(Index, ClearDwarfCachesEvictsUnitsAndLineTables) {
   TestSymbolModule setup(TestSymbolModule::kCheckedIn);
   ASSERT_TRUE(setup.Init("", false).ok());
 
-  DwarfBinaryImpl* binary = setup.symbols()->binary();
+  DwarfBinary* binary = setup.symbols()->binary();
   ASSERT_GT(binary->GetNormalUnitCount(), 1u);
 
   // Obtain a weak pointer to unit 0 without keeping a local RefPtr so its lifetime is governed
-  // solely by DwarfBinaryImpl::unit_map_.
+  // solely by DwarfBinary::unit_map_.
   fxl::WeakPtr<DwarfUnit> weak_unit0 = binary->GetUnitAtIndex(UnitIndex(false, 0))->GetWeakPtr();
   EXPECT_TRUE(weak_unit0);
 

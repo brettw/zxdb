@@ -10,7 +10,7 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
@@ -1041,12 +1041,12 @@ TEST(LineProgram, IndexedStringByteOrder) {
         writer.Offset(0, offset_size);
         writer.Offset(str_offsets_base, offset_size);
         writer.EndUnit(header);
-        DwarfBinaryImpl binary(DwarfSections{.info = info,
-                                             .abbrev = abbrev,
-                                             .str = names.bytes(),
-                                             .str_offsets = offsets,
-                                             .line = line.sections().line,
-                                             .endian = endian});
+        DwarfBinary binary(DwarfSections{.info = info,
+                                         .abbrev = abbrev,
+                                         .str = names.bytes(),
+                                         .str_offsets = offsets,
+                                         .line = line.sections().line,
+                                         .endian = endian});
         auto source = binary.GetLineProgramSource(UnitIndex(false, 0));
         ASSERT_TRUE(source);
         const auto& strings = source->strings;

@@ -6,8 +6,9 @@
 
 #include <gtest/gtest.h>
 
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/index.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
@@ -147,7 +148,7 @@ void CheckSourceFileIndex(DwarfBinary& binary) {
 CheckStats CheckBinary(const std::string& path) {
   CheckStats stats;
   SCOPED_TRACE(path);
-  DwarfBinaryImpl binary(path, "", "");
+  DwarfBinary binary(path, "", "");
   auto err = binary.Load(
       {}, path.ends_with(".dwo") ? DwarfSymbolFactory::kDWO : DwarfSymbolFactory::kMainBinary);
   if (err.has_error()) {
@@ -195,7 +196,7 @@ TEST(LineProgramBinary, DwoTypeUnitLineTable) {
   CheckStats stats = CheckBinary(path);
   EXPECT_GT(stats.tables, 0u);
 
-  DwarfBinaryImpl binary(path, "", "");
+  DwarfBinary binary(path, "", "");
   ASSERT_TRUE(binary.Load({}, DwarfSymbolFactory::kDWO).ok());
   bool found_type_unit = false;
   for (uint32_t i = 0; i < binary.GetDWOUnitCount(); ++i) {
@@ -290,7 +291,7 @@ TEST(LineProgramBinary, FixtureSourceLines) {
       continue;
     SCOPED_TRACE(entry.path().string());
     fixtures++;
-    DwarfBinaryImpl binary(entry.path().string(), "", "");
+    DwarfBinary binary(entry.path().string(), "", "");
     auto err = binary.Load({}, DwarfSymbolFactory::kMainBinary);
     ASSERT_TRUE(err.ok()) << err.msg();
     uint64_t first_code_address = binary.GetFirstCodeAddress();

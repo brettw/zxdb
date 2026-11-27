@@ -17,23 +17,21 @@
 
 namespace zxdb {
 
-class DwarfBinaryImpl;
+class DwarfBinary;
 
 // Caches results for one binary. Unit context access stays on the owner thread.
 class UnitContextCache {
  private:
-  friend class DwarfBinaryImpl;
+  friend class DwarfBinary;
   friend class UnitContextCacheTest;
   UnitContextResult GetNormal(const DwarfSections& sections, const UnitHeader& header,
                               UnitSection kind);
-  UnitContextResult GetSplit(const DwarfBinaryImpl& binary, UnitIndex index,
-                             const UnitHeader& header, UnitSection kind,
-                             UnitContextSource skeleton);
-  UnitContextResult ParseSplit(const DwarfBinaryImpl& binary, UnitIndex index,
-                               const UnitHeader& header, UnitSection kind,
-                               UnitContextSource skeleton);
-  std::optional<UnitIndex> FindSkeleton(const DwarfBinaryImpl& binary, uint64_t dwo_id);
-  std::shared_ptr<const UnitContext> GetSkeletonContext(const DwarfBinaryImpl& binary,
+  UnitContextResult GetSplit(const DwarfBinary& binary, UnitIndex index, const UnitHeader& header,
+                             UnitSection kind, UnitContextSource skeleton);
+  UnitContextResult ParseSplit(const DwarfBinary& binary, UnitIndex index, const UnitHeader& header,
+                               UnitSection kind, UnitContextSource skeleton);
+  std::optional<UnitIndex> FindSkeleton(const DwarfBinary& binary, uint64_t dwo_id);
+  std::shared_ptr<const UnitContext> GetSkeletonContext(const DwarfBinary& binary,
                                                         UnitContextSource skeleton);
   void Clear();
 

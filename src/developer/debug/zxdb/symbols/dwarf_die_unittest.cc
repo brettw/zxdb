@@ -13,8 +13,9 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 
 namespace zxdb {
 namespace {
@@ -63,7 +64,7 @@ class DieTree {
     binary_.emplace(DwarfSections{.info = info_, .abbrev = abbrev_});
   }
 
-  DwarfBinaryImpl& binary() { return *binary_; }
+  DwarfBinary& binary() { return *binary_; }
   fxl::RefPtr<DwarfUnit> unit() { return binary_->GetUnitAtIndex(UnitIndex(false, 0)); }
   DwarfDie root(DwarfDie::Load load = DwarfDie::Load::kAllDies) { return unit()->GetUnitDie(load); }
 
@@ -74,7 +75,7 @@ class DieTree {
 
  private:
   std::vector<uint8_t> info_, abbrev_;
-  std::optional<DwarfBinaryImpl> binary_;
+  std::optional<DwarfBinary> binary_;
 };
 
 TEST(DwarfDie, Navigation) {
@@ -257,7 +258,7 @@ TEST(DwarfDie, NameLookupPrecedence) {
   writer.Uleb(0);
   writer.EndUnit(unit);
 
-  DwarfBinaryImpl binary(DwarfSections{.info = info, .abbrev = abbrev});
+  DwarfBinary binary(DwarfSections{.info = info, .abbrev = abbrev});
   auto die = binary.GetDieAtOffset(DwarfDieRef::Main(target));
   ASSERT_TRUE(die);
   EXPECT_STREQ("spec", die.short_name());
@@ -334,7 +335,7 @@ TEST(DwarfDie, NameFromTypeSignature) {
   writer.Uleb(0);
   writer.EndUnit(type_unit);
 
-  DwarfBinaryImpl binary(DwarfSections{.info = info, .abbrev = abbrev});
+  DwarfBinary binary(DwarfSections{.info = info, .abbrev = abbrev});
   auto declaration = binary.GetDieAtOffset(DwarfDieRef::Main(declaration_offset));
   ASSERT_TRUE(declaration);
   EXPECT_STREQ("SignatureType", declaration.short_name());

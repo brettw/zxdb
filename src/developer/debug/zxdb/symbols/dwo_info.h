@@ -5,14 +5,16 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWO_INFO_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWO_INFO_H_
 
+#include <memory>
+
 #include "src/developer/debug/zxdb/common/err.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_symbol_factory.h"
 #include "src/developer/debug/zxdb/symbols/skeleton_unit.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
 
 namespace zxdb {
 
+class DwarfBinary;
 class ModuleSymbols;
 
 // Holds the per-DWO file state. Each DWO file has its own binary and associated symbol factory.
@@ -23,16 +25,14 @@ class ModuleSymbols;
 class DwoInfo final : public DwarfSymbolFactory::Delegate {
  public:
   // Must call Load() which must succeed before using.
-  DwoInfo(SkeletonUnit skeleton, fxl::WeakPtr<ModuleSymbols> module_symbols)
-      : skeleton_(std::move(skeleton)),
-        module_symbols_(std::move(module_symbols)),
-        weak_factory_(this) {}
+  DwoInfo(SkeletonUnit skeleton, fxl::WeakPtr<ModuleSymbols> module_symbols);
+  ~DwoInfo();
 
   Err Load(const std::string& name, const std::string& binary_name);
 
-  DwarfBinaryImpl* binary() { return binary_.get(); }
+  DwarfBinary* binary() { return binary_.get(); }
   const SkeletonUnit& skeleton() const { return skeleton_; }
-  const SymbolFactory* symbol_factory() { return binary_->GetSymbolFactory(); }
+  const SymbolFactory* symbol_factory();
 
   // DwarfSymbolFactory::Delegate implementation.
   std::string GetBuildDirForSymbolFactory() override { return skeleton_.comp_dir; }
@@ -40,7 +40,7 @@ class DwoInfo final : public DwarfSymbolFactory::Delegate {
   CompileUnit* GetSkeletonCompileUnit() override;
 
  private:
-  std::unique_ptr<DwarfBinaryImpl> binary_;  // Guaranteed non-null after Load() succeeds.
+  std::unique_ptr<DwarfBinary> binary_;  // Guaranteed non-null after Load() succeeds.
   SkeletonUnit skeleton_;  // Refers to the skeleton in the main binary corresponding to this DWO.
   fxl::WeakPtr<ModuleSymbols> module_symbols_;
 

@@ -149,7 +149,7 @@ Callers and implementations must preserve these invariants:
 - `DwarfSymbolFactory` handles `DwarfTag::kTypeUnit` alongside
   `DwarfTag::kCompileUnit` so child DIEs can reach their `DwarfUnit` via
   `CompileUnit`.
-- `DwarfBinaryImpl` reads unit headers from `DwarfSections`. Its unit lists
+- `DwarfBinary` reads unit headers from `DwarfSections`. Its unit lists
   put info units before types units for both normal and DWO sections. DIE
   lookups use the ELF section and unit offset. Raw DIE lookups return handles
   directly. The index requests a cached unit wrapper when it needs to walk
@@ -160,7 +160,7 @@ Callers and implementations must preserve these invariants:
   section-relative reference uses the source's info section. Type signature
   lookups prefer the source's normal or split section set. If that section set
   has no matching signature, the lookup searches the other set in the binary.
-- `DwarfBinaryImpl` parses `.debug_names` at load time. The reader uses
+- `DwarfBinary` parses `.debug_names` at load time. The reader uses
   immutable section bytes and parsed abbreviations.
 - `FindDebugNamesEntries()` checks that both the unit and DIE offsets
   are present and that their sum fits. Offset zero is valid. Local type units
@@ -174,7 +174,7 @@ Callers and implementations must preserve these invariants:
   from line rows, `DW_AT_decl_file`, and the file index compare equal.
 - The DIE attribute, line table, location list, range list, aranges, and
   name and package index parsers read section bytes from `DwarfSections`.
-  `DwarfBinaryImpl` populates the views from little-endian ELF32 and ELF64.
+  `DwarfBinary` populates the views from little-endian ELF32 and ELF64.
   The binary keeps the read-only file mapping and decompressed buffers alive
   through `elflib`. The loader logs and skips unreadable sections.
   It supports zlib and zstd with `SHF_COMPRESSED`, as
@@ -282,12 +282,12 @@ Using `zxdb/symbols` produces these disk, cache, and IPC side effects:
 
 ## Verification
 
-Byte fixtures pass `DwarfSections` to `DwarfBinaryImpl`. Keep the buffers
+Byte fixtures pass `DwarfSections` to `DwarfBinary`. Keep the buffers
 alive until the binary and its readers are finished. These tests use the
 same DIE tables, abbreviation cache, unit contexts, and line parser as the
 debugger. Expected values come from the encoded bytes or the DWARF standard.
 
-File fixtures use `DwarfBinaryImpl::Load()`. They cover zlib and zstd
+File fixtures use `DwarfBinary::Load()`. They cover zlib and zstd
 compression, a separate debug file and stripped library, and a `.dwo` file.
 Small synthetic ELF files cover the first code address and recovery from
 malformed compression headers. The package and skeleton-link tests build

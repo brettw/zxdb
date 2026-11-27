@@ -11,7 +11,7 @@ add_library(zxdb_symbols STATIC
   const_value.cc
   data_member.cc
   dwarf_attr.cc
-  dwarf_binary_impl.cc
+  dwarf_binary.cc
   dwarf_debug_names.cc
   dwarf_die.cc
   dwarf_die.h
@@ -26,7 +26,7 @@ add_library(zxdb_symbols STATIC
   dwarf_stack_entry.cc
   dwarf_symbol_factory.cc
   dwarf_tag.cc
-  dwarf_unit_impl.cc
+  dwarf_unit.cc
   dwo_info.cc
   elf_symbol.cc
   elf_symbol_record.cc

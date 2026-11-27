@@ -2,27 +2,31 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/developer/debug/zxdb/symbols/dwarf_unit_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_symbol_factory.h"
 #include "src/developer/debug/zxdb/symbols/lazy_symbol.h"
 
 namespace zxdb {
 
-DwarfUnitImpl::DwarfUnitImpl(DwarfBinaryImpl* binary, UnitIndex index, UnitSection section,
-                             const UnitHeader& header)
-    : binary_(binary->GetWeakPtr()), index_(index), section_(section), header_(header) {}
+DwarfUnit::DwarfUnit(DwarfBinary* binary, UnitIndex index, UnitSection section,
+                     const UnitHeader& header)
+    : weak_factory_(this),
+      binary_(binary->GetWeakPtr()),
+      index_(index),
+      section_(section),
+      header_(header) {}
 
-DwarfBinary* DwarfUnitImpl::GetBinary() const { return binary_.get(); }
+DwarfBinary* DwarfUnit::GetBinary() const { return binary_.get(); }
 
-int DwarfUnitImpl::GetDwarfVersion() const { return header_.version; }
+int DwarfUnit::GetDwarfVersion() const { return header_.version; }
 
-DwarfDie DwarfUnitImpl::GetUnitDie(DwarfDie::Load load) const {
+DwarfDie DwarfUnit::GetUnitDie(DwarfDie::Load load) const {
   return binary_ ? binary_->GetDieAtIndex(index_, 0, load) : DwarfDie();
 }
 
-LazySymbol DwarfUnitImpl::FunctionForRelativeAddress(uint64_t relative_address) const {
+LazySymbol DwarfUnit::FunctionForRelativeAddress(uint64_t relative_address) const {
   if (!binary_)
     return {};
 
@@ -37,9 +41,9 @@ LazySymbol DwarfUnitImpl::FunctionForRelativeAddress(uint64_t relative_address) 
   return {};
 }
 
-uint64_t DwarfUnitImpl::GetOffset() const { return header_.offset; }
+uint64_t DwarfUnit::GetOffset() const { return header_.offset; }
 
-std::string DwarfUnitImpl::GetCompilationDir() const {
+std::string DwarfUnit::GetCompilationDir() const {
   if (!binary_)
     return std::string();
 
@@ -48,7 +52,7 @@ std::string DwarfUnitImpl::GetCompilationDir() const {
                  : std::string();
 }
 
-const LineTable& DwarfUnitImpl::GetLineTable() const {
+const LineTable& DwarfUnit::GetLineTable() const {
   if (!line_table_) {
     if (binary_)
       line_table_.emplace(binary_->DecodeLineTable(index_));
@@ -58,30 +62,30 @@ const LineTable& DwarfUnitImpl::GetLineTable() const {
   return *line_table_;
 }
 
-uint64_t DwarfUnitImpl::GetDieCount() const { return GetUnitDie().unit_die_count(); }
+uint64_t DwarfUnit::GetDieCount() const { return GetUnitDie().unit_die_count(); }
 
-void DwarfUnitImpl::ClearDieCache() const {
+void DwarfUnit::ClearDieCache() const {
   if (binary_)
     binary_->ClearDieCache(index_);
 }
 
-DwarfDie DwarfUnitImpl::GetDieAtIndex(uint64_t index) const {
+DwarfDie DwarfUnit::GetDieAtIndex(uint64_t index) const {
   return binary_ ? binary_->GetDieAtIndex(index_, index, DwarfDie::Load::kAllDies) : DwarfDie();
 }
 
-DwarfDie DwarfUnitImpl::GetDieAtOffset(DwarfDieRef die_ref) const {
+DwarfDie DwarfUnit::GetDieAtOffset(DwarfDieRef die_ref) const {
   return binary_ && die_ref && die_ref.section() == GetDieRef(GetOffset()).section()
              ? binary_->GetDieAtOffset(index_, die_ref.offset())
              : DwarfDie();
 }
 
-std::optional<uint32_t> DwarfUnitImpl::GetIndexForDie(const DwarfDie& die) const {
+std::optional<uint32_t> DwarfUnit::GetIndexForDie(const DwarfDie& die) const {
   return binary_ && die.belongs_to(*binary_) && die.unit_index() == index_
              ? std::optional(die.index())
              : std::nullopt;
 }
 
-DwarfDieRef DwarfUnitImpl::GetDieRef(uint64_t offset) const {
+DwarfDieRef DwarfUnit::GetDieRef(uint64_t offset) const {
   return section_ == UnitSection::kInfo ? DwarfDieRef::Main(offset) : DwarfDieRef::Type(offset);
 }
 

@@ -8,10 +8,11 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/line_program_test_util.h"
 
 namespace zxdb {
@@ -85,7 +86,7 @@ class DwarfDieDecoderTest : public testing::Test {
     binary_.emplace(DwarfSections{.info = info_, .abbrev = abbrev_, .addr = addr_});
   }
 
-  DwarfBinaryImpl& binary() { return *binary_; }
+  DwarfBinary& binary() { return *binary_; }
 
   // Returns the DIE at the offset in the unit with the given index.
   DwarfDie GetDieInUnit(unsigned unit_index, uint64_t offset) {
@@ -418,7 +419,7 @@ class DwarfDieDecoderTest : public testing::Test {
   uint64_t addresses_offset_ = 0;
   uint64_t corrupt_offset_ = 0;
 
-  std::optional<DwarfBinaryImpl> binary_;
+  std::optional<DwarfBinary> binary_;
 };
 
 }  // namespace
@@ -447,7 +448,7 @@ TEST(DwarfDieDecoder, RefAddrInDwo) {
   };
   uint64_t target_offset = write_unit(2, [&] { writer.CString("t"); });
   uint64_t source_offset = write_unit(3, [&] { writer.Offset(target_offset, 4); });
-  DwarfBinaryImpl binary(DwarfSections{.info_dwo = info, .abbrev_dwo = abbrev});
+  DwarfBinary binary(DwarfSections{.info_dwo = info, .abbrev_dwo = abbrev});
 
   ASSERT_EQ(2u, binary.GetDWOUnitCount());
   DwarfDie source = binary.GetDieAtOffset(DwarfDieRef::Main(source_offset), true);
@@ -484,7 +485,7 @@ TEST(DwarfDieDecoder, SupplementaryStrings) {
                                      attrs);
     abbrev_builder.EndAbbrevTable();
 
-    DwarfBinaryImpl binary(DwarfSections{.info = info, .abbrev = abbrev, .str = strings.bytes()});
+    DwarfBinary binary(DwarfSections{.info = info, .abbrev = abbrev, .str = strings.bytes()});
 
     static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName};
     DwarfDieDecoder decoder(binary, kAttrs);
@@ -519,7 +520,7 @@ TEST(DwarfDieDecoder, IndirectConstantAndFullWidthAttribute) {
   info_builder.CString("name");
   info_builder.EndUnit(unit);
 
-  DwarfBinaryImpl binary(DwarfSections{.info = info, .abbrev = abbrev});
+  DwarfBinary binary(DwarfSections{.info = info, .abbrev = abbrev});
 
   auto root = [&] { return binary.GetUnitDieForRef(DwarfDieRef::Main(root_offset), false); };
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName, DwarfAttr::kConstValue};

@@ -9,7 +9,8 @@
 #include <gtest/gtest.h>
 
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program_test_util.h"
 
@@ -328,7 +329,7 @@ TEST_P(SourceFileIndexerStrxTest, ResolvesWithUnit) {
   sections.AddCompileUnit(5, plain_offset, {});
   sections.Finish();
 
-  DwarfBinaryImpl binary(sections.sections());
+  DwarfBinary binary(sections.sections());
   std::vector<LineTableJob> jobs;
   AddLineTableJob(binary, UnitIndex(false, 0), 0x1000, &jobs);
   AddLineTableJob(binary, UnitIndex(false, 1), 0x1000, &jobs);
@@ -402,7 +403,7 @@ TEST(SourceFileIndexer, UnitWithoutLineTable) {
   sections.AddCompileUnit(5, offset, {});
   sections.Finish();
 
-  DwarfBinaryImpl binary(sections.sections());
+  DwarfBinary binary(sections.sections());
   std::vector<LineTableJob> jobs;
   AddLineTableJob(binary, UnitIndex(false, 0), 0x1000, &jobs);
   EXPECT_TRUE(jobs.empty());

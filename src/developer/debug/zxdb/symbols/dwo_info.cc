@@ -5,6 +5,7 @@
 #include "src/developer/debug/zxdb/symbols/dwo_info.h"
 
 #include "src/developer/debug/zxdb/symbols/compile_unit.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
 #include "src/developer/debug/zxdb/symbols/module_symbols.h"
 #include "src/developer/debug/zxdb/symbols/symbol.h"
@@ -12,8 +13,15 @@
 
 namespace zxdb {
 
+DwoInfo::DwoInfo(SkeletonUnit skeleton, fxl::WeakPtr<ModuleSymbols> module_symbols)
+    : skeleton_(std::move(skeleton)),
+      module_symbols_(std::move(module_symbols)),
+      weak_factory_(this) {}
+
+DwoInfo::~DwoInfo() = default;
+
 Err DwoInfo::Load(const std::string& name, const std::string& binary_name) {
-  binary_ = std::make_unique<DwarfBinaryImpl>(name, binary_name, std::string());
+  binary_ = std::make_unique<DwarfBinary>(name, binary_name, std::string());
   if (Err err = binary_->Load(weak_factory_.GetWeakPtr(), DwarfSymbolFactory::kDWO);
       err.has_error()) {
     binary_.reset();
@@ -21,6 +29,8 @@ Err DwoInfo::Load(const std::string& name, const std::string& binary_name) {
   }
   return Err();
 }
+
+const SymbolFactory* DwoInfo::symbol_factory() { return binary_->GetSymbolFactory(); }
 
 CompileUnit* DwoInfo::GetSkeletonCompileUnit() {
   if (!skeleton_unit_) {

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 
 #include <elf.h>
 
@@ -87,7 +87,7 @@ bool SetDynamicSymbolSize(std::string& elf, std::string_view name, uint64_t size
 
 using elflib::test::MakeElf;
 
-TEST(DwarfBinaryImpl, RejectsRepeatedDwarfSections) {
+TEST(DwarfBinary, RejectsRepeatedDwarfSections) {
   files::ScopedTempDir temp_dir;
   for (const auto& [name, duplicate] : {std::pair{".debug_types", ".debug_types"},
                                         {".debug_info.dwo", ".debug_info.dwo"},
@@ -97,7 +97,7 @@ TEST(DwarfBinaryImpl, RejectsRepeatedDwarfSections) {
     auto elf = MakeElf({{name, byte}, {duplicate, byte}});
     std::string path;
     ASSERT_TRUE(temp_dir.NewTempFileWithData(elf, &path));
-    DwarfBinaryImpl binary(path, "", "");
+    DwarfBinary binary(path, "", "");
     Err err = binary.Load({}, DwarfSymbolFactory::kMainBinary);
     ASSERT_TRUE(err.has_error());
     EXPECT_EQ(
@@ -108,7 +108,7 @@ TEST(DwarfBinaryImpl, RejectsRepeatedDwarfSections) {
   }
 }
 
-TEST(DwarfBinaryImpl, RejectsDebugRelocations) {
+TEST(DwarfBinary, RejectsDebugRelocations) {
   // The relocation section header's sh_info gives the target section index. The section
   // name and relocation records are irrelevant to this check.
   const uint8_t byte[] = {0};
@@ -120,7 +120,7 @@ TEST(DwarfBinaryImpl, RejectsDebugRelocations) {
     const auto elf = MakeElf({{".debug_info", byte}, {".relocations", relocation, type, 0, 0, 1}});
     std::string path;
     ASSERT_TRUE(temp_dir.NewTempFileWithData(elf, &path));
-    DwarfBinaryImpl binary(path, "", "");
+    DwarfBinary binary(path, "", "");
     Err err = binary.Load({}, DwarfSymbolFactory::kMainBinary);
     ASSERT_TRUE(err.has_error());
     EXPECT_EQ("The object \"" + path + "\" has relocations for .debug_info. Link it first.",
@@ -128,7 +128,7 @@ TEST(DwarfBinaryImpl, RejectsDebugRelocations) {
   }
 }
 
-TEST(DwarfBinaryImpl, FirstCodeAddress) {
+TEST(DwarfBinary, FirstCodeAddress) {
   // ELF marks executable sections with SHF_EXECINSTR. A separate debug file can preserve
   // this flag on a SHT_NOBITS section.
   const uint8_t code[] = {0};
@@ -138,13 +138,13 @@ TEST(DwarfBinaryImpl, FirstCodeAddress) {
   files::ScopedTempDir temp_dir;
   std::string path;
   ASSERT_TRUE(temp_dir.NewTempFileWithData(elf, &path));
-  DwarfBinaryImpl binary(path, "", "");
+  DwarfBinary binary(path, "", "");
   Err err = binary.Load({}, DwarfSymbolFactory::kMainBinary);
   ASSERT_TRUE(err.ok()) << err.msg();
   EXPECT_EQ(0x800u, binary.GetFirstCodeAddress());
 }
 
-TEST(DwarfBinaryImpl, SkipsSectionWithBadCompressionHeader) {
+TEST(DwarfBinary, SkipsSectionWithBadCompressionHeader) {
   // A single byte is shorter than an Elf64_Chdr. The unrelated abbreviation section is readable.
   const uint8_t truncated[] = {ELFCOMPRESS_ZLIB};
   const uint8_t abbrev[] = {0};
@@ -154,17 +154,17 @@ TEST(DwarfBinaryImpl, SkipsSectionWithBadCompressionHeader) {
   std::string path;
   ASSERT_TRUE(temp_dir.NewTempFileWithData(elf, &path));
 
-  DwarfBinaryImpl binary(path, "", "");
+  DwarfBinary binary(path, "", "");
   Err err = binary.Load({}, DwarfSymbolFactory::kMainBinary);
   ASSERT_TRUE(err.ok()) << err.msg();
   EXPECT_TRUE(binary.GetSections().info.empty());
   EXPECT_EQ(1u, binary.GetSections().abbrev.size());
 }
 
-TEST(DwarfBinaryImpl, ZstdCompressedSections) {
+TEST(DwarfBinary, ZstdCompressedSections) {
   // readelf -x .debug_info shows the ELF zstd compression header. The units match the four
   // fixture sources. readelf --debug-dump=info lists line_lookup_symbol_test.cc first.
-  DwarfBinaryImpl binary(TestSymbolModule::GetTestFileName(), "", "");
+  DwarfBinary binary(TestSymbolModule::GetTestFileName(), "", "");
   Err err = binary.Load({}, DwarfSymbolFactory::kMainBinary);
   ASSERT_TRUE(err.ok()) << err.msg();
   EXPECT_EQ(4u, binary.GetNormalUnitCount());
@@ -176,10 +176,10 @@ TEST(DwarfBinaryImpl, ZstdCompressedSections) {
   EXPECT_TRUE(std::string_view(name).ends_with("/line_lookup_symbol_test.cc"));
 }
 
-TEST(DwarfBinaryImpl, SeparateDebugFile) {
+TEST(DwarfBinary, SeparateDebugFile) {
   const std::string dir = TestSymbolModule::GetTestDataDir() + "elf_sections/";
   const std::string stripped_path = dir + "symbols.so";
-  DwarfBinaryImpl stripped(stripped_path, "", "");
+  DwarfBinary stripped(stripped_path, "", "");
   Err err = stripped.Load({}, DwarfSymbolFactory::kMainBinary);
   ASSERT_TRUE(err.ok()) << err.msg();
   EXPECT_TRUE(stripped.GetSections().info.empty());
@@ -202,10 +202,10 @@ TEST(DwarfBinaryImpl, SeparateDebugFile) {
   EXPECT_EQ("DoLineLookupTest", function.Get()->GetAssignedName());
 }
 
-TEST(DwarfBinaryImpl, SplitDwarfSections) {
+TEST(DwarfBinary, SplitDwarfSections) {
   // readelf --debug-dump=info shows a split type unit at offset zero and a split compile unit.
   auto path = TestSymbolModule::GetTestDataDir() + "line_table/clang_split.dwo";
-  DwarfBinaryImpl binary(path, "", "");
+  DwarfBinary binary(path, "", "");
   Err err = binary.Load({}, DwarfSymbolFactory::kDWO);
   ASSERT_TRUE(err.ok()) << err.msg();
   EXPECT_EQ(0u, binary.GetNormalUnitCount());
@@ -217,7 +217,7 @@ TEST(DwarfBinaryImpl, SplitDwarfSections) {
   EXPECT_FALSE(binary.GetSections().line_dwo.empty());
 }
 
-TEST(DwarfBinaryImpl, DebugAddr) {
+TEST(DwarfBinary, DebugAddr) {
   std::string path = TestSymbolModule::GetTestDataDir() + "addrx_offset/clang_addrx_offset.so";
   TestSymbolModule setup(path, "");
   ASSERT_TRUE(setup.Init().ok());
@@ -234,7 +234,7 @@ TEST(DwarfBinaryImpl, DebugAddr) {
   EXPECT_EQ(std::nullopt, binary.GetDebugAddrEntry(UINT64_MAX - 7, 2));
 }
 
-TEST(DwarfBinaryImpl, UnitAddressFallbackUsesRootRnglist) {
+TEST(DwarfBinary, UnitAddressFallbackUsesRootRnglist) {
   TestSymbolModule setup(TestSymbolModule::GetCheckedInTestFileName(), "");
   ASSERT_TRUE(setup.Init().ok());
   DwarfBinary& binary = *setup.symbols()->binary();
@@ -253,7 +253,7 @@ TEST(DwarfBinaryImpl, UnitAddressFallbackUsesRootRnglist) {
   EXPECT_FALSE(expected_unit->FunctionForRelativeAddress(0x14cd).is_valid());
 }
 
-TEST(DwarfBinaryImpl, UnitAddressArangesMerge) {
+TEST(DwarfBinary, UnitAddressArangesMerge) {
   std::string elf;
   ASSERT_TRUE(
       files::ReadFileToString(TestSymbolModule::GetTestDataDir() + "fission/fission", &elf));
@@ -293,11 +293,11 @@ TEST(DwarfBinaryImpl, UnitAddressArangesMerge) {
   EXPECT_FALSE(binary.UnitForRelativeAddress(0x1184));
 }
 
-TEST(DwarfBinaryImpl, DieLookupInSelectedSections) {
+TEST(DwarfBinary, DieLookupInSelectedSections) {
   const std::string dir = TestSymbolModule::GetTestDataDir() + "fission/";
   for (bool is_dwo : {false, true}) {
     SCOPED_TRACE(is_dwo);
-    DwarfBinaryImpl binary(dir + (is_dwo ? "main.dwo" : "fission"), "", "");
+    DwarfBinary binary(dir + (is_dwo ? "main.dwo" : "fission"), "", "");
     ASSERT_TRUE(
         binary.Load({}, is_dwo ? DwarfSymbolFactory::kDWO : DwarfSymbolFactory::kMainBinary).ok());
     auto unit = binary.GetUnitAtIndex(UnitIndex(is_dwo, 0));
@@ -318,7 +318,7 @@ TEST(DwarfBinaryImpl, DieLookupInSelectedSections) {
   }
 }
 
-TEST(DwarfBinaryImpl, SplitTypeSignatureWithOverlappingOffsets) {
+TEST(DwarfBinary, SplitTypeSignatureWithOverlappingOffsets) {
   constexpr uint64_t kSignature = 0;
   constexpr uint64_t kTypeOffset = 25;  // The type unit header and its root abbreviation code.
   constexpr AbbrevTable::AttributeSpec kName[] = {
@@ -356,7 +356,7 @@ TEST(DwarfBinaryImpl, SplitTypeSignatureWithOverlappingOffsets) {
   split.Uleb(0);
   split.EndUnit(split_compile);
 
-  DwarfBinaryImpl binary(
+  DwarfBinary binary(
       DwarfSections{.info = info, .abbrev = abbrev, .info_dwo = info_dwo, .abbrev_dwo = abbrev});
 
   auto unit = binary.GetUnitAtIndex(UnitIndex(true, 1));
@@ -490,7 +490,7 @@ class DwarfPackageTest : public testing::TestWithParam<uint16_t> {};
 
 TEST_P(DwarfPackageTest, ReadsPackageAbbreviationsOnWorkerThread) {
   DwarfPackageFixture fixture(GetParam());
-  DwarfBinaryImpl binary(fixture.sections());
+  DwarfBinary binary(fixture.sections());
   std::array<DwarfDie, 2> roots;
   std::jthread reader([&] {
     for (size_t i = 0; i < roots.size(); ++i)
@@ -512,7 +512,7 @@ TEST_P(DwarfPackageTest, ReadsPackageAbbreviationsOnWorkerThread) {
 
 TEST_P(DwarfPackageTest, ResolvesLineTablesByContribution) {
   DwarfPackageFixture fixture(GetParam());
-  DwarfBinaryImpl binary(fixture.sections());
+  DwarfBinary binary(fixture.sections());
   ASSERT_EQ(2u, binary.GetDWOUnitCount());
 
   // Both fixture units reference relative offset zero and each encodes its own file.
@@ -530,7 +530,7 @@ TEST_P(DwarfPackageTest, RejectsLineOffsetAtContributionEnd) {
   // DWARF 5 section 7.3.5.3 bases the offset on the unit's contribution. The first
   // unit's invalid offset reaches the second table in the same section.
   DwarfPackageFixture fixture(GetParam(), true);
-  DwarfBinaryImpl binary(fixture.sections());
+  DwarfBinary binary(fixture.sections());
   EXPECT_FALSE(binary.GetLineProgramSource(UnitIndex(true, 0)));
 }
 
@@ -540,7 +540,7 @@ TEST_P(DwarfPackageTest, MatchesSkeletonsByDwoId) {
   constexpr uint64_t kAddresses[] = {0x1000, 0x2000};
   for (size_t i : {1, 0})
     fixture.AddSkeleton(fixture.kIds[i], kAddresses[i]);
-  DwarfBinaryImpl binary(fixture.sections());
+  DwarfBinary binary(fixture.sections());
   for (size_t i = 0; i < fixture.kIds.size(); ++i) {
     auto context = binary.GetUnitContext(UnitIndex(true, i));
     ASSERT_TRUE(context) << context.err().msg();
@@ -553,7 +553,7 @@ TEST_P(DwarfPackageTest, LeavesUnmatchedUnitUnlinked) {
   DwarfPackageFixture fixture(GetParam());
   // The fixture's only skeleton ID matches the second split unit.
   fixture.AddSkeleton(fixture.kIds[1], 0x2000);
-  DwarfBinaryImpl binary(fixture.sections());
+  DwarfBinary binary(fixture.sections());
   auto context = binary.GetUnitContext(UnitIndex(true, 0));
   ASSERT_TRUE(context) << context.err().msg();
   EXPECT_FALSE(context.value()->ReadAddress(0));
@@ -564,7 +564,7 @@ TEST_P(DwarfPackageTest, LeavesDuplicateSkeletonIdsUnlinked) {
   // Both skeletons claim the first split unit, so neither supplies its address table.
   fixture.AddSkeleton(fixture.kIds[0], 0x1000);
   fixture.AddSkeleton(fixture.kIds[0], 0x2000);
-  DwarfBinaryImpl binary(fixture.sections());
+  DwarfBinary binary(fixture.sections());
   auto context = binary.GetUnitContext(UnitIndex(true, 0));
   ASSERT_TRUE(context) << context.err().msg();
   EXPECT_FALSE(context.value()->ReadAddress(0));
@@ -574,7 +574,7 @@ INSTANTIATE_TEST_SUITE_P(Dwarf4And5, DwarfPackageTest, testing::Values(4, 5));
 
 }  // namespace
 
-TEST(DwarfBinaryImpl, Dwarf4TypeUnits) {
+TEST(DwarfBinary, Dwarf4TypeUnits) {
   std::string path = TestSymbolModule::GetTestDataDir() + "type_unit/gcc_dwarf4.so";
   if (!std::filesystem::exists(path))
     GTEST_SKIP() << "The GCC type unit fixture is unavailable.";
@@ -614,7 +614,7 @@ TEST(DwarfBinaryImpl, Dwarf4TypeUnits) {
   EXPECT_FALSE(binary.GetDieRefForSignature(0).is_valid());  // Absent from the fixture.
 }
 
-TEST(DwarfBinaryImpl, Dwarf5TypeUnits) {
+TEST(DwarfBinary, Dwarf5TypeUnits) {
   std::string path = TestSymbolModule::GetTestDataDir() + "type_unit/gcc_dwarf5.so";
   if (!std::filesystem::exists(path))
     GTEST_SKIP() << "The GCC type unit fixture is unavailable.";
@@ -651,7 +651,7 @@ TEST(DwarfBinaryImpl, Dwarf5TypeUnits) {
 
 // The checked-in test binary has a ".symtab" and a ".dynsym" section. The symbols of both are in
 // the result.
-TEST(DwarfBinaryImpl, ElfSymbols) {
+TEST(DwarfBinary, ElfSymbols) {
   TestSymbolModule setup(TestSymbolModule::GetCheckedInTestFileName(), "");
   ASSERT_TRUE(setup.Init().ok());
   const std::map<std::string, ElfTableSymbol>& symbols = setup.symbols()->binary()->GetELFSymbols();
@@ -686,7 +686,7 @@ TEST(DwarfBinaryImpl, ElfSymbols) {
 }
 
 // The stripped binary has only a ".dynsym" section.
-TEST(DwarfBinaryImpl, ElfSymbolsStripped) {
+TEST(DwarfBinary, ElfSymbolsStripped) {
   TestSymbolModule setup(TestSymbolModule::GetStrippedCheckedInTestFileName(), "");
   ASSERT_TRUE(setup.Init().ok());
   const std::map<std::string, ElfTableSymbol>& symbols = setup.symbols()->binary()->GetELFSymbols();
@@ -712,7 +712,7 @@ TEST(DwarfBinaryImpl, ElfSymbolsStripped) {
 // When both tables have a name, the ".dynsym" record is in the result. The ".symtab" record of
 // MyFunction(int) has a size of 173. A copy of the binary gives the ".dynsym" record a different
 // size.
-TEST(DwarfBinaryImpl, ElfSymbolsDynamicPrecedence) {
+TEST(DwarfBinary, ElfSymbolsDynamicPrecedence) {
   std::string elf;
   ASSERT_TRUE(files::ReadFileToString(TestSymbolModule::GetCheckedInTestFileName(), &elf));
   ASSERT_TRUE(SetDynamicSymbolSize(elf, "_Z10MyFunctioni", 172));
@@ -734,7 +734,7 @@ TEST(DwarfBinaryImpl, ElfSymbolsDynamicPrecedence) {
 
 class UnitContextCacheTest : public testing::Test {
  protected:
-  static size_t UnitEntries(const DwarfBinaryImpl& binary, UnitIndex index) {
+  static size_t UnitEntries(const DwarfBinary& binary, UnitIndex index) {
     auto entry = binary.GetUnitHeader(index);
     if (!entry)
       return 0;
@@ -742,11 +742,11 @@ class UnitContextCacheTest : public testing::Test {
                         : binary.unit_contexts_.normal_units_.count(&entry->header);
   }
 
-  static size_t AbbrevEntries(const DwarfBinaryImpl& binary) {
+  static size_t AbbrevEntries(const DwarfBinary& binary) {
     return binary.unit_contexts_.abbrevs_.size();
   }
 
-  static void ClearUnitContexts(DwarfBinaryImpl& binary) { binary.unit_contexts_.Clear(); }
+  static void ClearUnitContexts(DwarfBinary& binary) { binary.unit_contexts_.Clear(); }
 };
 
 TEST_F(UnitContextCacheTest, ReusesContextAcrossAttributesAndClears) {
@@ -788,7 +788,7 @@ TEST_F(UnitContextCacheTest, DistinctUnitsShareAbbreviations) {
   sections.AddCompileUnit(5, 0, {});
   sections.AddCompileUnit(5, 0x20, {});
   sections.Finish();
-  DwarfBinaryImpl binary(sections.sections());
+  DwarfBinary binary(sections.sections());
   const UnitIndex first_index(false, 0);
   auto first = binary.GetUnitContext(first_index);
   auto second = binary.GetUnitContext(UnitIndex(false, 1));
@@ -800,7 +800,7 @@ TEST_F(UnitContextCacheTest, DistinctUnitsShareAbbreviations) {
   EXPECT_EQ(1u, AbbrevEntries(binary));
 
   // Binaries with identical section bytes still own independent caches.
-  DwarfBinaryImpl other(sections.sections());
+  DwarfBinary other(sections.sections());
   auto foreign_die = binary.GetUnitAtIndex(first_index)->GetUnitDie();
   EXPECT_TRUE(other.GetUnitContext(foreign_die).has_error());
   EXPECT_EQ(0u, UnitEntries(other, first_index));
@@ -950,7 +950,7 @@ TEST_F(UnitContextCacheTest, SplitUnitUsesSkeletonCache) {
   auto skeleton = main_unit->GetUnitIndex();
   EXPECT_EQ(0u, UnitEntries(main_binary, skeleton));
 
-  DwarfBinaryImpl split_binary(dir + "main.dwo", "", "");
+  DwarfBinary split_binary(dir + "main.dwo", "", "");
   ASSERT_TRUE(split_binary.Load({}, DwarfSymbolFactory::kDWO).ok());
   auto split_unit = split_binary.GetDwoUnit();
   ASSERT_TRUE(split_unit);
@@ -1001,7 +1001,7 @@ TEST_F(UnitContextCacheTest, CachesMalformedUnitError) {
   writer.Uleb(1);
   writer.Offset(0xb4, 4);
   writer.EndUnit(good);
-  DwarfBinaryImpl binary(DwarfSections{.info = info, .abbrev = abbrev});
+  DwarfBinary binary(DwarfSections{.info = info, .abbrev = abbrev});
   auto unit = binary.GetUnitAtIndex(UnitIndex(false, 0));
   ASSERT_TRUE(unit);
   auto index = unit->GetUnitIndex();

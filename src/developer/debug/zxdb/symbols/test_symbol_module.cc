@@ -7,7 +7,7 @@
 #include <memory>
 
 #include "src/developer/debug/zxdb/common/host_util.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 
 namespace zxdb {
 
@@ -128,7 +128,7 @@ TestSymbolModule::~TestSymbolModule() = default;
 
 Err TestSymbolModule::Init(const std::string& build_dir, bool should_index,
                            FunctionNameParser function_name_parser) {
-  auto binary = std::make_unique<DwarfBinaryImpl>(sym_name_, binary_name_, std::string());
+  auto binary = std::make_unique<DwarfBinary>(sym_name_, binary_name_, std::string());
   symbols_ =
       fxl::MakeRefCounted<ModuleSymbolsImpl>(std::move(binary), build_dir, function_name_parser);
   if (Err err = symbols_->Load(should_index); err.has_error())

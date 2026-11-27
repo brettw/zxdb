@@ -4,7 +4,7 @@
 
 #include "src/developer/debug/zxdb/symbols/unit_context_cache.h"
 
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 
 namespace zxdb {
 
@@ -57,7 +57,7 @@ UnitContextResult UnitContextCache::GetNormal(const DwarfSections& sections,
   return normal_units_.emplace(&header, std::move(result)).first->second;
 }
 
-UnitContextResult UnitContextCache::GetSplit(const DwarfBinaryImpl& binary, UnitIndex index,
+UnitContextResult UnitContextCache::GetSplit(const DwarfBinary& binary, UnitIndex index,
                                              const UnitHeader& header, UnitSection kind,
                                              UnitContextSource skeleton) {
   auto [begin, end] = split_units_.equal_range(&header);
@@ -70,7 +70,7 @@ UnitContextResult UnitContextCache::GetSplit(const DwarfBinaryImpl& binary, Unit
   return split_units_.emplace(&header, SplitEntry{skeleton, std::move(result)})->second.result;
 }
 
-UnitContextResult UnitContextCache::ParseSplit(const DwarfBinaryImpl& binary, UnitIndex index,
+UnitContextResult UnitContextCache::ParseSplit(const DwarfBinary& binary, UnitIndex index,
                                                const UnitHeader& header, UnitSection kind,
                                                UnitContextSource skeleton) {
   const auto& sections = binary.GetSections();
@@ -109,7 +109,7 @@ UnitContextResult UnitContextCache::ParseSplit(const DwarfBinaryImpl& binary, Un
   return ShareContext(parse(address.get()));
 }
 
-std::optional<UnitIndex> UnitContextCache::FindSkeleton(const DwarfBinaryImpl& binary,
+std::optional<UnitIndex> UnitContextCache::FindSkeleton(const DwarfBinary& binary,
                                                         uint64_t dwo_id) {
   if (!skeletons_) {
     auto& map = skeletons_.emplace();
@@ -138,7 +138,7 @@ std::optional<UnitIndex> UnitContextCache::FindSkeleton(const DwarfBinaryImpl& b
 }
 
 std::shared_ptr<const UnitContext> UnitContextCache::GetSkeletonContext(
-    const DwarfBinaryImpl& binary, UnitContextSource skeleton) {
+    const DwarfBinary& binary, UnitContextSource skeleton) {
   if (!skeleton.binary || skeleton.index.is_dwo)
     return {};
   if (skeleton.binary != &binary)

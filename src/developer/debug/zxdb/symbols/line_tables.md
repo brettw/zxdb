@@ -8,7 +8,7 @@ edge case list current: add a test and an entry for each new edge case.
 ## Design
 
 zxdb parses each line table header and decodes the line program that follows
-it. `DwarfBinaryImpl` fills `DwarfSections` from `elflib` and passes the
+it. `DwarfBinary` fills `DwarfSections` from `elflib` and passes the
 selected section bytes and byte order to the parser.
 `UnitContext` reads the line table offset and the string offsets contribution.
 For a unit in a package, the native package index supplies the line
@@ -23,12 +23,12 @@ use the main `.debug_line_str` section.
 | `LineSequenceValidator`, `IsStrippedSequenceStart()` | `line_sequence.h` | Shared validation of sequence order and removed code. |
 | `LineFileTable`, `ResolveLineFileName()` | `line_file_table.*` | Resolved, normalized file names, indexed by the raw file register value. |
 | `LineProgram`, `LineFileEntries` | `line_program.*` | Immutable parsed program, explicit decode results, and views of effective file entries. |
-| `DwarfSections`, `ReadDwarfSections()` | `dwarf/dwarf_sections.h`, `dwarf_binary_impl.cc` | Section views backed by `elflib`'s mapping and decompressed buffers. |
+| `DwarfSections`, `ReadDwarfSections()` | `dwarf/dwarf_sections.h`, `dwarf_binary.cc` | Section views backed by `elflib`'s mapping and decompressed buffers. |
 | Line program source | `DwarfBinary::GetLineProgramSource()` | Collects the unit's line table offset and string sections on the binary's owning thread. |
 | `LineTable` | `line_table.*` | Concrete sequences and rows, address lookup, `GetLineDetails()`. |
 | `LineTableCache` | `line_table_cache.*` | One file table for each line table of a binary, shared by `DW_AT_decl_file` lookups and decoded tables. |
 | `SourceFileIndexer`, `LineFilePathResolver`, `CollectLineTableJobs()` | `source_file_indexer.*` | Parallel file indexing with a path cache. |
-| `DwarfBinary::GetLineFileTable()`, `DwarfBinaryImpl::DecodeLineTable()` | `dwarf_binary*.h` | Access to the binary's `LineTableCache`. |
+| `DwarfBinary::GetLineFileTable()`, `DwarfBinary::DecodeLineTable()` | `dwarf_binary.h` | Access to the binary's `LineTableCache`. |
 
 Key decisions:
 
@@ -134,7 +134,7 @@ Key decisions:
   non-overlapping tables this is one step. If more than one sequence contains
   the address, the lookup returns the one with the latest start.
 - **One file table for each line table.** `LineTableCache` in each
-  `DwarfBinaryImpl` gives `DW_AT_decl_file` lookups and decoded line tables the
+  `DwarfBinary` gives `DW_AT_decl_file` lookups and decoded line tables the
   same `LineFileTable`. `DW_LNE_define_file` in the program can add files that
   the header doesn't have. The cache keeps the header's table until a caller
   asks for an index past its entries. Then it decodes the program once, and the
@@ -300,7 +300,7 @@ unit or entry.
 
 The tests must run fast. They build line tables in memory with
 `LineTableBuilder` and `LineTableTestSections` (`line_program_test_util.*`).
-`LineTableTestSections` owns the bytes. A `DwarfBinaryImpl` can read the
+`LineTableTestSections` owns the bytes. A `DwarfBinary` can read the
 units directly from its section views. Tests of real binaries use the
 debugger's object loader.
 
@@ -511,7 +511,7 @@ checks that the file scan agrees with the decoded rows (`DecodeAndCheck()`).
     (`GetLineDetailsLineOutsideIntRange`).
 - The existing `GetRowForAddress`, line 0, end-sequence, and prologue tests,
   converted from `MockLineTable`.
-- The DWARF 4 and 5 package tests in `dwarf_binary_impl_unittest.cc` resolve
+- The DWARF 4 and 5 package tests in `dwarf_binary_unittest.cc` resolve
   the same relative line offset to different file tables in two contributions.
   They also reject an offset at the contribution's end.
 

@@ -8,7 +8,7 @@
 
 #include <gtest/gtest.h>
 
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/input_location.h"
 #include "src/developer/debug/zxdb/symbols/module_symbols_impl.h"

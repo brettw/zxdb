@@ -10,6 +10,7 @@
 
 #include "src/developer/debug/zxdb/common/worker_pool.h"
 #include "src/developer/debug/zxdb/symbols/compile_unit.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/index.h"
 
 namespace zxdb {

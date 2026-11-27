@@ -1,7 +1,7 @@
 # DWARF reader
 
 `zxdb_dwarf` parses DWARF records from section views. For file-backed symbols,
-`DwarfBinaryImpl` fills the views from `elflib`. It also takes section views
+`DwarfBinary` fills the views from `elflib`. It also takes section views
 directly from in-memory fixtures.
 
 ## Interface

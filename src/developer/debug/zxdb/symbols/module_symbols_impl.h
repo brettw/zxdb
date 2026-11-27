@@ -21,7 +21,7 @@
 
 namespace zxdb {
 
-class DwarfBinaryImpl;
+class DwarfBinary;
 class DwarfSymbolFactory;
 class DwoInfo;
 class Variable;
@@ -40,7 +40,7 @@ class ModuleSymbolsImpl final : public ModuleSymbols, public DwarfSymbolFactory:
   // from its name, e.g., in some test scenarios or in symbolizer.
   Err Load(bool create_index);
 
-  DwarfBinaryImpl* binary() { return binary_.get(); }
+  DwarfBinary* binary() { return binary_.get(); }
 
   fxl::WeakPtr<ModuleSymbolsImpl> GetWeakPtr();
 
@@ -99,7 +99,7 @@ class ModuleSymbolsImpl final : public ModuleSymbols, public DwarfSymbolFactory:
   //
   // The build_dir, if not empty, will be used to override the compilation_dir of FileLine objects,
   // which is useful because in Fuchsia checkout, the compilation_dir will always be ".".
-  explicit ModuleSymbolsImpl(std::unique_ptr<DwarfBinaryImpl> binary, const std::string& build_dir,
+  explicit ModuleSymbolsImpl(std::unique_ptr<DwarfBinary> binary, const std::string& build_dir,
                              FunctionNameParser function_name_parser);
   ~ModuleSymbolsImpl() override;
 
@@ -176,7 +176,7 @@ class ModuleSymbolsImpl final : public ModuleSymbols, public DwarfSymbolFactory:
   // Fills the forward and backward indices for ELF symbols.
   void FillElfSymbols();
 
-  std::unique_ptr<DwarfBinaryImpl> binary_;  // Guaranteed non-null after Load() succeeds.
+  std::unique_ptr<DwarfBinary> binary_;  // Guaranteed non-null after Load() succeeds.
 
   // .dwo files are separate per-source symbols that are referenced by the main binary. Populated
   // by CreateIndex(). The dwo_skeleton_offset_to_index_ maps the SkeletonUnit's skeleton_die_offset

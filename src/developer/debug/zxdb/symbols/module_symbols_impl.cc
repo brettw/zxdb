@@ -17,13 +17,14 @@
 #include "src/developer/debug/shared/message_loop.h"
 #include "src/developer/debug/zxdb/common/file_util.h"
 #include "src/developer/debug/zxdb/symbols/compile_unit.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_debug_names.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_expr_eval.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_symbol_factory.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/dwo_info.h"
 #include "src/developer/debug/zxdb/symbols/elf_symbol.h"
 #include "src/developer/debug/zxdb/symbols/file_line.h"
@@ -209,7 +210,7 @@ std::string_view StripTemplateArgs(std::string_view leaf) {
 
 }  // namespace
 
-ModuleSymbolsImpl::ModuleSymbolsImpl(std::unique_ptr<DwarfBinaryImpl> binary,
+ModuleSymbolsImpl::ModuleSymbolsImpl(std::unique_ptr<DwarfBinary> binary,
                                      const std::string& build_dir,
                                      FunctionNameParser function_name_parser)
     : binary_(std::move(binary)),

@@ -19,7 +19,7 @@
 #include "src/developer/debug/zxdb/symbols/compile_unit.h"
 #include "src/developer/debug/zxdb/symbols/data_member.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_abstract_child_iterator.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
@@ -64,7 +64,7 @@ constexpr DwarfAttr kArraySubrangeAttrs[] = {DwarfAttr::kCount, DwarfAttr::kUppe
 
 }  // namespace
 
-DwarfSymbolFactory::DwarfSymbolFactory(fxl::WeakPtr<DwarfBinaryImpl> binary,
+DwarfSymbolFactory::DwarfSymbolFactory(fxl::WeakPtr<DwarfBinary> binary,
                                        fxl::WeakPtr<Delegate> delegate, FileType file_type)
     : binary_(std::move(binary)), delegate_(std::move(delegate)), file_type_(file_type) {}
 DwarfSymbolFactory::~DwarfSymbolFactory() = default;

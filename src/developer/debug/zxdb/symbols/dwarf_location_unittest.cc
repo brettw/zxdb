@@ -11,8 +11,9 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_op.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 
 namespace zxdb {
 
@@ -256,7 +257,7 @@ TEST(DwarfLocation, Dwarf5LocationReferenceBounds) {
   writer.Uleb(1);
   writer.Offset(base, kWidth);
   writer.EndUnit(unit);
-  DwarfBinaryImpl binary(DwarfSections{.info = info, .abbrev = abbrev, .loclists = loclists});
+  DwarfBinary binary(DwarfSections{.info = info, .abbrev = abbrev, .loclists = loclists});
   auto root = binary.GetUnitAtIndex(UnitIndex(false, 0))->GetUnitDie();
   ASSERT_TRUE(root);
   auto context = binary.GetUnitContext(root);
