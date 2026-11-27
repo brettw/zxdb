@@ -323,6 +323,20 @@ void DwarfBinaryImpl::InitUnitLists() {
   types_units_ = UnitList::Parse(sections_.types, sections_.endian, UnitSection::kTypes);
   info_dwo_units_ = UnitList::Parse(sections_.info_dwo, sections_.endian, UnitSection::kInfo);
   types_dwo_units_ = UnitList::Parse(sections_.types_dwo, sections_.endian, UnitSection::kTypes);
+  die_tables_[false].resize(GetNormalUnitCount());
+  die_tables_[true].resize(GetDWOUnitCount());
+
+  const auto& object = context_->getDWARFObj();
+  if (!object.getCUIndexSection().empty() || !object.getTUIndexSection().empty()) {
+    // LLVM can mutate its indexes during lookup. Resolve the bounds before raw DIE lookups
+    // can run on another thread.
+    package_abbrevs_.reserve(GetDWOUnitCount());
+    for (const UnitList* units : {&info_dwo_units_, &types_dwo_units_}) {
+      for (const UnitHeader& header : *units)
+        package_abbrevs_.push_back(
+            UnitContextCache::GetPackageAbbrev(sections_, *context_, header));
+    }
+  }
 }
 
 llvm::object::ObjectFile* DwarfBinaryImpl::GetLLVMObjectFile() {
@@ -387,20 +401,32 @@ llvm::DWARFUnit* DwarfBinaryImpl::FindLLVMUnit(bool is_dwo, UnitSection section,
   return found != end && (*found)->getOffset() == unit_offset ? found->get() : nullptr;
 }
 
+llvm::DWARFUnit* DwarfBinaryImpl::GetLLVMUnit(UnitIndex index) const {
+  if (!context_)
+    return nullptr;
+  const bool is_dwo = index.is_dwo;
+  auto& units = llvm_units_[is_dwo];
+  if (!units) {
+    auto& by_index = units.emplace();
+    for (UnitSection section : {UnitSection::kInfo, UnitSection::kTypes}) {
+      for (const UnitHeader& header : GetUnitList(is_dwo, section))
+        by_index.push_back(FindLLVMUnit(is_dwo, section, header.offset));
+    }
+  }
+  return index.index < units->size() ? (*units)[index.index] : nullptr;
+}
+
 fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::GetUnitAtIndex(UnitIndex i) {
   auto entry = GetUnitHeader(i);
   if (!entry)
     return nullptr;
-  auto* llvm_unit = FindLLVMUnit(i.is_dwo, entry->section, entry->header.offset);
-  if (!llvm_unit)
-    return nullptr;
 
-  auto found = unit_map_.find(llvm_unit);
+  auto found = unit_map_.find(i);
   if (found != unit_map_.end())
     return found->second;
 
-  auto unit = fxl::MakeRefCounted<DwarfUnitImpl>(this, llvm_unit, entry->header);
-  unit_map_.emplace(llvm_unit, unit);
+  auto unit = fxl::MakeRefCounted<DwarfUnitImpl>(this, i, entry->section, entry->header);
+  unit_map_.emplace(i, unit);
   return unit;
 }
 
@@ -417,22 +443,12 @@ fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::UnitForRelativeAddress(uint64_t relative
   return GetUnitAtIndex(UnitIndex(false, *index));
 }
 
-fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::CreateUncachedUnit(DwarfDie die) {
-  auto* llvm_unit = die.llvm_unit();
-  if (!llvm_unit || &llvm_unit->getContext() != context_.get())
+fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::CreateUncachedUnit(const DwarfDie& die) {
+  if (!die.belongs_to(*this))
     return nullptr;
-
-  bool is_dwo = llvm_unit->isDWOUnit();
-  uint64_t offset = llvm_unit->getOffset();
-  // Both sections can have a unit at the same offset. Match the LLVM unit in that section.
-  for (UnitSection section : {UnitSection::kInfo, UnitSection::kTypes}) {
-    const UnitList& list = GetUnitList(is_dwo, section);
-    auto index = list.FindIndexForOffset(offset);
-    if (index && list[*index].offset == offset &&
-        FindLLVMUnit(is_dwo, section, offset) == llvm_unit)
-      return fxl::MakeRefCounted<DwarfUnitImpl>(this, llvm_unit, list[*index]);
-  }
-  return nullptr;
+  UnitIndex index = die.unit_index();
+  auto entry = GetUnitHeader(index);
+  return fxl::MakeRefCounted<DwarfUnitImpl>(this, index, entry->section, entry->header);
 }
 
 std::optional<uint64_t> DwarfBinaryImpl::GetDebugAddrEntry(uint64_t addr_base,
@@ -456,54 +472,111 @@ std::optional<uint64_t> DwarfBinaryImpl::GetDebugAddrEntry(uint64_t addr_base,
   return result;
 }
 
-llvm::DWARFUnit* DwarfBinaryImpl::FindLLVMUnitForRef(DwarfDieRef die_ref, bool is_dwo) const {
-  if (!die_ref.is_valid() || !context_)
-    return nullptr;
-
+std::optional<UnitIndex> DwarfBinaryImpl::FindUnitForRef(DwarfDieRef die_ref, bool is_dwo) const {
+  if (!die_ref)
+    return std::nullopt;
   UnitSection section =
       die_ref.section() == DwarfDieRef::Section::kMain ? UnitSection::kInfo : UnitSection::kTypes;
-  const UnitList& list = GetUnitList(is_dwo, section);
-  auto index = list.FindIndexForOffset(die_ref.offset());
-  return index ? FindLLVMUnit(is_dwo, section, list[*index].offset) : nullptr;
+  auto index = GetUnitList(is_dwo, section).FindIndexForOffset(die_ref.offset());
+  if (!index)
+    return std::nullopt;
+  return UnitIndex(is_dwo, section == UnitSection::kInfo
+                               ? *index
+                               : GetUnitList(is_dwo, UnitSection::kInfo).size() + *index);
+}
+
+std::shared_ptr<const DwarfDie::UnitTable> DwarfBinaryImpl::GetDieTable(UnitIndex index,
+                                                                        DwarfDie::Load load) const {
+  auto& entries = die_tables_[index.is_dwo];
+  if (index.index >= entries.size())
+    return nullptr;
+
+  std::unique_lock lock(die_cache_mutex_);
+  auto& table = entries[index.index];
+  if (table && (load == DwarfDie::Load::kRootOnly || table->load == DwarfDie::Load::kAllDies))
+    return table;
+
+  const auto unit = GetUnitHeader(index);
+  std::optional<UnitContextCache::AbbrevSection> abbrev_section = UnitContextCache::AbbrevSection{
+      index.is_dwo ? sections_.abbrev_dwo : sections_.abbrev, unit->header.abbrev_offset};
+  if (index.is_dwo && !package_abbrevs_.empty())
+    abbrev_section = package_abbrevs_[index.index];
+  auto abbrevs =
+      abbrev_section ? unit_contexts_.GetDieAbbrevs(index.is_dwo, *abbrev_section) : nullptr;
+
+  auto bytes = unit->section == UnitSection::kInfo
+                   ? (index.is_dwo ? sections_.info_dwo : sections_.info)
+                   : (index.is_dwo ? sections_.types_dwo : sections_.types);
+  auto parsed = DieTable::Parse(bytes, unit->header, sections_.endian, std::move(abbrevs), load);
+  auto snapshot = std::make_shared<const DwarfDie::UnitTable>(
+      this, index, unit->section, std::move(parsed), sections_.endian, load);
+  table = snapshot;
+  lock.unlock();
+  if (snapshot->error().has_error())
+    LOGS(Error) << snapshot->error().msg();
+  return snapshot;
+}
+
+DwarfDie DwarfBinaryImpl::GetDieAtIndex(UnitIndex index, uint64_t die_index,
+                                        DwarfDie::Load load) const {
+  auto table = GetDieTable(index, load);
+  return table && table->Get(die_index) ? DwarfDie(std::move(table), die_index) : DwarfDie();
+}
+
+DwarfDie DwarfBinaryImpl::GetDieAtOffset(UnitIndex index, uint64_t die_offset) const {
+  auto table = GetDieTable(index, DwarfDie::Load::kAllDies);
+  if (table) {
+    if (auto die_index = table->Find(die_offset))
+      return DwarfDie(std::move(table), *die_index);
+  }
+  return {};
+}
+
+void DwarfBinaryImpl::ClearDieCache(UnitIndex index) const {
+  std::lock_guard lock(die_cache_mutex_);
+  die_tables_[index.is_dwo][index.index].reset();
 }
 
 DwarfDie DwarfBinaryImpl::GetDieAtOffset(DwarfDieRef die_ref) const {
-  if (auto* unit = FindLLVMUnitForRef(die_ref, false))
-    return DwarfDie::FromOffset(unit, die_ref.offset());
+  if (auto unit = FindUnitForRef(die_ref, false))
+    return GetDieAtOffset(*unit, die_ref.offset());
   return GetDieAtOffset(die_ref, true);
 }
 
 DwarfDie DwarfBinaryImpl::GetDieAtOffset(DwarfDieRef die_ref, bool is_dwo) const {
-  if (auto* unit = FindLLVMUnitForRef(die_ref, is_dwo))
-    return DwarfDie::FromOffset(unit, die_ref.offset());
+  if (auto unit = FindUnitForRef(die_ref, is_dwo))
+    return GetDieAtOffset(*unit, die_ref.offset());
   return {};
 }
 
 DwarfDie DwarfBinaryImpl::GetUnitDieForRef(DwarfDieRef die_ref, bool is_dwo) const {
-  return DwarfDie::FromUnitRoot(FindLLVMUnitForRef(die_ref, is_dwo));
+  auto unit = FindUnitForRef(die_ref, is_dwo);
+  return unit ? GetDieAtIndex(*unit, 0, DwarfDie::Load::kRootOnly) : DwarfDie();
 }
 
 void DwarfBinaryImpl::EnsureSignatureMap() const {
-  if (signature_to_die_.has_value())
+  if (signature_to_die_)
     return;
 
   auto& maps = signature_to_die_.emplace();
-  auto add_units = [](SignatureMap& map, const UnitList& units) {
+  auto add_units = [](SignatureMap& map, const UnitList& units, UnitSection section) {
     for (const UnitHeader& unit : units) {
       if (unit.type_signature) {
+        uint64_t offset = unit.offset + *unit.type_offset;
         map[*unit.type_signature] =
-            DwarfDieRef::ForTypeUnit(unit.version, unit.offset + *unit.type_offset);
+            section == UnitSection::kInfo ? DwarfDieRef::Main(offset) : DwarfDieRef::Type(offset);
       }
     }
   };
 
-  add_units(maps[false], info_units_);
-  add_units(maps[false], types_units_);
-  add_units(maps[true], info_dwo_units_);
-  add_units(maps[true], types_dwo_units_);
+  add_units(maps[false], info_units_, UnitSection::kInfo);
+  add_units(maps[false], types_units_, UnitSection::kTypes);
+  add_units(maps[true], info_dwo_units_, UnitSection::kInfo);
+  add_units(maps[true], types_dwo_units_, UnitSection::kTypes);
 }
 
 DwarfDieRef DwarfBinaryImpl::FindSignature(uint64_t signature, bool is_dwo) const {
+  std::lock_guard lock(die_cache_mutex_);
   EnsureSignatureMap();
   const auto& map = (*signature_to_die_)[is_dwo];
   auto found = map.find(signature);
@@ -537,16 +610,6 @@ UnitContextResult DwarfBinaryImpl::GetUnitContext(llvm::DWARFUnit& unit,
   return unit_contexts_.GetOrParse(sections_, unit, skeleton);
 }
 
-const UnitAttributeData* DwarfBinaryImpl::GetUnitAttributeData(DwarfDie die) const {
-  auto* unit = die.llvm_unit();
-  if (!unit || &unit->getContext() != context_.get())
-    return nullptr;
-#ifndef NDEBUG
-  auto access = CheckUnitContextCacheAccess(unit_context_cache_active_);
-#endif
-  return unit_contexts_.GetAttributeData(sections_, *unit);
-}
-
 std::shared_ptr<const LineFileTable> DwarfBinaryImpl::GetLineFileTable(llvm::DWARFUnit* unit,
                                                                        uint64_t file_index) const {
   if (!unit)
@@ -562,36 +625,21 @@ LineTable DwarfBinaryImpl::DecodeLineTable(llvm::DWARFUnit* unit) const {
   return line_tables_.DecodeLineTable(sections_, *unit, first_code_address_, this);
 }
 
-void DwarfBinaryImpl::ClearLLVMCache() {
+void DwarfBinaryImpl::ClearDwarfCaches() {
 #ifndef NDEBUG
   auto access = CheckUnitContextCacheAccess(unit_context_cache_active_);
 #endif
-  signature_to_die_.reset();
   line_tables_.Clear();
-  unit_contexts_.Clear();
-
-  // Drop cached DwarfUnitImpl wrappers accumulated during indexing, and the line tables they
-  // own. Iterate the underlying LLVM unit vectors directly rather than calling GetUnitAtIndex(),
-  // which would immediately re-populate unit_map_ for every unit in the binary.
-  // Even though Index::IndexCompileUnit() evicts each unit's caches as it finishes,
-  // cross-unit DIE references (such as DW_FORM_ref_addr and DW_FORM_ref_sig8) resolved via
-  // GetDieAtOffset() can lazily re-extract DIE arrays in previously indexed units, so a final
-  // sweep is still required here.
   unit_map_.clear();
-  if (!context_)
-    return;
 
-  for (const auto& unit : context_->normal_units()) {
-    if (unit) {
-      unit->clear();
-    }
+  // A cross-unit reference can reload a previously indexed unit. Release those tables too.
+  std::lock_guard lock(die_cache_mutex_);
+  for (auto& entries : die_tables_) {
+    for (auto& entry : entries)
+      entry.reset();
   }
-
-  for (const auto& unit : context_->dwo_units()) {
-    if (unit) {
-      unit->clear();
-    }
-  }
+  signature_to_die_.reset();
+  unit_contexts_.Clear();
 }
 
 }  // namespace zxdb

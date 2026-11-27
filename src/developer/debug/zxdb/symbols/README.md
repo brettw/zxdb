@@ -62,24 +62,32 @@ Public headers expose these symbol classes, factories, and evaluators:
   `symbol_utils.h` (`zxdb::GetSymbolScopePrefix`, `zxdb::NameHasTemplate`,
   `zxdb::StripTemplate`, `zxdb::AddTemplateParameterToName`).
 
-- `DwarfDie` is a handle to an entry in a unit's DIE array. Use it to read
-  the tag, walk the tree, or iterate over the attribute specifications. Use
-  the handle only while the unit keeps its DIE array. Loading the full tree
-  can invalidate a handle to the root. Use `DwarfDie::ref()`
-  to keep the section and offset after the unit releases the array.
+- `DwarfDie` holds an entry in an immutable `DieTable`. Use it to read
+  the tag, walk the tree, or iterate over the attribute specifications.
+  The handle keeps its table alive through cache eviction. Keep the binary
+  alive while reading the encoded attributes. Use `DwarfDie::ref()` to
+  store the section and offset for later lookup. Resolve names and decode
+  attributes on the binary's owning thread because those operations can use
+  the unit context cache.
+  Name lookup follows the specification, abstract origin, and type signature
+  in that order. A Clang inline instance can reach its name through an
+  abstract origin that points to a separate specification.
 - `DwarfUnit::GetUnitDie()` returns the root and loads its children. Use
-  `kRootOnly` when you need only the root. `GetDieAtIndex()` and
-  `GetDieAtOffset()` return a handle in that unit. `GetIndexForDie()`
-  returns the index if the handle belongs to the unit. To find a DIE across
-  units, pass its `DwarfDieRef` to `DwarfBinary::GetDieAtOffset()`.
-- The index scans each unit in array order. It uses each `DwarfDie` and its
-  parent index to track scope. The index stores `DwarfDieRef` values so it
-  can release the unit's DIE array after indexing.
-- `DwarfDieDecoder::Decode()` takes a `DwarfDie`. `GetValue()` returns an
-  `AttributeValue` with a zxdb `FormValue`, the `DwarfDie` that supplied it,
-  and the form parameters and byte order of that DIE's unit. LLVM supplies
-  the DIE offset. The decoder uses the unit's abbreviation table and reads
-  the attributes within that unit's bounds.
+  `kRootOnly` when you need only the root. A root-only handle keeps its
+  original view after a full load. Later root lookups reuse a full table
+  when it is cached. `GetDieAtIndex()` and `GetDieAtOffset()` return handles
+  in that unit. To find a DIE across units, pass its `DwarfDieRef` to
+  `DwarfBinary::GetDieAtOffset()`.
+- `DwarfUnit::FunctionForRelativeAddress()` uses the unit's
+  `FunctionAddressMap` to find a function or inline instance.
+- The index scans each unit in table order. It uses parent indices to track
+  scope and stores `DwarfDieRef` values so it can release the table after
+  indexing.
+- `DwarfDieDecoder::Decode()` takes a `DwarfDie` and reads attributes within
+  that entry's bounds. `GetValue()` returns an `AttributeValue` with a zxdb
+  `FormValue` and the form parameters and byte order of its unit. The value
+  borrows its source DIE from the decoder until the next decode or until
+  the decoder is destroyed.
 
 - Line tables: `zxdb::LineTable` (`line_table.h`) is concrete, immutable data
   made of `zxdb::LineRow` rows (`line_row.h`) and a `zxdb::LineFileTable`
@@ -134,9 +142,10 @@ Callers and implementations must preserve these invariants:
   `DwarfTag::kCompileUnit` so child DIEs can reach `llvm::DWARFUnit` via
   `CompileUnit`.
 - `DwarfBinaryImpl` reads unit headers from `DwarfSections`. Its unit lists
-  put info units before types units for both normal and DWO sections. For DIE
-  decoding, it finds the LLVM unit in the same section at the exact unit
-  offset. A raw DIE lookup does not create a unit wrapper.
+  put info units before types units for both normal and DWO sections. DIE
+  lookups use the ELF section and unit offset. Raw DIE lookups return handles
+  directly. The index requests a cached unit wrapper when it needs to walk
+  the scope of a declaration in another unit.
 - When a type signature has no target DIE, `DwarfSymbolFactory` returns an
   empty `Symbol`.
 - A unit-relative DIE reference must point into the unit's DIE data. A
@@ -162,24 +171,33 @@ Callers and implementations must preserve these invariants:
   readers expect any required ELF relocations to be applied to the bytes.
   `UnitContext` reads root DIE metadata for string offsets, indexed addresses,
   location lists, range lists, compilation directories, and line table
-  offsets. LLVM supplies the DIE tree and package contribution offsets.
+  offsets. LLVM supplies split package contributions and skeleton links.
 - Each binary caches immutable unit contexts by LLVM unit identity. A split
   unit also uses its skeleton identity when it has one. The split unit gets
   the skeleton context from the skeleton binary's cache when possible. The
   skeleton binary keeps its section bytes alive for the split binary.
 - The binary shares parsed abbreviation tables by section kind, offset, and
-  contribution end. It caches each unit's DIE byte span and keeps parse errors
-  because the section bytes are immutable. A foreign LLVM context can use
-  the byte reader with its own section views. Callers supply the binary
-  explicitly to the DIE, line, and location readers.
-- Only the thread that owns the LLVM context uses the unit context and
-  abbreviation caches. A DWO index worker owns its binary until it gives the
-  binary to the module. Source file workers use section views prepared before
-  they start. Debug builds check for overlapping cache access.
+  contribution end. The unit context and DIE table use the same abbreviations.
+  Each DIE table holds the abbreviations it needs through cache eviction.
+- LLVM objects, unit wrappers, unit contexts, and line tables belong to the
+  binary's owning thread. Each DWO index worker owns its binary until it
+  passes the binary to the module.
+- Raw DIE and signature lookups can run from other threads. They use immutable
+  unit lists and package abbreviation bounds computed at load time. One lock
+  protects DIE table builds, eviction, and the signature maps. A table build
+  can acquire the abbreviation cache lock while holding the DIE cache lock.
+  Readers can share snapshots while the binary keeps the section bytes alive.
 - The address-to-unit map uses `.debug_aranges` first. It uses root DIE ranges
   for units without a parsed set and clips overlaps at the start of the later
   range. The map and the symbol factory omit ranges that start at address
   zero because the linker can use zero for removed code.
+- The function address map reads code ranges from concrete function and
+  inline DIEs in their own units. Separate split units resolve indexed
+  addresses through the skeleton unit. Later entries in DIE order win
+  where ranges overlap, so a nested inline instance covers its caller.
+  This also chooses the later DIE for identical ranges, as LLVM 19 does.
+  LLVM 19's range split assumes nested ranges. The map also preserves the
+  portions of unrelated crossing ranges outside their overlap.
 - `IsStrippedSequenceStart()` is the only rule for removed code: a sequence
   that starts below `DwarfBinary::GetFirstCodeAddress()`. This matches LLDB.
   `LineTable` drops those sequences, and the file index ignores their files.
@@ -189,9 +207,8 @@ Callers and implementations must preserve these invariants:
 - The line table parser and decoder follow the DWARF standard and the rules in
   `line_tables.md`. Their tests check expected values. Don't add tests that
   compare zxdb's results with LLVM's: zxdb is reducing its dependency on LLVM.
-- `SourceFileIndexer` workers read only immutable section data. LLVM calls
-  such as `getUnitDIE()` and `getLineTableForUnit()` belong on the thread
-  that owns the `DWARFContext`. Before this thread starts the workers, it
+- `SourceFileIndexer` workers read only immutable section data. Before
+  the thread that owns the `DWARFContext` starts the workers, it
   selects each unit's line and string sections from `DwarfSections` and
   collects its `LineStringSections`. This includes the string offsets base,
   entry size, and contribution bounds from `UnitContext` for `DW_FORM_strx`.
@@ -217,13 +234,17 @@ Using `zxdb/symbols` produces these disk, cache, and IPC side effects:
 - Calling `Symbol::GetFullName()`, `Symbol::GetIdentifier()`, or
   `Collection::GetSpecialType()` lazily computes and caches the formatted name,
   `Identifier`, or `SpecialType` on the `Symbol`.
+- The first function address lookup scans the unit's DIE table and decodes
+  concrete function ranges. It caches the map even when there are no
+  functions. The map stores DIE offsets and stays valid after DIE table
+  eviction.
 - `DwarfUnit::GetLineTable()` decodes and caches the unit's line table.
   `DwarfBinary::GetLineFileTable()` usually parses only the line table header.
   Both share the file tables in the binary's `LineTableCache`.
-  `DwarfBinary::ClearLLVMCache()` clears the cache.
-- `DwarfBinary::ClearLLVMCache()` also clears the unit context, attribute
-  metadata, and abbreviation caches. A previously returned context stays valid
-  while its section bytes stay alive.
+- `DwarfBinary::ClearDwarfCaches()` clears cached unit wrappers, file
+  tables, unit contexts, DIE tables, abbreviations, and type signature maps.
+  Previously returned contexts and DIE handles keep their snapshots while
+  the section bytes stay alive.
 - `Index::CreateIndex()` starts worker threads for the source file index when
   the binary has 256 KB or more of line tables: one, plus one for each 2 MB,
   up to six.

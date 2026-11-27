@@ -36,9 +36,8 @@ uint64_t AddDefineFileTable(LineTableTestSections& sections) {
 }
 
 // Decodes DW_AT_decl_file of a child of the unit DIE.
-std::optional<std::string> DecodeDeclFile(const DwarfBinary& binary, llvm::DWARFUnit& unit,
-                                          size_t child_index) {
-  DwarfDie die = DwarfDie::FromUnitRoot(&unit, DwarfDie::Load::kAllDies).first_child();
+std::optional<std::string> DecodeDeclFile(DwarfBinary& binary, size_t child_index) {
+  DwarfDie die = binary.GetUnitAtIndex(UnitIndex(false, 0))->GetUnitDie().first_child();
   for (size_t i = 0; i < child_index; i++)
     die = die.sibling();
 
@@ -159,7 +158,7 @@ TEST(LineTableCache, UnitWithoutLineTable) {
 
   // DW_AT_decl_file has no file table to use.
   DwarfBinaryImpl binary(sections.TakeContext());
-  EXPECT_EQ(std::nullopt, DecodeDeclFile(binary, unit, 0));
+  EXPECT_EQ(std::nullopt, DecodeDeclFile(binary, 0));
 }
 
 TEST(DwarfDieDecoder, GetFileDefinedByProgram) {
@@ -168,12 +167,10 @@ TEST(DwarfDieDecoder, GetFileDefinedByProgram) {
   uint64_t offset = AddDefineFileTable(sections);
   sections.AddCompileUnit(4, offset, {1, 2, 9});
   sections.Finish(Endian::kLittle);
-  llvm::DWARFUnit& unit = *sections.unit(0);
-
   DwarfBinaryImpl binary(sections.TakeContext());
-  EXPECT_EQ("a.cc", DecodeDeclFile(binary, unit, 0));
-  EXPECT_EQ("inc/defined.h", DecodeDeclFile(binary, unit, 1));
-  EXPECT_EQ(std::nullopt, DecodeDeclFile(binary, unit, 2));
+  EXPECT_EQ("a.cc", DecodeDeclFile(binary, 0));
+  EXPECT_EQ("inc/defined.h", DecodeDeclFile(binary, 1));
+  EXPECT_EQ(std::nullopt, DecodeDeclFile(binary, 2));
 }
 
 TEST(DwarfDieDecoder, GetFileStrx) {
@@ -188,10 +185,8 @@ TEST(DwarfDieDecoder, GetFileStrx) {
   uint64_t offset = sections.Add(builder);
   sections.AddCompileUnit(5, offset, {0});
   sections.Finish(Endian::kLittle);
-  llvm::DWARFUnit& unit = *sections.unit(0);
-
   DwarfBinaryImpl binary(sections.TakeContext());
-  EXPECT_EQ("src/indexed.cc", DecodeDeclFile(binary, unit, 0));
+  EXPECT_EQ("src/indexed.cc", DecodeDeclFile(binary, 0));
 }
 
 }  // namespace zxdb

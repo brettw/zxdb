@@ -131,7 +131,15 @@ class DataReader {
     return result;
   }
 
-  uint64_t Uleb();
+  uint64_t Uleb() {
+    if (!Check(1))
+      return 0;
+    uint8_t value = data_[offset_];
+    if (value >= 0x80)
+      return UlebSlow();
+    ++offset_;
+    return value;
+  }
   int64_t Sleb();
   void SkipUleb() { Uleb(); }
   void SkipSleb() { Sleb(); }
@@ -145,6 +153,8 @@ class DataReader {
   UnitLength InitialLength();
 
  private:
+  uint64_t UlebSlow();
+
   bool Check(uint64_t size) {
     if (!ok_ || size > limit_ - offset_) {
       ok_ = false;

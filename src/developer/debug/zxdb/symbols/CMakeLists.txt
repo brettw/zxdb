@@ -1,7 +1,6 @@
 add_subdirectory(dwarf)
 # Source selection follows the upstream host build.
 add_library(zxdb_symbols STATIC
-  address_range_map_builder.cc
   arch.cc
   array_type.cc
   base_type.cc
@@ -36,6 +35,7 @@ add_library(zxdb_symbols STATIC
   file_line.cc
   find_line.cc
   function.cc
+  function_address_map.cc
   function_name_index.cc
   function_type.cc
   identifier.cc

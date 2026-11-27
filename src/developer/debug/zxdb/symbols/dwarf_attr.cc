@@ -164,6 +164,8 @@ static_assert(std::size(kDwarfAttrNames) == kDwarfAttrNameCount,
 // Returns the name of a vendor attribute that has a constant, or null.
 const char* GetVendorAttrName(DwarfAttr attr) {
   switch (attr) {
+    case DwarfAttr::kMipsLinkageName:
+      return "DW_AT_MIPS_linkage_name";
     case DwarfAttr::kGnuDwoName:
       return "DW_AT_GNU_dwo_name";
     case DwarfAttr::kGnuRangesBase:

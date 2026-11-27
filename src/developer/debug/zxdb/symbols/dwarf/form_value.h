@@ -15,6 +15,7 @@
 #include "src/developer/debug/zxdb/common/err_or.h"
 #include "src/developer/debug/zxdb/common/int128_t.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/abbrev_table.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/form_encoding.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 
 namespace zxdb {
@@ -26,20 +27,7 @@ struct FormParams;
 // including the base of a reference and the table for an index. The reader decodes the bytes
 // without applying relocations or resolving references, addresses, or strings in other sections.
 struct FormValue {
-  // Forms such as DW_FORM_sec_offset can belong to several DWARF classes depending on the
-  // attribute. This classification records what the form tells us before that interpretation.
-  enum class Class {
-    kConstant,
-    kAddress,
-    kBlock,
-    kString,
-    kReference,
-    kSectionOffset,
-    kFlag,
-    kExprloc,
-    kLoclist,
-    kRnglist,
-  };
+  using Class = FormClass;
 
   struct IndexedAddress {
     uint64_t index;
@@ -74,14 +62,6 @@ struct FormValue {
   // Returns the bytes of a block, expression, or DW_FORM_data16 value.
   std::optional<std::span<const uint8_t>> AsBlock() const;
 };
-
-// Moves past one attribute value. Returns false on malformed input, including an unknown form.
-// The raw overload accepts the full form code from an abbreviation declaration.
-// On failure, the cursor may have consumed part of the value.
-bool SkipForm(uint64_t form, const FormParams& params, DataReader& reader);
-inline bool SkipForm(DwarfForm form, const FormParams& params, DataReader& reader) {
-  return SkipForm(static_cast<uint64_t>(form), params, reader);
-}
 
 // Reads one attribute value. Direct implicit constants come from the attribute specification.
 // On failure, the cursor may have consumed part of the value.

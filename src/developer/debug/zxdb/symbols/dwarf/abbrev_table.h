@@ -5,6 +5,7 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_ABBREV_TABLE_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_ABBREV_TABLE_H_
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include <optional>
@@ -12,9 +13,11 @@
 #include <vector>
 
 #include "src/developer/debug/zxdb/common/err_or.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/form_encoding.h"
 
 namespace zxdb {
 
+class DataReader;
 struct FormParams;
 
 // Owns the abbreviation declarations at one offset. Readers can share a parsed table across
@@ -38,11 +41,14 @@ class AbbrevTable {
     // return std::nullopt.
     std::optional<uint64_t> FixedAttributeSize(const FormParams& params) const;
 
+    // Skips a DIE's attributes within the reader's limits.
+    bool SkipAttributes(const FormParams& params, DataReader& reader) const;
+
    private:
     friend class AbbrevTable;
 
     struct FixedSize {
-      bool AddForm(uint64_t form);
+      bool AddForm(FormEncoding encoding);
 
       uint64_t bytes = 0;
       uint64_t addresses = 0;
@@ -51,6 +57,7 @@ class AbbrevTable {
     };
 
     std::optional<FixedSize> fixed_size_ = FixedSize{};
+    std::vector<FormEncoding> skip_forms_;  // Byte layouts for a mixed declaration.
   };
 
   AbbrevTable(const AbbrevTable&) = default;
@@ -61,10 +68,18 @@ class AbbrevTable {
 
   // Returns a declaration owned by this table, or nullptr if the code has no declaration.
   // If a code appears more than once, the first declaration wins.
-  const Declaration* Find(uint64_t code) const;
+  const Declaration* Find(uint64_t code) const {
+    if (!consecutive_)
+      return FindSparse(code);
+    if (code < declarations_.front().code)
+      return nullptr;
+    uint64_t index = code - declarations_.front().code;
+    return index < declarations_.size() ? &declarations_[index] : nullptr;
+  }
 
  private:
   AbbrevTable() = default;
+  const Declaration* FindSparse(uint64_t code) const;
 
   std::vector<Declaration> declarations_;  // Sorted by code.
   bool consecutive_ = false;

@@ -11,35 +11,31 @@
 
 namespace zxdb {
 
-DwarfDieScanner::DwarfDieScanner(const DwarfUnit& unit) : unit_(unit) {
-  die_count_ = unit_.GetDieCount();
-
+DwarfDieScanner::DwarfDieScanner(const DwarfUnit& unit)
+    : current_die_(unit.GetUnitDie()), die_count_(current_die_.unit_die_count()) {
   // We prefer not to reallocate and normally the C++ component depth is < 8.
   tree_stack_.reserve(8);
 }
 
 DwarfDieScanner::~DwarfDieScanner() = default;
 
-DwarfDie DwarfDieScanner::Prepare() {
-  if (done())
-    return {};
-
-  DwarfDie die = unit_.GetDieAtIndex(die_index_);
-
-  uint32_t parent_idx = die.parent_index().value_or(kNoParent);
+const DwarfDie& DwarfDieScanner::Prepare() {
+  FX_DCHECK(!done());
+  current_die_.SetIndexUnchecked(die_index_);
+  uint32_t parent_idx = current_die_.parent_index().value_or(kNoParent);
 
   while (!tree_stack_.empty() && tree_stack_.back().index != parent_idx)
     tree_stack_.pop_back();
   tree_stack_.emplace_back(die_index_, false);
 
   // Fix up the inside function flag.
-  switch (die.tag()) {
+  switch (current_die_.tag()) {
     case DwarfTag::kLexicalBlock:
     case DwarfTag::kVariable:
       // Inherits from previous. For a block and a variable there should always be the parent,
       // since at least there's the unit root DIE.
-      FX_DCHECK(tree_stack_.size() >= 2);
-      tree_stack_.back().inside_function = tree_stack_[tree_stack_.size() - 2].inside_function;
+      if (tree_stack_.size() >= 2)
+        tree_stack_.back().inside_function = tree_stack_[tree_stack_.size() - 2].inside_function;
       break;
     case DwarfTag::kSubprogram:
     case DwarfTag::kInlinedSubroutine:
@@ -50,7 +46,7 @@ DwarfDie DwarfDieScanner::Prepare() {
       break;
   }
 
-  return die;
+  return current_die_;
 }
 
 void DwarfDieScanner::Advance() {
@@ -60,7 +56,7 @@ void DwarfDieScanner::Advance() {
 }
 
 uint32_t DwarfDieScanner::GetParentIndex(uint32_t index) const {
-  return unit_.GetDieAtIndex(index).parent_index().value_or(kNoParent);
+  return current_die_.parent_index_at(index).value_or(kNoParent);
 }
 
 }  // namespace zxdb

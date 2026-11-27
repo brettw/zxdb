@@ -7,7 +7,6 @@
 #include <inttypes.h>
 
 #include <algorithm>
-#include <limits>
 #include <utility>
 
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
@@ -16,63 +15,23 @@
 
 namespace zxdb {
 
-bool AbbrevTable::Declaration::FixedSize::AddForm(uint64_t form) {
-  if (form > std::numeric_limits<int>::max())
-    return false;
-
-  // The declaration has already stored this attribute. Each stored specification occupies
-  // at least as many bytes as the largest fixed-width form (DW_FORM_data16).
+bool AbbrevTable::Declaration::FixedSize::AddForm(FormEncoding encoding) {
+  // Each stored specification takes at least as many bytes as the widest fixed form.
   static_assert(sizeof(AttributeSpec) >= 16);
-  switch (static_cast<DwarfForm>(form)) {
-    case DwarfForm::kAddr:
+  switch (encoding.kind) {
+    case FormEncoding::Kind::kFixed:
+      bytes += encoding.width;
+      return true;
+    case FormEncoding::Kind::kAddress:
       ++addresses;
       return true;
-    case DwarfForm::kRefAddr:
+    case FormEncoding::Kind::kRefAddr:
       ++ref_addrs;
       return true;
-    case DwarfForm::kStrp:
-    case DwarfForm::kSecOffset:
-    case DwarfForm::kStrpSup:
-    case DwarfForm::kLineStrp:
-    case DwarfForm::kGnuRefAlt:
-    case DwarfForm::kGnuStrpAlt:
+    case FormEncoding::Kind::kOffset:
       ++offsets;
       return true;
-    case DwarfForm::kFlagPresent:
-    case DwarfForm::kImplicitConst:
-      return true;
-    case DwarfForm::kData1:
-    case DwarfForm::kFlag:
-    case DwarfForm::kRef1:
-    case DwarfForm::kStrx1:
-    case DwarfForm::kAddrx1:
-      bytes += 1;
-      return true;
-    case DwarfForm::kData2:
-    case DwarfForm::kRef2:
-    case DwarfForm::kStrx2:
-    case DwarfForm::kAddrx2:
-      bytes += 2;
-      return true;
-    case DwarfForm::kStrx3:
-    case DwarfForm::kAddrx3:
-      bytes += 3;
-      return true;
-    case DwarfForm::kData4:
-    case DwarfForm::kRef4:
-    case DwarfForm::kRefSup4:
-    case DwarfForm::kStrx4:
-    case DwarfForm::kAddrx4:
-      bytes += 4;
-      return true;
-    case DwarfForm::kData8:
-    case DwarfForm::kRef8:
-    case DwarfForm::kRefSig8:
-    case DwarfForm::kRefSup8:
-      bytes += 8;
-      return true;
-    case DwarfForm::kData16:
-      bytes += 16;
+    case FormEncoding::Kind::kZeroWidth:
       return true;
     default:
       return false;
@@ -85,6 +44,8 @@ std::optional<uint64_t> AbbrevTable::Declaration::FixedAttributeSize(
     return std::nullopt;
 
   const auto& [bytes, addresses, ref_addrs, offsets] = *fixed_size_;
+  if (addresses == 0 && ref_addrs == 0 && offsets == 0)
+    return bytes;
   const uint8_t ref_addr_size = params.version == 2 ? params.address_size : params.offset_size;
   uint64_t total = bytes;
   for (auto [count, width] :
@@ -151,8 +112,24 @@ ErrOr<AbbrevTable> AbbrevTable::Parse(std::span<const uint8_t> section, uint64_t
           return error("invalid or truncated implicit constant");
       }
       decl.attributes.push_back(spec);
-      if (decl.fixed_size_ && !decl.fixed_size_->AddForm(spec.form))
+      if (decl.fixed_size_ && !decl.fixed_size_->AddForm(DescribeForm(spec.form).encoding))
         decl.fixed_size_.reset();
+    }
+    if (!decl.fixed_size_) {
+      // DIE scans reuse this sequence for every entry with this declaration.
+      auto& forms = decl.skip_forms_;
+      for (const auto& spec : decl.attributes) {
+        auto encoding = DescribeForm(spec.form).encoding;
+        if (encoding.kind == FormEncoding::Kind::kZeroWidth)
+          continue;
+        if (encoding.kind == FormEncoding::Kind::kFixed && !forms.empty() &&
+            forms.back().kind == FormEncoding::Kind::kFixed &&
+            encoding.width <= UINT8_MAX - forms.back().width) {
+          forms.back().width += encoding.width;
+        } else {
+          forms.push_back(encoding);
+        }
+      }
     }
     table.declarations_.push_back(std::move(decl));
   }
@@ -168,17 +145,29 @@ ErrOr<AbbrevTable> AbbrevTable::Parse(std::span<const uint8_t> section, uint64_t
   return table;
 }
 
-const AbbrevTable::Declaration* AbbrevTable::Find(uint64_t code) const {
-  if (declarations_.empty())
-    return nullptr;
-  if (consecutive_) {
-    if (code < declarations_.front().code)
-      return nullptr;
-    uint64_t index = code - declarations_.front().code;
-    return index < declarations_.size() ? &declarations_[index] : nullptr;
-  }
+const AbbrevTable::Declaration* AbbrevTable::FindSparse(uint64_t code) const {
   auto found = std::ranges::lower_bound(declarations_, code, {}, &Declaration::code);
   return found != declarations_.end() && found->code == code ? &*found : nullptr;
+}
+
+bool AbbrevTable::Declaration::SkipAttributes(const FormParams& params, DataReader& reader) const {
+  if (fixed_size_) {
+    const auto size = FixedAttributeSize(params);
+    if (!size)
+      return false;  // The unit supplies an invalid fixed width.
+    reader.Skip(*size);
+    return reader.ok();
+  }
+  for (auto encoding : skip_forms_) {
+    if (encoding.kind == FormEncoding::Kind::kFixed) {
+      reader.Skip(encoding.width);
+      if (!reader.ok())
+        return false;
+    } else if (!SkipForm(encoding, params, reader)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace zxdb

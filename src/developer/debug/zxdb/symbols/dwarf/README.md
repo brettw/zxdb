@@ -15,7 +15,13 @@
   `UnitHeader::abbrev_offset`. `Find()` returns the declaration for a code or
   a null pointer. Each declaration stores its tag, children flag, and attribute
   specifications in their original order. `FixedAttributeSize()` gives the
-  total byte size for a unit when all attributes have a fixed size.
+  total byte size for a unit when all attributes have a fixed size. A
+  declaration's `SkipAttributes()` skips a DIE's encoded attributes.
+- `DieTable::Parse()` reads one unit's DIEs in section order. It can read
+  just the root entry. `Get()` finds an entry by index and `Find()` finds
+  its index by exact section offset. Each entry uses an abbreviation for its
+  tag and attribute specifications. Parent and sibling indices support tree
+  traversal.
 - `ReadForm()` reads one attribute from its specification and the unit's form
   parameters. It returns a `FormValue` or an error. `FormValue` stores the
   final form, its class, and its raw value. The form identifies the reference
@@ -70,7 +76,23 @@
 - The parsed table owns its declarations and is read-only. Readers can share
   the table across threads. Lookup uses a direct index for consecutive codes
   and binary search for other codes. Memory use depends on the declarations
-  in the section.
+  in the section. Each declaration with variable-width attributes owns the
+  sequence used to skip attributes. The sequence combines adjacent fixed-width
+  payloads and omits zero-width forms.
+- The DIE table owns the entries, shares the abbreviation table, and borrows
+  the section bytes. Readers can share the table across threads while the
+  section bytes stay alive. The table uses 64-bit section offsets and
+  32-bit indices. Index zero identifies the root. Large entry arrays grow in
+  increments of half their capacity to limit spare capacity and reduce the
+  size of the allocations they require during parsing.
+- The DIE table follows children flags and null entries in a single scan.
+  It skips `DW_AT_sibling` like any other attribute. Each null terminator
+  is an entry with the enclosing DIE as its parent. In an empty child list it
+  is the first child.
+- The DIE table limits all reads to the unit. It keeps complete entries
+  before malformed data or a missing terminator. LLVM 19 can keep a DIE whose
+  attributes extend past the unit end. A root-only parse stops after the first
+  entry and leaves its child list unread.
 - `ReadForm()` and `SkipForm()` use the same encoding rules. They reject
   unknown form codes, invalid LEB128 values, missing string terminators,
   and values that extend past the reader limit. On error, the reader can
@@ -147,4 +169,4 @@ Reads change only the reader's cursor and error state.
 ## Verification
 
 - Build with `cmake --build build --target zxdb_dwarf zxdb_tests`.
-- Run `FUCHSIA_ANALYTICS_DISABLED=1 ./build/zxdb_tests --gtest_filter='AbbrevTable.*:ArangesReader.*:DataReader.*:DebugNamesReader.*:DwarfSectionBuilder.*:FormValue.*:Dwarf2To5/FormEncodingTest.*:RangeListReader.*:UnitContext.*:UnitHeader.*:UnitList.*'`.
+- Run `FUCHSIA_ANALYTICS_DISABLED=1 ./build/zxdb_tests --gtest_filter='AbbrevTable.*:ArangesReader.*:DataReader.*:DebugNamesReader.*:DieTable.*:DwarfSectionBuilder.*:FormValue.*:Dwarf2To5/FormEncodingTest.*:RangeListReader.*:UnitContext.*:UnitHeader.*:UnitList.*'`.

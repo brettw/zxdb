@@ -157,10 +157,9 @@ Key decisions:
   calling thread. Above that there is one worker, plus one for each 2 MB, up
   to six. See [Measurements](#measurements).
 - **Thread safety.** zxdb creates its `DWARFContext` with
-  `ThreadSafe = false`. Workers read only section data. They never call
-  `getUnitDIE()`, `getLineTableForUnit()`, or DIE extraction, and they don't
-  use any LLVM objects. Functions in `line_program_llvm.h` are restricted to
-  the context thread. The parser header exposes no LLVM-unit entry points.
+  `ThreadSafe = false`. Workers read immutable section views prepared by
+  the context thread. Functions in `line_program_llvm.h` run on the context
+  thread. The parser header accepts section views.
 - **String forms that need the unit.** `DW_FORM_strx` and similar forms read
   the unit's string offsets table. `CollectLineTableJobs()` records the base,
   the entry size, and the string sections in `LineStringSections` on the
@@ -256,16 +255,13 @@ Measures against overflow and large allocations:
   build failed a `FileLine` check in `GetLineDetails()`. The rows keep the raw
   value, so they still equal LLVM's rows.
 
-LLVM 19 has the `DW_FORM_strx`, empty-entry, and SLEB128 defects. zxdb no
-longer uses LLVM's line table parser, so they don't affect zxdb's line tables.
-zxdb still uses LLVM for DIEs, which have the same kinds of forms. LLVM's
-`DWARFFormValue::skipValue()` also doesn't check the size of a value against
-the data, so a corrupt `.debug_info` can make LLVM DIE extraction read out of
-bounds. `BUGS.md` in
-the root of the repository records this and the `DW_FORM_strx` defect for
-DIEs.
+LLVM 19 has the `DW_FORM_strx`, empty-entry, and SLEB128 defects. zxdb's line
+table parser handles these cases in the native reader. LLVM 19's
+`DWARFFormValue::skipValue()` can also accept an attribute length that runs
+past the available data. The native DIE reader bounds each form read to the
+unit or entry.
 
-Recommendations that this work doesn't do:
+### Follow-up work
 
 - Check in a libFuzzer target. A temporary one ran on 2026-11-20, with ASan
   and UBSan, for 20 minutes in 6 processes: 1.7 M inputs, seeded with the
@@ -284,16 +280,15 @@ Recommendations that this work doesn't do:
     total: 11.8 M inputs. It compared the header fields, the table sizes, the
     program extent, the file names, and the rows. In the last run, which
     sorted each difference by cause (1.7 M inputs), the differences were the
-    known ones in the table above, and directory counts where LLVM read past
-    the data (`BUGS.md`). It doesn't give LLVM 19 the forms that make it
-    crash.
+    known ones in the table above and directory counts where LLVM read past
+    the data after accepting an oversized form. It excludes forms that make
+    LLVM 19 crash.
   - A deterministic sweep of 20 real tables: 301,000 cases. It set each of
     the first 48 header bytes to every value, set the next bytes to boundary
     values and single-bit changes, and cut the section at every length up to
     the end of the header.
 
-  These runs found the two rows above for SLEB128 and DWARF 5 directories,
-  and the `skipValue()` defect in `BUGS.md`.
+  These runs found the SLEB128, DWARF 5 directory, and form length defects.
 - Report the LLVM defects upstream: the expansion of zero-byte entries, the
   decoding of an oversized extended opcode length as opcodes, the
   overflow of the string offset index, the empty `std::optional` dereference
@@ -576,7 +571,7 @@ the `llvm-dwarfdump` lit tests (`llvm/test/tools/llvm-dwarfdump/X86/debug_line*`
 | `ErrorForTruncatedExtendedOpcode`, `ErrorForTruncatedStandardOpcode` | `TruncatedOpcodes` |
 | `Parser*` (the `SectionParser` that walks all tables) | Not applicable. zxdb parses tables by unit offset. `MultipleTables` covers more than one table. |
 | `VerboseOutput`, `PrintPathsProperly` (dump output) | Not applicable. The file name tests cover path composition. |
-| `ClearLineValidTable` | Not applicable. `Index.ClearLLVMCacheEvictsUnitsAndLineTables` covers zxdb's cache. |
+| `ClearLineValidTable` | Not applicable. `Index.ClearDwarfCachesEvictsUnitsAndLineTables` covers zxdb's cache. |
 | lit `debug-line-dw-lns-copy.s`, `debug-line-dw-lne-end-sequence.s` | `StandardOpcodes`, `ExtendedOpcodes` |
 | lit `debug_line_many_files_v5.s` | `ManyFilesDwarf5` |
 | lit `debug_line_dwarf64_large_table.s` | `LineProgramVersionTest` DWARF64, `clang_dwarf64` fixture |

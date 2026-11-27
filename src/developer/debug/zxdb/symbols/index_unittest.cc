@@ -316,8 +316,8 @@ TEST(Index, UnitDieLookup) {
   EXPECT_FALSE(binary->GetDieAtOffset(DwarfDieRef::Main(0)));
 }
 
-// Verifies that Index::CreateIndex evicts each compilation unit's decoded DIE array immediately
-// after indexing that unit rather than accumulating all units' DIE arrays in memory.
+// Verifies that Index::CreateIndex evicts each compilation unit's decoded DIE table immediately
+// after indexing that unit rather than accumulating all units' DIE tables in memory.
 TEST(Index, CreateIndexEvictsUnitCaches) {
   TestSymbolModule setup(TestSymbolModule::kCheckedIn);
   ASSERT_TRUE(setup.Init("", false).ok());
@@ -335,7 +335,7 @@ TEST(Index, CreateIndexEvictsUnitCaches) {
   Index index;
   index.CreateIndex(*binary, IndexNode::SymbolRef::kMainBinary);
 
-  // After CreateIndex completes (without an explicit ClearLLVMCache call), every unit's non-root
+  // After CreateIndex completes (without an explicit ClearDwarfCaches call), every unit's non-root
   // DIEs should have been evicted at the end of IndexCompileUnit.
   for (uint32_t i = 0; i < binary->GetNormalUnitCount(); ++i) {
     auto unit = binary->GetUnitAtIndex(UnitIndex(false, i));
@@ -348,10 +348,10 @@ TEST(Index, CreateIndexEvictsUnitCaches) {
   EXPECT_GT(unit0->GetLineTable().files().size(), 0u);
 }
 
-// Verifies that DwarfBinaryImpl::ClearLLVMCache drops cached DwarfUnit wrappers from unit_map_
+// Verifies that DwarfBinaryImpl::ClearDwarfCaches drops cached DwarfUnit wrappers from unit_map_
 // without re-populating them while iterating, and that subsequent unit queries lazily re-create
 // the unit wrapper and re-parse its line table on demand.
-TEST(Index, ClearLLVMCacheEvictsUnitsAndLineTables) {
+TEST(Index, ClearDwarfCachesEvictsUnitsAndLineTables) {
   TestSymbolModule setup(TestSymbolModule::kCheckedIn);
   ASSERT_TRUE(setup.Init("", false).ok());
 
@@ -363,7 +363,7 @@ TEST(Index, ClearLLVMCacheEvictsUnitsAndLineTables) {
   fxl::WeakPtr<DwarfUnit> weak_unit0 = binary->GetUnitAtIndex(UnitIndex(false, 0))->GetWeakPtr();
   EXPECT_TRUE(weak_unit0);
 
-  // Populate unit 1's DIE array and line table before clearing the cache, then release the local
+  // Populate unit 1's DIE table and line table before clearing the cache, then release the local
   // RefPtr so only unit_map_ holds the wrapper.
   fxl::WeakPtr<DwarfUnit> weak_unit1;
   size_t initial_file_count = 0;
@@ -388,7 +388,7 @@ TEST(Index, ClearLLVMCacheEvictsUnitsAndLineTables) {
     ASSERT_TRUE(unit);
     unit_refs.push_back(unit->GetDieRef());
   }
-  binary->ClearLLVMCache();
+  binary->ClearDwarfCaches();
 
   // Clearing the cache must evict unit_map_ entries and must not re-populate them while iterating.
   EXPECT_FALSE(weak_unit0);
@@ -400,7 +400,7 @@ TEST(Index, ClearLLVMCacheEvictsUnitsAndLineTables) {
   }
 
   // Re-querying unit 1 after cache eviction must allocate a fresh DwarfUnit wrapper and re-parse
-  // the underlying LLVM line table on demand.
+  // the underlying line table on demand.
   fxl::RefPtr<DwarfUnit> reloaded_unit1 = binary->GetUnitAtIndex(UnitIndex(false, 1));
   ASSERT_TRUE(reloaded_unit1);
   const LineTable& reloaded_line_table = reloaded_unit1->GetLineTable();

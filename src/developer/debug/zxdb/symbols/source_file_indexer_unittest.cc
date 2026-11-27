@@ -9,7 +9,7 @@
 #include <gtest/gtest.h>
 
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_die.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 #include "src/developer/debug/zxdb/symbols/line_program_test_util.h"
 
@@ -329,10 +329,10 @@ TEST_P(SourceFileIndexerStrxTest, ResolvesWithUnit) {
   sections.Finish(Endian::kLittle);
 
   std::vector<LineTableJob> jobs;
-  AddLineTableJob(sections.sections(), UnitIndex(false, 0),
-                  DwarfDie::FromUnitRoot(sections.unit(0)), 0x1000, &jobs, nullptr);
-  AddLineTableJob(sections.sections(), UnitIndex(false, 1),
-                  DwarfDie::FromUnitRoot(sections.unit(1)), 0x1000, &jobs, nullptr);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs,
+                  nullptr);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs,
+                  nullptr);
   ASSERT_EQ(2u, jobs.size());
   EXPECT_EQ(0x1000u, jobs[0].first_code_address);
 
@@ -343,12 +343,15 @@ TEST_P(SourceFileIndexerStrxTest, ResolvesWithUnit) {
 
   SourceFileIndexer indexer(std::move(jobs), {.thread_count = threads ? 2 : 0});
 
-  // Index::CreateIndex() extracts and frees each unit's DIEs while the workers run. Do the same,
-  // so FinishInto() must extract the unit DIE again for the string offsets table.
-  for (size_t i = 0; i < 2; i++) {
-    ASSERT_TRUE(DwarfDie::FromUnitRoot(sections.unit(i), DwarfDie::Load::kAllDies));
-    sections.unit(i)->clear();
+  // Jobs keep their section views while the main thread uses and evicts the DIE tables.
+  DwarfBinaryImpl binary(sections.TakeContext());
+  for (uint32_t i = 0; i < 2; i++) {
+    auto unit = binary.GetUnitAtIndex(UnitIndex(false, i));
+    ASSERT_TRUE(unit);
+    ASSERT_TRUE(unit->GetUnitDie());
+    unit->ClearDieCache();
   }
+  binary.ClearDwarfCaches();
 
   SourceFileIndexer::FileIndex files;
   indexer.FinishInto(&files);
@@ -402,11 +405,11 @@ TEST(SourceFileIndexer, UnitWithoutLineTable) {
   sections.Finish(Endian::kLittle);
 
   std::vector<LineTableJob> jobs;
-  AddLineTableJob(sections.sections(), UnitIndex(false, 0),
-                  DwarfDie::FromUnitRoot(sections.unit(0)), 0x1000, &jobs, nullptr);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 0), *sections.unit(0), 0x1000, &jobs,
+                  nullptr);
   EXPECT_TRUE(jobs.empty());
-  AddLineTableJob(sections.sections(), UnitIndex(false, 1),
-                  DwarfDie::FromUnitRoot(sections.unit(1)), 0x1000, &jobs, nullptr);
+  AddLineTableJob(sections.sections(), UnitIndex(false, 1), *sections.unit(1), 0x1000, &jobs,
+                  nullptr);
   ASSERT_EQ(1u, jobs.size());
 
   SourceFileIndexer indexer(std::move(jobs));

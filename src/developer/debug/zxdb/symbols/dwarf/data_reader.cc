@@ -23,9 +23,7 @@ void DataReader::Seek(uint64_t offset) {
   offset_ = offset;
 }
 
-uint64_t DataReader::Uleb() {
-  if (!Check(1))
-    return 0;
+uint64_t DataReader::UlebSlow() {
   const uint8_t* p = data_.data() + offset_;
   auto result = ReadUleb(p, data_.data() + limit_);
   if (!result) {

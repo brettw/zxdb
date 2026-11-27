@@ -13,6 +13,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -295,6 +296,60 @@ TEST(DwarfBinaryImpl, SplitTypeSignatureWithOverlappingOffsets) {
   EXPECT_STREQ("SplitType", decoder.GetCString(DwarfAttr::kName).value_or(nullptr));
 }
 
+TEST(DwarfBinaryImpl, RawPackageDieUsesAbbreviationContribution) {
+  constexpr uint64_t kDwoId = 1;
+  constexpr AbbrevTable::AttributeSpec kName[] = {
+      {static_cast<uint64_t>(DwarfAttr::kName), static_cast<uint64_t>(DwarfForm::kString)}};
+  std::vector<uint8_t> abbrev;
+  DwarfSectionBuilder abbrev_builder(abbrev, Endian::kLittle);
+  abbrev_builder.EndAbbrevTable();  // Empty table at offset 0.
+  const size_t abbrev_offset = abbrev.size();
+  abbrev_builder.AbbrevDeclaration(1, static_cast<uint64_t>(DwarfTag::kCompileUnit), false, kName);
+  abbrev_builder.EndAbbrevTable();
+
+  std::vector<uint8_t> info;
+  DwarfSectionBuilder info_builder(info, Endian::kLittle);
+  auto unit = info_builder.BeginUnit({.unit_type = kUnitTypeSplitCompile, .dwo_id = kDwoId});
+  const auto ref = DwarfDieRef::Main(info.size());
+  info_builder.Uleb(1);
+  info_builder.CString("package.cc");
+  info_builder.EndUnit(unit);
+
+  // DWARF 5 CU index with one unit, two hash slots, and info and abbreviation contributions.
+  std::vector<uint8_t> index;
+  DwarfSectionBuilder index_builder(index, Endian::kLittle);
+  for (uint32_t word : {5u, 2u, 1u, 2u})
+    index_builder.Fixed(word, 4);
+  index_builder.Fixed(0, 8);
+  index_builder.Fixed(kDwoId, 8);  // Hash slot 1 refers to row 1.
+  for (uint32_t word : {0u, 1u, 1u, 3u})
+    index_builder.Fixed(word, 4);  // Row indexes, then DW_SECT_INFO and DW_SECT_ABBREV.
+  index_builder.Fixed(0, 4);
+  index_builder.Fixed(abbrev_offset, 4);
+  index_builder.Fixed(info.size(), 4);
+  index_builder.Fixed(abbrev.size() - abbrev_offset, 4);
+
+  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
+  buffers["debug_info.dwo"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(info));
+  buffers["debug_abbrev.dwo"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(abbrev));
+  buffers["debug_cu_index"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(index));
+  DwarfBinaryImpl binary(llvm::DWARFContext::create(buffers, 8, true));
+
+  DwarfDie die;
+  std::jthread reader([&] { die = binary.GetDieAtOffset(ref, true); });
+  auto* llvm_unit = binary.GetLLVMUnit(UnitIndex(true, 0));
+  ASSERT_TRUE(llvm_unit);
+  auto context = binary.GetUnitContext(*llvm_unit);
+  ASSERT_TRUE(context) << context.err().msg();
+  reader.join();
+
+  ASSERT_TRUE(die);
+  EXPECT_EQ(DwarfTag::kCompileUnit, die.tag());
+  EXPECT_STREQ("package.cc", die.short_name());
+  binary.ClearDwarfCaches();
+  EXPECT_EQ(die, binary.GetDieAtOffset(ref, true));
+}
+
 TEST(DwarfBinaryImpl, Dwarf4TypeUnits) {
   std::string path = TestSymbolModule::GetTestDataDir() + "type_unit/gcc_dwarf4.so";
   if (!std::filesystem::exists(path))
@@ -482,7 +537,7 @@ TEST_F(UnitContextCacheTest, ReusesContextAcrossAttributesAndClears) {
   // The first CU starts at offset zero. Its first function uses addrx for its low PC.
   auto unit = binary.GetUnitAtIndex(UnitIndex(false, 0));
   ASSERT_TRUE(unit);
-  auto& llvm_unit = *unit->GetUnitDie(DwarfDie::Load::kRootOnly).llvm_unit();
+  auto& llvm_unit = *binary.GetLLVMUnit(UnitIndex(false, 0));
   EXPECT_EQ(0u, UnitEntries(binary, llvm_unit));
 
   constexpr DwarfAttr kAttrs[] = {DwarfAttr::kLowPc};
@@ -499,7 +554,7 @@ TEST_F(UnitContextCacheTest, ReusesContextAcrossAttributesAndClears) {
   ASSERT_TRUE(second);
   EXPECT_EQ(first.value(), second.value());
 
-  binary.ClearLLVMCache();
+  binary.ClearDwarfCaches();
   EXPECT_EQ(0u, UnitEntries(binary, llvm_unit));
   auto rebuilt = binary.GetUnitContext(llvm_unit);
   ASSERT_TRUE(rebuilt);
@@ -546,7 +601,7 @@ TEST_F(UnitContextCacheTest, LineTableCallersPopulateCache) {
   auto& binary = *setup.symbols()->binary();
   auto unit = binary.GetUnitAtIndex(UnitIndex(false, 0));
   ASSERT_TRUE(unit);
-  auto* llvm_unit = unit->GetUnitDie(DwarfDie::Load::kRootOnly).llvm_unit();
+  auto* llvm_unit = binary.GetLLVMUnit(UnitIndex(false, 0));
 
   EXPECT_EQ(0u, UnitEntries(binary, *llvm_unit));
   EXPECT_EQ(0u, AbbrevEntries(binary));
@@ -561,7 +616,7 @@ TEST_F(UnitContextCacheTest, LineTableCallersPopulateCache) {
   EXPECT_EQ(1u, AbbrevEntries(binary));
 
   // Start with empty caches so DecodeLineTable has to fetch the unit context itself.
-  binary.ClearLLVMCache();
+  binary.ClearDwarfCaches();
   EXPECT_EQ(0u, UnitEntries(binary, *llvm_unit));
   auto lines = binary.DecodeLineTable(llvm_unit);
   ASSERT_GT(lines.GetNumSequences(), 0u);
@@ -580,7 +635,7 @@ TEST_F(UnitContextCacheTest, RangedFunctionDecodePopulatesCache) {
   auto& binary = *setup.symbols()->binary();
   auto unit = binary.GetUnitAtIndex(UnitIndex(false, 0));
   ASSERT_TRUE(unit);
-  auto* llvm_unit = unit->GetUnitDie(DwarfDie::Load::kRootOnly).llvm_unit();
+  auto* llvm_unit = binary.GetLLVMUnit(UnitIndex(false, 0));
 
   // Find the inlined LineTableFixtureSum instance with a range list. The compiler can change its
   // DIE offset.
@@ -620,7 +675,7 @@ TEST_F(UnitContextCacheTest, LocationListVariableDecodePopulatesCache) {
   auto& binary = *setup.symbols()->binary();
   auto unit = binary.GetUnitAtIndex(UnitIndex(false, 2));
   ASSERT_TRUE(unit);
-  auto& llvm_unit = *unit->GetUnitDie(DwarfDie::Load::kRootOnly).llvm_unit();
+  auto& llvm_unit = *binary.GetLLVMUnit(UnitIndex(false, 2));
   ASSERT_EQ(0u, UnitEntries(binary, llvm_unit));
   ASSERT_EQ(0u, AbbrevEntries(binary));
 
@@ -653,7 +708,7 @@ TEST_F(UnitContextCacheTest, SplitFunctionDecodePopulatesSkeletonCache) {
   ASSERT_NE(indexed.dwo_info.end(), dwo);
   auto unit = binary.GetUnitAtIndex(UnitIndex(false, 1));
   ASSERT_TRUE(unit);
-  auto& skeleton = *unit->GetUnitDie(DwarfDie::Load::kRootOnly).llvm_unit();
+  auto& skeleton = *binary.GetLLVMUnit(UnitIndex(false, 1));
   ASSERT_EQ(0u, UnitEntries(binary, skeleton));
   ASSERT_EQ(0u, AbbrevEntries(binary));
 
@@ -677,14 +732,14 @@ TEST_F(UnitContextCacheTest, SplitUnitUsesSkeletonCache) {
   auto& main_binary = *setup.symbols()->binary();
   auto main_unit = main_binary.GetUnitAtIndex(UnitIndex(false, 1));
   ASSERT_TRUE(main_unit);
-  auto& skeleton = *main_unit->GetUnitDie(DwarfDie::Load::kRootOnly).llvm_unit();
+  auto& skeleton = *main_binary.GetLLVMUnit(UnitIndex(false, 1));
   EXPECT_EQ(0u, UnitEntries(main_binary, skeleton));
 
   DwarfBinaryImpl split_binary(dir + "main.dwo", "", "");
   ASSERT_TRUE(split_binary.Load({}, DwarfSymbolFactory::kDWO).ok());
   auto split_unit = split_binary.GetDwoUnit();
   ASSERT_TRUE(split_unit);
-  auto& split = *split_unit->GetUnitDie(DwarfDie::Load::kRootOnly).llvm_unit();
+  auto& split = *split_binary.GetLLVMUnit(UnitIndex(true, 0));
 
   auto unlinked = split_binary.GetUnitContext(split);
   ASSERT_TRUE(unlinked);
@@ -705,7 +760,7 @@ TEST_F(UnitContextCacheTest, SplitUnitUsesSkeletonCache) {
   ASSERT_TRUE(repeated);
   EXPECT_EQ(linked.value(), repeated.value());
 
-  split_binary.ClearLLVMCache();
+  split_binary.ClearDwarfCaches();
   auto rebuilt = split_binary.GetUnitContext(split, source);
   ASSERT_TRUE(rebuilt);
   EXPECT_NE(linked.value(), rebuilt.value());
@@ -749,7 +804,7 @@ TEST_F(UnitContextCacheTest, CachesMalformedUnitError) {
 
   auto next_unit = binary.GetUnitAtIndex(UnitIndex(false, 1));
   ASSERT_TRUE(next_unit);
-  auto next = binary.GetUnitContext(*next_unit->GetUnitDie(DwarfDie::Load::kRootOnly).llvm_unit());
+  auto next = binary.GetUnitContext(*binary.GetLLVMUnit(UnitIndex(false, 1)));
   ASSERT_TRUE(next);
   EXPECT_EQ(0xb4u, next.value()->stmt_list());
 }

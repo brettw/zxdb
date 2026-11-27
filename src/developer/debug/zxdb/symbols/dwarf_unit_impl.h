@@ -5,21 +5,16 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_UNIT_IMPL_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_UNIT_IMPL_H_
 
-#include <map>
+#include <optional>
 
-#include "src/developer/debug/zxdb/symbols/address_range_map.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/unit_header.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
+#include "src/developer/debug/zxdb/symbols/function_address_map.h"
 #include "src/developer/debug/zxdb/symbols/line_table.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
 
-namespace llvm {
-class DWARFUnit;
-}  // namespace llvm
-
 namespace zxdb {
 
-class AddressRangeMapBuilder;
 class DwarfBinaryImpl;
 
 class DwarfUnitImpl : public DwarfUnit {
@@ -30,6 +25,7 @@ class DwarfUnitImpl : public DwarfUnit {
   DwarfBinary* GetBinary() const override;
   int GetDwarfVersion() const override;
   DwarfDie GetUnitDie(DwarfDie::Load load = DwarfDie::Load::kAllDies) const override;
+  UnitIndex GetUnitIndex() const override { return index_; }
   uint64_t GetOffset() const override;
   LazySymbol FunctionForRelativeAddress(uint64_t relative_address) const override;
   std::string GetCompilationDir() const override;
@@ -38,41 +34,25 @@ class DwarfUnitImpl : public DwarfUnit {
   void ClearDieCache() const override;
   DwarfDie GetDieAtIndex(uint64_t index) const override;
   DwarfDie GetDieAtOffset(DwarfDieRef die_ref) const override;
-  std::optional<uint32_t> GetIndexForDie(DwarfDie die) const override;
+  std::optional<uint32_t> GetIndexForDie(const DwarfDie& die) const override;
   DwarfDieRef GetDieRef(uint64_t offset) const override;
 
  private:
   FRIEND_REF_COUNTED_THREAD_SAFE(DwarfUnitImpl);
   FRIEND_MAKE_REF_COUNTED(DwarfUnitImpl);
 
-  DwarfUnitImpl(DwarfBinaryImpl* binary, llvm::DWARFUnit* unit, const UnitHeader& header);
-
-  // Call every time before using func_addr_to_die_offset_ to make sure it's lazily populated.
-  void EnsureFuncAddrMap() const;
-
-  // Recursive helper for EnsureFuncAddrMap(). Takes a pre-decoded non-weak reference to the binary_
-  // weak member to avoid checking for weak pointers each time.
-  void AddDieToFuncAddr(const DwarfBinary& binary, DwarfDie die,
-                        AddressRangeMapBuilder& builder) const;
+  DwarfUnitImpl(DwarfBinaryImpl* binary, UnitIndex index, UnitSection section,
+                const UnitHeader& header);
 
   // The binary that owns us.
   fxl::WeakPtr<DwarfBinaryImpl> binary_;
 
-  // This pointer is owned by LLVM's DWARFContext object. Integrating LLVM's memory model with ours
-  // here is a bit messy. In practice this means that the DwarfBinary outlives all DwarfUnits, and
-  // users should check that the binary_ is still valid before dereferencing.
-  llvm::DWARFUnit* unit_;
+  const UnitIndex index_;
+  const UnitSection section_;
   const UnitHeader header_;
 
-  // Maps the begin address of each code range in this DIE (the key) to the DIE offset of the
-  // function covering that address (the value). Computed lazily by EnsureFuncAddrMap().
-  //
-  // This could be optimized for reading. During population we actually need to decode each symbol
-  // to get the address ranges, and then throw everything away except the DIE offset. We could store
-  // a LazySymbol here or actually the full symbol information. Currently, we assume that the
-  // debugger is more memory-limited than CPU limited and that decoding symbols is relatively
-  // inexpensive, so it's better to have the smaller data.
-  mutable AddressRangeMap func_addr_to_die_offset_;
+  // Built on the first address lookup. Entries store DIE offsets so the DIE table can be evicted.
+  mutable std::optional<FunctionAddressMap> function_address_map_;
 
   // The line table. Computed lazily.
   mutable std::optional<LineTable> line_table_;

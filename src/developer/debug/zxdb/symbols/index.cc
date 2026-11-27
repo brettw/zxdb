@@ -32,6 +32,12 @@ constexpr size_t kMaxParentPath = 16;
 // Stores a name with a SymbolRef for later indexing.
 class NamedSymbolRef : public IndexNode::SymbolRef {
  public:
+  struct Declaration {
+    UnitIndex unit;
+    uint32_t index = DieTable::kNoIndex;
+    explicit operator bool() const { return index != DieTable::kNoIndex; }
+  };
+
   NamedSymbolRef() = default;
 
   // Creates a SymbolRef we should index.
@@ -39,11 +45,12 @@ class NamedSymbolRef : public IndexNode::SymbolRef {
   // WARNING: name is a non-owning string_view. Its backing storage must remain alive and unchanged
   // for this object's lifetime and the lifetime of every copy that borrows the same name.
   NamedSymbolRef(SymbolRef::Kind kind, int32_t dwo_index, DwarfDieRef die_ref, IndexNode::Kind k,
-                 std::string_view name, uint64_t decl_offset, bool has_abstract_origin)
+                 std::string_view name, const DwarfDie& declaration, bool has_abstract_origin)
       : SymbolRef(kind, dwo_index, die_ref),
         kind_(k),
         name_(name),
-        decl_offset_(decl_offset),
+        declaration_(declaration ? Declaration{declaration.unit_index(), declaration.index()}
+                                 : Declaration()),
         has_abstract_origin_(has_abstract_origin) {}
 
   bool should_index() const { return kind_ != IndexNode::Kind::kNone; }
@@ -66,10 +73,8 @@ class NamedSymbolRef : public IndexNode::SymbolRef {
   // Borrows n with the same lifetime requirements as the constructor's name parameter.
   void set_name(const char* n) { name_ = std::string_view(n); }
 
-  // If this DIE has a declaration associated with it (a DW_AT_declaration tag), this indicates the
-  // absolute offset of the declaration DIE. Will be 0 if none. It may or may not be inside the
-  // current unit (it normally will be though).
-  uint64_t decl_offset() const { return decl_offset_; }
+  // A separate declaration supplies the name and lexical scope of a definition.
+  const Declaration& declaration() const { return declaration_; }
 
   // The indexing layer uses this to cache the node found for a given thing. This allows us to
   // bypass lookup for the common case of things that are all in the same scope.
@@ -121,32 +126,18 @@ class NamedSymbolRef : public IndexNode::SymbolRef {
   IndexNode::Kind kind_ = IndexNode::Kind::kNone;
   // DWARF strings outlive the unit's indexing pass. Only synthesized template names need storage.
   std::variant<std::string_view, std::string> name_ = std::string_view();
-  uint64_t decl_offset_ = 0;
+  Declaration declaration_;
   IndexNode* index_node_ = nullptr;
   bool has_abstract_origin_ = false;
   bool has_modified_template_name_ = false;
 };
 
-// A unit-level declaration can lack enclosing scopes. A linkage name can also be the only
-// name available. Both spellings must refer to the definition, even when a separate DIE names it.
-void IndexFunctionNames(FunctionNameIndex& names, const NamedSymbolRef& ref, DwarfDie definition,
-                        DwarfDie origin) {
-  auto declaration = origin ? origin : definition;
-  // The unit's root is the first entry in its DIE array.
-  if (declaration.parent_index() == 0) {
-    if (auto name = definition.short_name(); name && std::string_view(name).contains("::"))
-      names.AddQualifiedName(name, ref);
-  } else if (!ref.name().empty() || definition.short_name()) {
-    return;  // The enclosing declarations supply the scope.
-  }
-  if (auto linkage = definition.linkage_name())
-    names.AddLinkageName(linkage, ref, ref.name());
-}
-
-bool HasAnyAttribute(DwarfDie die, std::initializer_list<DwarfAttr> attrs) {
+bool HasAnyAttribute(const DwarfDie& die, std::initializer_list<DwarfAttr> attrs) {
   if (auto specs = die.attributes()) {
     for (const auto spec : *specs) {
-      if (std::ranges::find(attrs, static_cast<DwarfAttr>(spec.attribute)) != attrs.end())
+      if (std::ranges::find(attrs, spec.attribute, [](DwarfAttr attr) {
+            return static_cast<uint64_t>(attr);
+          }) != attrs.end())
         return true;
     }
   }
@@ -213,7 +204,12 @@ class UnitIndexer {
   //
   // The kVar case is also returned for collection members. These need to be treated as variables
   // when they have const data, but not otherwise, and this function does not decode the attributes.
-  IndexNode::Kind GetKindForDie(DwarfDie die) const;
+  IndexNode::Kind GetKindForDie(const DwarfDie& die) const;
+
+  // Looks for spellings that the enclosing scopes do not give us. Both names refer to the
+  // definition, even when a separate declaration or abstract origin gives the scope.
+  void IndexFunctionNames(FunctionNameIndex& names, const DwarfDie& die, const DwarfDie& scope,
+                          const DwarfDieDecoder& decoder, std::optional<const char*> name);
 
   // Computes in the name and type for a DIE entry that wasn't filled in in the first pass (see
   // class-level comment). Returns empty string if there is no name (this is important for the
@@ -262,15 +258,21 @@ class UnitIndexer {
 // The symbol storage will be filled with the indexable entries.
 void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
                        FunctionNameIndex* names) {
-  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kSpecification, DwarfAttr::kDeclaration,
-                                         DwarfAttr::kConstValue,    DwarfAttr::kMainSubprogram,
-                                         DwarfAttr::kName,          DwarfAttr::kAbstractOrigin};
-  DwarfDieDecoder decoder(*unit_.GetBinary(), kAttrs);
-  // See the constructor for why this doesn't follow specifications.
-  decoder.set_follow_specifications(false);
+  static constexpr DwarfAttr kCommonAttrs[] = {
+      DwarfAttr::kSpecification,  DwarfAttr::kDeclaration, DwarfAttr::kConstValue,
+      DwarfAttr::kMainSubprogram, DwarfAttr::kName,        DwarfAttr::kAbstractOrigin};
+  static constexpr DwarfAttr kFunctionAttrs[] = {
+      DwarfAttr::kSpecification,   DwarfAttr::kDeclaration, DwarfAttr::kConstValue,
+      DwarfAttr::kMainSubprogram,  DwarfAttr::kName,        DwarfAttr::kAbstractOrigin,
+      DwarfAttr::kMipsLinkageName, DwarfAttr::kLinkageName};
+  DwarfDieDecoder common_decoder(*unit_.GetBinary(), kCommonAttrs);
+  DwarfDieDecoder function_decoder(*unit_.GetBinary(), kFunctionAttrs);
+  // See the constructor for why these don't follow specifications.
+  common_decoder.set_follow_specifications(false);
+  function_decoder.set_follow_specifications(false);
 
   for (; !scanner_.done(); scanner_.Advance()) {
-    DwarfDie die = scanner_.Prepare();
+    const DwarfDie& die = scanner_.Prepare();
 
     // Check whether we should consider this before decoding since decoding is slow.
     IndexNode::Kind kind = GetKindForDie(die);
@@ -288,6 +290,7 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
     }
 
     // This DIE is of the type we want to index so decode.
+    auto& decoder = kind == IndexNode::Kind::kFunction ? function_decoder : common_decoder;
     if (!decoder.Decode(die))
       continue;
 
@@ -335,7 +338,6 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
     // Compute the offset of a separate declaration if this DIE has one. This can be unit-relative
     // or .debug_info-relative (global).
     DwarfDie decl = decoder.GetReference(DwarfAttr::kSpecification);
-    uint64_t decl_offset = decl ? decl.offset() : 0;
 
     FX_DCHECK(scanner_.die_index() < indexable_.size());
     std::optional<bool> is_declaration = decoder.GetBool(DwarfAttr::kDeclaration);
@@ -344,20 +346,55 @@ void UnitIndexer::Scan(std::vector<IndexNode::SymbolRef>* main_functions,
 
     std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
     indexable_[scanner_.die_index()] =
-        NamedSymbolRef(ref_kind, dwo_index_, unit_.GetDieRef(die.offset()), kind, name ? *name : "",
-                       decl_offset, decoder.Has(DwarfAttr::kAbstractOrigin));
+        NamedSymbolRef(ref_kind, dwo_index_, die.ref(), kind, name ? *name : "", decl,
+                       decoder.Has(DwarfAttr::kAbstractOrigin));
 
     if (kind == IndexNode::Kind::kFunction) {
-      IndexFunctionNames(*names, indexable_[scanner_.die_index()], die,
-                         decl ? decl : decoder.GetReference(DwarfAttr::kAbstractOrigin));
+      DwarfDie origin = decl ? DwarfDie() : decoder.GetReference(DwarfAttr::kAbstractOrigin);
+      IndexFunctionNames(*names, die, decl ? decl : origin, decoder, name);
     }
 
     // Check for "main" function annotation.
     std::optional<bool> is_main_subprogram = decoder.GetBool(DwarfAttr::kMainSubprogram);
     if (kind == IndexNode::Kind::kFunction && is_main_subprogram && *is_main_subprogram)
-      main_functions->emplace_back(IndexNode::SymbolRef::kDwarf, dwo_index_,
-                                   unit_.GetDieRef(die.offset()));
+      main_functions->emplace_back(IndexNode::SymbolRef::kDwarf, dwo_index_, die.ref());
   }
+}
+
+void UnitIndexer::IndexFunctionNames(FunctionNameIndex& names, const DwarfDie& die,
+                                     const DwarfDie& scope, const DwarfDieDecoder& decoder,
+                                     std::optional<const char*> name) {
+  const NamedSymbolRef& ref = indexable_[scanner_.die_index()];
+  auto is_direct = [&](DwarfAttr attr) {
+    const auto* value = decoder.GetValue(attr);
+    return value && value->die() == die;
+  };
+  auto short_name = [&]() -> const char* {
+    // A direct attribute wins in both the attribute decoder and the name lookup.
+    if (is_direct(DwarfAttr::kName))
+      return name.value_or(nullptr);
+    return scope ? die.short_name() : nullptr;
+  };
+
+  // The root is the first entry in the unit's DIE table. A declaration at this level may have
+  // the whole qualified name in DW_AT_name.
+  if ((scope ? scope : die).parent_index() == 0) {
+    if (const char* spelling = short_name(); spelling && std::string_view(spelling).contains("::"))
+      names.AddQualifiedName(spelling, ref);
+  } else if (!ref.name().empty() || short_name()) {
+    return;  // The enclosing declarations supply the scope.
+  }
+
+  // A linkage name can be the only name available.
+  const char* linkage = nullptr;
+  if (is_direct(DwarfAttr::kMipsLinkageName))
+    linkage = decoder.GetCString(DwarfAttr::kMipsLinkageName).value_or(nullptr);
+  else if (is_direct(DwarfAttr::kLinkageName))
+    linkage = decoder.GetCString(DwarfAttr::kLinkageName).value_or(nullptr);
+  else if (scope)
+    linkage = die.linkage_name();
+  if (linkage)
+    names.AddLinkageName(linkage, ref, ref.name());
 }
 
 void UnitIndexer::Index(IndexNode* root) {
@@ -376,7 +413,7 @@ void UnitIndexer::Index(IndexNode* root) {
   }
 }
 
-IndexNode::Kind UnitIndexer::GetKindForDie(DwarfDie die) const {
+IndexNode::Kind UnitIndexer::GetKindForDie(const DwarfDie& die) const {
   switch (die.tag()) {
     case DwarfTag::kSubprogram:
     case DwarfTag::kInlinedSubroutine:
@@ -424,7 +461,7 @@ IndexNode::Kind UnitIndexer::GetKindForDie(DwarfDie die) const {
 }
 
 const char* UnitIndexer::GetDieName(uint32_t index) {
-  if (name_decoder_.Decode(unit_.GetDieAtIndex(index))) {
+  if (name_decoder_.Decode(scanner_.GetDieAtIndex(index))) {
     if (std::optional<const char*> name = name_decoder_.GetCString(DwarfAttr::kName))
       return *name;
   }
@@ -438,21 +475,13 @@ void UnitIndexer::AddEntryToIndex(uint32_t index_me, IndexNode* root) {
   path_.push_back(&indexable_[index_me]);
 
   uint32_t cur = index_me;
-  if (indexable_[index_me].decl_offset()) {
-    // When the entry has a decl_offset, that means it's the implementation for e.g. a function.
-    // The actual name comes from the declaration so start from that index.
-    //
-    // 99% of all declarations are within the same unit so look up in the current unit first. If
-    // the current unit doesn't cover the offset, GetDieAtOffset returns an invalid handle.
-    auto decl_index = unit_.GetIndexForDie(
-        unit_.GetDieAtOffset(DwarfDieRef::Main(indexable_[index_me].decl_offset())));
-    if (!decl_index) {
-      // DIE not found in this unit, try adding it to the index using the slow path which allows
-      // cross-unit references.
+  if (const auto& declaration = indexable_[index_me].declaration()) {
+    // The declaration supplies the name. Most declarations belong to the current unit.
+    if (declaration.unit != unit_.GetUnitIndex()) {
       AddStandaloneEntryToIndex(index_me, root);
       return;
     }
-    cur = *decl_index;
+    cur = declaration.index;
 
     if (indexable_[index_me].name().empty()) {
       // When there's no name, take the name from the declaration.
@@ -478,7 +507,7 @@ void UnitIndexer::AddEntryToIndex(uint32_t index_me, IndexNode* root) {
   // Move to the abstract origin if present to start walking the scopes. The abstract origin (if
   // any) encodes the lexical scope (see has_abstract_origin() declaration above).
   if (indexable_[cur].has_abstract_origin()) {
-    DwarfDie origin = GetAbstractOrigin(unit_.GetDieAtIndex(cur), *unit_.GetBinary());
+    DwarfDie origin = scanner_.GetDieAtIndex(cur).abstract_origin();
     auto origin_index = unit_.GetIndexForDie(origin);
     if (!origin_index) {
       // The slow path handles an absent origin or an origin in another unit.
@@ -530,9 +559,7 @@ void UnitIndexer::AddEntryToIndex(uint32_t index_me, IndexNode* root) {
 
 // NOTE: Changes in this function may require updates in the fast path: AddEntryToIndex().
 void UnitIndexer::AddStandaloneEntryToIndex(uint32_t index_me, IndexNode* index_root) {
-  // This function can not use the unit_, scanner_, or name_decoder_ (and hence GetDieName())
-  // because those all reference the current compilation unit. This code path must be able to handle
-  // cross-unit references.
+  // The declaration and its parent DIEs can belong to another unit.
 
   // Thing to add to the index.
   NamedSymbolRef& named_ref = indexable_[index_me];
@@ -540,11 +567,15 @@ void UnitIndexer::AddStandaloneEntryToIndex(uint32_t index_me, IndexNode* index_
   // Compute the name (avoiding GetDieName()) and the DIE to start indexing from.
   std::string name(named_ref.name());
   DwarfDie die;
-  if (named_ref.decl_offset()) {
-    // When there's a separate declaration, its parent encodes the scope information.
-    die = unit_.GetBinary()->GetDieAtOffset(DwarfDieRef::Main(named_ref.decl_offset()));
+  if (const auto& declaration = named_ref.declaration()) {
+    // A separate declaration supplies the lexical scope.
+    if (declaration.unit == unit_.GetUnitIndex()) {
+      die = scanner_.GetDieAtIndex(declaration.index);
+    } else if (auto unit = unit_.GetBinary()->GetUnitAtIndex(declaration.unit)) {
+      die = unit->GetDieAtIndex(declaration.index);
+    }
     if (!die)
-      return;  // Invalid decl offset, skip indexing.
+      return;
     if (name.empty()) {
       // The declaration can fill in the name if the name is not present on the implementation
       // (normally it's not there).
@@ -554,7 +585,7 @@ void UnitIndexer::AddStandaloneEntryToIndex(uint32_t index_me, IndexNode* index_
   } else {
     // When there's no declaration, the name will already have been filled in (if present) to the
     // named_ref.
-    die = unit_.GetBinary()->GetDieAtOffset(named_ref.die_ref());
+    die = scanner_.GetDieAtIndex(index_me);
   }
 
   if (name.empty())
@@ -564,8 +595,8 @@ void UnitIndexer::AddStandaloneEntryToIndex(uint32_t index_me, IndexNode* index_
 
   // When walking the dependency path, the abstract origin (if any) encodes the lexical scope
   // (see has_abstract_origin() declaration above).
-  if (DwarfDie ao = GetAbstractOrigin(die, *unit_.GetBinary()))
-    die = ao;
+  if (DwarfDie origin = die.abstract_origin())
+    die = std::move(origin);
 
   // Stores the reverse path to the node we're inserting. This includes all scopes like namespaces
   // and classes in reverse order, but does not include the thing we're inserting itself.
@@ -625,9 +656,7 @@ void RecursiveFindExact(const IndexNode* node, const Identifier& input, size_t i
 
 void Index::CreateIndex(DwarfBinary& binary, int32_t dwo_index, bool force_slow_path) {
   // Start the source file work first so it runs on worker threads during DIE indexing.
-  std::optional<SourceFileIndexer> source_files;
-  if (binary.GetLLVMContext())
-    source_files.emplace(CollectLineTableJobs(binary));
+  SourceFileIndexer source_files(CollectLineTableJobs(binary));
 
   size_t unit_count = binary.GetNormalUnitCount();
   for (size_t i = 0; i < unit_count; i++) {
@@ -646,8 +675,7 @@ void Index::CreateIndex(DwarfBinary& binary, int32_t dwo_index, bool force_slow_
       IndexCompileUnit(*unit_ref_ptr, dwo_index, force_slow_path);
   }
 
-  if (source_files)
-    source_files->FinishInto(&files_);
+  source_files.FinishInto(&files_);
   IndexFileNames();
 }
 
@@ -702,7 +730,7 @@ const std::vector<UnitIndex>* Index::FindFileUnitIndices(const std::string& name
 size_t Index::CountSymbolsIndexed() const { return RecursiveCountDies(root_); }
 
 void Index::IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, bool force_slow_path) {
-  DwarfDie unit_die = unit.GetUnitDie();
+  DwarfDie unit_die = unit.GetUnitDie(DwarfDie::Load::kRootOnly);
   if (!unit_die.is_valid())
     return;
 
@@ -717,9 +745,8 @@ void Index::IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, bool forc
     indexer.Index(&root_);
   }
 
-  // Evict the unit's DIE array immediately after indexing so transient parse structures do not
+  // Evict the unit's DIE table immediately after indexing so transient parse structures do not
   // accumulate across all compilation units during indexing.
-  unit_die = DwarfDie();
   unit.ClearDieCache();
 }
 

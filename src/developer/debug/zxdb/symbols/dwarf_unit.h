@@ -48,9 +48,12 @@ class DwarfUnit : public fxl::RefCountedThreadSafe<DwarfUnit> {
   // By default, load the full tree so callers can walk the children of the root.
   virtual DwarfDie GetUnitDie(DwarfDie::Load load = DwarfDie::Load::kAllDies) const = 0;
 
-  // Returns function covering the given absolute/relative address. This will the most specific
-  // inlined subroutine if there are any. Returns an !is_valid() LazySymbol on failure.
+  // Returns the innermost function covering the given module-relative address, if any.
+  // Returns an invalid LazySymbol on failure.
   virtual LazySymbol FunctionForRelativeAddress(uint64_t relative_address) const = 0;
+
+  // Returns this unit's index within the normal or split unit list.
+  virtual UnitIndex GetUnitIndex() const = 0;
 
   // Returns the offset of the beginning of this unit within its DWARF section.
   virtual uint64_t GetOffset() const = 0;
@@ -67,20 +70,19 @@ class DwarfUnit : public fxl::RefCountedThreadSafe<DwarfUnit> {
   // Returns the number of DIEs in this unit.
   virtual uint64_t GetDieCount() const = 0;
 
-  // Releases the unit's cached DIEs and invalidates all handles into its DIE array.
+  // Releases the unit's cached DIE table. Existing handles keep their snapshot alive.
   virtual void ClearDieCache() const = 0;
 
   // Looks up a DIE in this unit by index or byte offset.
   //
   // The byte offset is the absolute offset within the entire binary, but it must be a member of
-  // this unit (LLVM does a binary search in the unit's DIE array for the DIE with the given
-  // offset). See DwarfBinary::GetDieAtOffset() to query across units.
+  // this unit. See DwarfBinary::GetDieAtOffset() to query across units.
   // For an indexed lookup, first call GetDieCount() and use an index below that count.
   virtual DwarfDie GetDieAtIndex(uint64_t index) const = 0;
   virtual DwarfDie GetDieAtOffset(DwarfDieRef die_ref) const = 0;
 
   // Returns the array index if the DIE belongs to this unit.
-  virtual std::optional<uint32_t> GetIndexForDie(DwarfDie die) const = 0;
+  virtual std::optional<uint32_t> GetIndexForDie(const DwarfDie& die) const = 0;
 
   // Returns a reference to the unit header or to an offset in the unit's section.
   DwarfDieRef GetDieRef() const { return GetDieRef(GetOffset()); }

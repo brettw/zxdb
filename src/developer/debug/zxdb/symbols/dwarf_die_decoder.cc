@@ -8,25 +8,18 @@
 
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 #include "src/developer/debug/zxdb/common/endian.h"
 #include "src/developer/debug/zxdb/symbols/const_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/range_list_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 
 namespace zxdb {
-
-namespace {
-
-// The maximum number of DIEs that one decode visits: the decoded DIE and up to 8 DIEs that it
-// references directly or indirectly. Valid symbols rarely need more than 3. The limit also bounds
-// the work for corrupt symbols.
-constexpr size_t kMaxDiesToVisit = 9;
-
-}  // namespace
 
 DwarfDieDecoder::DwarfDieDecoder(const DwarfBinary& binary, std::span<const DwarfAttr> attributes,
                                  UnitContextSource address_table)
@@ -36,49 +29,53 @@ DwarfDieDecoder::DwarfDieDecoder(const DwarfBinary& binary, std::span<const Dwar
 
 DwarfDieDecoder::~DwarfDieDecoder() = default;
 
-bool DwarfDieDecoder::Decode(DwarfDie die) {
+bool DwarfDieDecoder::Decode(const DwarfDie& die) {
+  // Keep the input alive before clearing the old sources: a caller can pass a previous value's
+  // source. Reuse the table reference when scanning multiple DIEs in the same table.
+  if (sources_[0].table_ == die.table_)
+    sources_[0].index_ = die.index_;
+  else
+    sources_[0] = die;
   for (size_t i = 0; i < attributes_.size(); i++)
-    values_[i] = AttributeValue();
+    values_[i].source_ = nullptr;
+  for (size_t i = 1; i < source_count_; i++)
+    sources_[i] = {};
+  source_count_ = 1;
 
   Links links;
-  if (!DecodeOneDie(die, true, &links))
+  if (!DecodeOneDie(sources_[0], true, &links))
     return false;
-  context_die_ = die;
 
   // Most DIEs reference no other DIE. They don't need the bookkeeping below.
   if (!links.abstract_origin.is_valid() && !links.specification.is_valid())
     return true;
-  return DecodeLinkedDies(die, links);
+  return DecodeLinkedDies(std::move(links));
 }
 
-bool DwarfDieDecoder::DecodeLinkedDies(DwarfDie first, const Links& first_links) {
+bool DwarfDieDecoder::DecodeLinkedDies(Links first_links) {
   // The DIEs to visit are a stack. Each DIE pushes its specification and then its abstract origin,
   // so the abstract origin and the DIEs it references come before the specification.
-  std::array<DwarfDie, kMaxDiesToVisit> visited;
-  size_t visited_count = 0;
-  visited[visited_count++] = first;
-
   std::array<DwarfDie, 2 * kMaxDiesToVisit> pending;
   size_t pending_count = 0;
-  auto push_links = [&pending, &pending_count](const Links& links) {
-    for (const DwarfDie& next : {links.specification, links.abstract_origin}) {
-      if (next.is_valid() && pending_count < pending.size())
-        pending[pending_count++] = next;
+  auto push_links = [&pending, &pending_count](Links& links) {
+    for (DwarfDie* next : {&links.specification, &links.abstract_origin}) {
+      if (*next && pending_count < pending.size())
+        pending[pending_count++] = std::move(*next);
     }
   };
   push_links(first_links);
 
-  while (pending_count > 0 && visited_count < kMaxDiesToVisit) {
-    DwarfDie cur = pending[--pending_count];
-    if (std::find(visited.begin(), visited.begin() + visited_count, cur) !=
-        visited.begin() + visited_count)
+  while (pending_count > 0 && source_count_ < sources_.size()) {
+    DwarfDie current = std::move(pending[--pending_count]);
+    auto sources_end = sources_.begin() + source_count_;
+    if (std::find(sources_.begin(), sources_end, current) != sources_end)
       continue;  // Already visited, the symbols have a cycle.
-    visited[visited_count++] = cur;
 
+    DwarfDie& source = sources_[source_count_++];
+    source = std::move(current);
     Links links;
-    if (!DecodeOneDie(cur, false, &links))
+    if (!DecodeOneDie(source, false, &links))
       return false;
-    context_die_ = cur;
     push_links(links);
   }
   return true;
@@ -90,7 +87,7 @@ const DwarfDieDecoder::AttributeValue* DwarfDieDecoder::GetValue(DwarfAttr attri
   size_t index = FindIndex(static_cast<uint64_t>(attribute));
   FX_DCHECK(index < attributes_.size())
       << DwarfAttrToString(attribute, true) << " is not in the decoder's table.";
-  if (index >= attributes_.size() || !values_[index].die)
+  if (index >= attributes_.size() || !values_[index].source_)
     return nullptr;
   return &values_[index];
 }
@@ -149,18 +146,25 @@ std::optional<uint64_t> DwarfDieDecoder::DecodeAddress(const AttributeValue& val
 }
 
 UnitContextResult DwarfDieDecoder::GetAttributeUnitContext(const AttributeValue& value) const {
-  return binary_.GetUnitContext(*value.die.llvm_unit(), address_table_);
+  return binary_.GetUnitContext(value.die(), address_table_);
 }
 
 std::optional<const char*> DwarfDieDecoder::GetCString(DwarfAttr attribute) const {
-  const AttributeValue* value = GetValue(attribute);
-  if (!value || value->form.form_class != FormValue::Class::kString)
-    return std::nullopt;
-  if (value->form.form == DwarfForm::kString)
-    return std::get<std::string_view>(value->form.value).data();
+  if (const AttributeValue* value = GetValue(attribute))
+    return DecodeString(binary_, value->die(), value->form, address_table_);
+  return std::nullopt;
+}
 
-  if (auto context = GetAttributeUnitContext(*value)) {
-    if (auto string = context.value()->ResolveString(value->form))
+std::optional<const char*> DwarfDieDecoder::DecodeString(const DwarfBinary& binary,
+                                                         const DwarfDie& die, const FormValue& form,
+                                                         UnitContextSource address_table) {
+  if (form.form_class != FormValue::Class::kString)
+    return std::nullopt;
+  if (form.form == DwarfForm::kString)
+    return std::get<std::string_view>(form.value).data();
+
+  if (auto context = binary.GetUnitContext(die, address_table)) {
+    if (auto string = context.value()->ResolveString(form))
       return string->data();
   }
   return std::nullopt;
@@ -242,9 +246,76 @@ std::optional<DwarfDieDecoder::HighPC> DwarfDieDecoder::GetHighPC() const {
   return std::nullopt;
 }
 
+AddressRanges DwarfDieDecoder::GetCodeRanges() const {
+  if (auto range = GetLowHighEncodedCodeRange())
+    return std::move(*range);
+
+  const auto* value = GetValue(DwarfAttr::kRanges);
+  if (!value)
+    return {};
+  auto form = value->form.form;
+  if (form != DwarfForm::kRnglistx && form != DwarfForm::kSecOffset && form != DwarfForm::kData4 &&
+      form != DwarfForm::kData8) {
+    return {};
+  }
+  auto offset = value->form.AsSectionOffset(value->params.version);
+  if (!offset)
+    return {};
+
+  auto context = GetAttributeUnitContext(*value);
+  if (context.has_error())
+    return {};
+
+  auto decoded = form == DwarfForm::kRnglistx
+                     ? RangeListReader::ReadFromIndex(*context.value(), *offset)
+                     : RangeListReader::ReadFromOffset(*context.value(), *offset);
+  if (decoded.has_error())
+    return {};
+
+  auto ranges = decoded.take_value();
+  // The linker can zero the start of a range for removed code.
+  std::erase_if(ranges, [](const AddressRange& range) { return range.begin() == 0; });
+  return AddressRanges(AddressRanges::kNonCanonical, std::move(ranges));
+}
+
+std::optional<AddressRanges> DwarfDieDecoder::GetLowHighEncodedCodeRange() const {
+  const DwarfDieDecoder::AttributeValue* low = GetValue(DwarfAttr::kLowPc);
+  const DwarfDieDecoder::AttributeValue* high = GetValue(DwarfAttr::kHighPc);
+  // Note that the "high pc" has an offset form so don't check that it has an FC_Address form yet.
+  if (!low || !high || !DwarfFormIsAddress(low->form.form)) {
+    return std::nullopt;
+  }
+
+  // The two attributes describe one range, so they must come from the same DIE. A DIE with only
+  // DW_AT_low_pc doesn't get DW_AT_high_pc from its abstract origin. LLDB has the same rule.
+  if (low->source_ != high->source_)
+    return std::nullopt;
+
+  // The low address must be a valid address. The decoder resolves address indices in the address
+  // table of the skeleton unit for .dwo files.
+  std::optional<uint64_t> low_addr = GetAddress(DwarfAttr::kLowPc);
+  if (!low_addr)
+    return std::nullopt;
+
+  // The high PC is an address, or an offset from the low address.
+  std::optional<DwarfDieDecoder::HighPC> high_pc = GetHighPC();
+  if (!high_pc)
+    return std::nullopt;
+  uint64_t max_address =
+      std::numeric_limits<uint64_t>::max() >> (64 - low->params.address_size * 8);
+  if (*low_addr == 0 || *low_addr > max_address)
+    return AddressRanges();
+  if (high_pc->is_constant && high_pc->value > max_address - *low_addr)
+    return AddressRanges();
+  uint64_t high_addr = high_pc->is_constant ? *low_addr + high_pc->value : high_pc->value;
+  if (high_addr <= *low_addr || high_addr > max_address)
+    return AddressRanges();
+  return AddressRanges(AddressRange(*low_addr, high_addr));
+}
+
 DwarfDie DwarfDieDecoder::GetReference(DwarfAttr attribute) const {
   if (const AttributeValue* value = GetValue(attribute))
-    return DecodeReference(value->die, value->form);
+    return DecodeReference(binary_, value->die(), value->form);
   return DwarfDie();
 }
 
@@ -256,7 +327,7 @@ std::optional<std::string> DwarfDieDecoder::GetFile(DwarfAttr attribute) const {
   if (!file_index)
     return std::nullopt;
 
-  auto files = binary_.GetLineFileTable(value->die.llvm_unit(), *file_index);
+  auto files = binary_.GetLineFileTable(value->die(), *file_index);
   if (!files)
     return std::nullopt;
 
@@ -266,9 +337,7 @@ std::optional<std::string> DwarfDieDecoder::GetFile(DwarfAttr attribute) const {
 }
 
 DwarfDie DwarfDieDecoder::GetContextParent() const {
-  if (!context_die_.is_valid())
-    return DwarfDie();
-  return context_die_.parent();
+  return source_count_ ? sources_[source_count_ - 1].parent() : DwarfDie();
 }
 
 size_t DwarfDieDecoder::FindIndex(uint64_t attribute) const {
@@ -280,32 +349,27 @@ size_t DwarfDieDecoder::FindIndex(uint64_t attribute) const {
   return attributes_.size();
 }
 
-bool DwarfDieDecoder::DecodeOneDie(DwarfDie die, bool is_first, Links* links) {
-  if (!die)
+bool DwarfDieDecoder::DecodeOneDie(const DwarfDie& die, bool is_first, Links* links) {
+  if (!die.belongs_to(binary_))
     return false;
 
-  const UnitAttributeData* data = binary_.GetUnitAttributeData(die);
-  if (!data || die.offset() < data->first_die_offset)
+  auto attributes = die.attributes();
+  if (!attributes)
     return false;
 
-  // The view stops at the unit end. The attributes follow the DIE's abbreviation code.
-  DataReader reader(data->info, data->endian);
-  reader.Seek(die.offset() - data->first_die_offset);
-  uint64_t code = reader.Uleb();
-  if (!reader.ok() || !code)
-    return false;
-  const auto* abbrev = data->abbrevs->Find(code);
-  if (!abbrev)
-    return false;
+  FormParams params = die.unit_header().form_params();
+  Endian endian = die.table_->endian;
+  DataReader reader(die.encoded_entry(), endian);
+  reader.Uleb();  // The attributes follow the already validated abbreviation code.
 
-  for (const auto& spec : abbrev->attributes) {
+  for (const auto& spec : *attributes) {
     // A value that is already filled came from a DIE that the decoder visited earlier, or from an
     // earlier duplicate of the attribute in this DIE. That value wins.
     uint64_t attr = spec.attribute;
     size_t index = FindIndex(attr);
     bool applies = is_first || (attr != static_cast<uint64_t>(DwarfAttr::kDeclaration) &&
                                 attr != static_cast<uint64_t>(DwarfAttr::kSibling));
-    bool wanted = applies && index < attributes_.size() && !values_[index].die;
+    bool wanted = applies && index < attributes_.size() && !values_[index].source_;
 
     // The links are decoded so Decode() can follow them. The first resolved link of each kind in
     // the DIE is used.
@@ -317,25 +381,31 @@ bool DwarfDieDecoder::DecodeOneDie(DwarfDie die, bool is_first, Links* links) {
                             !links->specification;
 
     if (!wanted && !is_abstract_origin && !is_specification) {
-      if (!SkipForm(spec.form, data->params, reader))
+      if (!SkipForm(spec.form, params, reader))
         return false;
       continue;
     }
 
-    auto form = ReadForm(spec, data->params, reader);
+    auto form = ReadForm(spec, params, reader);
     if (!form)
       return false;
     if (is_abstract_origin)
-      links->abstract_origin = DecodeReference(die, form.value());
+      links->abstract_origin = DecodeReference(binary_, die, form.value());
     if (is_specification)
-      links->specification = DecodeReference(die, form.value());
-    if (wanted)
-      values_[index] = {die, form.take_value(), data->params, data->endian};
+      links->specification = DecodeReference(binary_, die, form.value());
+    if (wanted) {
+      AttributeValue& value = values_[index];
+      value.form = form.take_value();
+      value.params = params;
+      value.endian = endian;
+      value.source_ = &die;
+    }
   }
   return true;
 }
 
-DwarfDie DwarfDieDecoder::DecodeReference(DwarfDie die, const FormValue& form) const {
+DwarfDie DwarfDieDecoder::DecodeReference(const DwarfBinary& binary, const DwarfDie& die,
+                                          const FormValue& form) {
   auto ref_value = form.AsReference();
   if (!ref_value)
     return {};
@@ -349,26 +419,40 @@ DwarfDie DwarfDieDecoder::DecodeReference(DwarfDie die, const FormValue& form) c
       return die.GetUnitRelativeDie(*ref_value);
     case DwarfForm::kRefAddr:
       // Section-relative references can cross units in the source file's info section.
-      return binary_.GetDieAtOffset(DwarfDieRef::Main(*ref_value), die.unit_is_dwo());
+      return binary.GetDieAtOffset(DwarfDieRef::Main(*ref_value), die.unit_is_dwo());
     case DwarfForm::kRefSig8:
-      return binary_.GetDieForSignature(*ref_value, die.unit_is_dwo());
+      return binary.GetDieForSignature(*ref_value, die.unit_is_dwo());
     default:
       // Supplementary references require a separate symbol file.
       return {};
   }
 }
 
-DwarfDie GetAbstractOrigin(DwarfDie die, const DwarfBinary& binary) {
-  if (!die)
-    return {};
+std::optional<FormValue> DwarfDieDecoder::ReadDirectAttribute(const DwarfDie& die,
+                                                              std::span<const DwarfAttr> attrs) {
+  const auto attributes = die.attributes();
+  if (!attributes)
+    return std::nullopt;
+  auto spec = attributes->end();
+  for (DwarfAttr attr : attrs) {
+    spec = std::ranges::find(*attributes, static_cast<uint64_t>(attr),
+                             &AbbrevTable::AttributeSpec::attribute);
+    if (spec != attributes->end())
+      break;
+  }
+  if (spec == attributes->end())
+    return std::nullopt;
 
-  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kAbstractOrigin};
-  DwarfDieDecoder decoder(binary, kAttrs);
-  decoder.set_follow_abstract_origins(false);
-  decoder.set_follow_specifications(false);
-  if (!decoder.Decode(die))
-    return {};
-  return decoder.GetReference(DwarfAttr::kAbstractOrigin);
+  // The DIE table has already checked the entire entry. Read only as far as this attribute.
+  const FormParams params = die.unit_header().form_params();
+  DataReader reader(die.encoded_entry(), die.table_->endian);
+  reader.Uleb();
+  for (auto prefix = attributes->begin(); prefix != spec; ++prefix) {
+    if (!SkipForm(prefix->form, params, reader))
+      return std::nullopt;
+  }
+  auto form = ReadForm(*spec, params, reader);
+  return form ? std::optional(form.take_value()) : std::nullopt;
 }
 
 }  // namespace zxdb

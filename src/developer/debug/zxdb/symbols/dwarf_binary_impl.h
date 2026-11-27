@@ -8,7 +8,9 @@
 #include <array>
 #include <atomic>
 #include <map>
+#include <mutex>
 #include <optional>
+#include <vector>
 
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/common/err.h"
@@ -45,7 +47,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
   // Callers must call Load() to complete initialization (which can fail).
   DwarfBinaryImpl(const std::string& name, const std::string& binary_name,
                   const std::string& build_id);
-  // For byte fixtures with an in-memory LLVM DIE tree. The fixture owns the section buffers.
+  // For byte fixtures with in-memory DWARF sections. The fixture owns the section buffers.
   explicit DwarfBinaryImpl(std::unique_ptr<llvm::DWARFContext> context);
   ~DwarfBinaryImpl();
 
@@ -65,7 +67,8 @@ class DwarfBinaryImpl final : public DwarfBinary {
   const DwarfSections& GetSections() const override;
   UnitContextResult GetUnitContext(llvm::DWARFUnit& unit,
                                    UnitContextSource skeleton = {}) const override;
-  const UnitAttributeData* GetUnitAttributeData(DwarfDie die) const override;
+  using DwarfBinary::GetUnitContext;
+  llvm::DWARFUnit* GetLLVMUnit(UnitIndex index) const override;
   uint64_t GetMappedLength() const override;
   const std::map<std::string, ElfTableSymbol>& GetELFSymbols() const override;
   const std::map<std::string, uint64_t> GetPLTSymbols() const override;
@@ -82,7 +85,8 @@ class DwarfBinaryImpl final : public DwarfBinary {
   std::shared_ptr<const LineFileTable> GetLineFileTable(llvm::DWARFUnit* unit,
                                                         uint64_t file_index) const override;
   uint64_t GetFirstCodeAddress() const override { return first_code_address_; }
-  void ClearLLVMCache() override;
+  using DwarfBinary::GetLineFileTable;
+  void ClearDwarfCaches() override;
 
   // Decodes the whole line table of the unit. The file table is shared with GetLineFileTable().
   LineTable DecodeLineTable(llvm::DWARFUnit* unit) const;
@@ -91,11 +95,12 @@ class DwarfBinaryImpl final : public DwarfBinary {
   DwarfDie GetUnitDieForRef(DwarfDieRef die_ref, bool is_dwo) const;
 
   // Returns a new DwarfUnit wrapper without adding it to the wrapper cache.
-  // Returns null if the LLVM unit is null, belongs to another binary, or has no matching header.
-  fxl::RefPtr<DwarfUnit> CreateUncachedUnit(DwarfDie die);
+  // Returns null if the DIE does not belong to this binary.
+  fxl::RefPtr<DwarfUnit> CreateUncachedUnit(const DwarfDie& die);
 
  private:
   friend class UnitContextCacheTest;
+  friend class DwarfUnitImpl;
 
   struct IndexedUnit {
     const UnitHeader& header;
@@ -107,9 +112,14 @@ class DwarfBinaryImpl final : public DwarfBinary {
   const UnitList& GetUnitList(bool is_dwo, UnitSection section) const;
   llvm::DWARFUnit* FindLLVMUnit(bool is_dwo, UnitSection section, uint64_t unit_offset) const;
 
-  llvm::DWARFUnit* FindLLVMUnitForRef(DwarfDieRef die_ref, bool is_dwo) const;
+  std::optional<UnitIndex> FindUnitForRef(DwarfDieRef die_ref, bool is_dwo) const;
+  std::shared_ptr<const DwarfDie::UnitTable> GetDieTable(UnitIndex index,
+                                                         DwarfDie::Load load) const;
+  DwarfDie GetDieAtIndex(UnitIndex index, uint64_t die_index, DwarfDie::Load load) const;
+  DwarfDie GetDieAtOffset(UnitIndex index, uint64_t die_offset) const;
+  void ClearDieCache(UnitIndex index) const;
 
-  // Call before using signature_to_die_ to make sure it's lazily populated.
+  // Lazily initializes the signature maps.
   void EnsureSignatureMap() const;
   DwarfDieRef FindSignature(uint64_t signature, bool is_dwo) const;
 
@@ -137,19 +147,27 @@ class DwarfBinaryImpl final : public DwarfBinary {
 
   fxl::RefPtr<DwarfSymbolFactory> symbol_factory_;
 
-  // Holds the mapping between LLVM units and our cached unit wrappers that reference them.
-  mutable std::map<const llvm::DWARFUnit*, fxl::RefPtr<DwarfUnit>> unit_map_;
+  // The binary's owner accesses the wrappers and LLVM context.
+  mutable std::map<UnitIndex, fxl::RefPtr<DwarfUnit>> unit_map_;
+  mutable std::array<std::optional<std::vector<llvm::DWARFUnit*>>, 2> llvm_units_;
 
-  // Like unit_map_, this is used on the LLVM context's owning thread. Source file workers
-  // use section views. Each DWO index worker owns its binary until it hands it to the module.
-  mutable UnitContextCache unit_contexts_;
-#ifndef NDEBUG
-  mutable std::atomic_flag unit_context_cache_active_;
-#endif
+  // Package abbreviation bounds come from LLVM at load time and stay immutable.
+  std::vector<std::optional<UnitContextCache::AbbrevSection>> package_abbrevs_;
+
+  // Serializes table builds and eviction across units, and protects the signature maps. A
+  // table build can take the abbreviation cache lock while holding this lock.
+  mutable std::mutex die_cache_mutex_;
+  mutable std::array<std::vector<std::shared_ptr<const DwarfDie::UnitTable>>, 2> die_tables_;
 
   // Separate maps for normal and DWO units preserve the section that owns the reference.
   using SignatureMap = std::map<uint64_t, DwarfDieRef>;
   mutable std::optional<std::array<SignatureMap, 2>> signature_to_die_;
+
+  // The abbreviation cache is shared with DIE table parsing.
+  mutable UnitContextCache unit_contexts_;
+#ifndef NDEBUG
+  mutable std::atomic_flag unit_context_cache_active_;
+#endif
 
   // File tables of the line tables, computed lazily.
   mutable LineTableCache line_tables_;

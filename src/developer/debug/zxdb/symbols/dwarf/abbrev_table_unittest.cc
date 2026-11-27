@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
 
 namespace zxdb {
@@ -114,6 +115,40 @@ TEST(AbbrevTable, FixedAttributeSize) {
   EXPECT_EQ(3u, table.value().Find(2)->FixedAttributeSize(dwarf64));
   ASSERT_NE(nullptr, table.value().Find(3));
   EXPECT_EQ(0u, table.value().Find(3)->FixedAttributeSize(dwarf64));
+}
+
+TEST(AbbrevTable, SkipMixedAttributes) {
+  constexpr size_t kArrays = 17;
+  constexpr size_t kFixedBytes = kArrays * 16;
+  std::vector<AbbrevTable::AttributeSpec> specs;
+  for (size_t i = 0; i < kArrays; ++i)
+    specs.push_back({0x2000 + i, 0x1e, {}});  // User attributes with DW_FORM_data16.
+  specs.push_back({kConstValue, kImplicitConst, 9});
+  specs.push_back({kName, 0x08, {}});  // DW_FORM_string.
+
+  std::vector<uint8_t> abbrev_bytes;
+  DwarfSectionBuilder abbrev(abbrev_bytes, Endian::kLittle);
+  abbrev.AbbrevDeclaration(1, kConstant, false, specs);
+  abbrev.EndAbbrevTable();
+  const auto table = AbbrevTable::Parse(abbrev_bytes, 0);
+  ASSERT_TRUE(table.ok()) << table.err_or_empty().msg();
+  const auto* decl = table.value().Find(1);
+  ASSERT_NE(nullptr, decl);
+
+  // DW_FORM_data16 consumes 16 bytes per attribute. The direct implicit constant
+  // occupies no bytes, and the string occupies two bytes including its terminator.
+  std::vector<uint8_t> bytes(kFixedBytes, 0);
+  AppendCString(bytes, "x");
+  const FormParams params{.version = 5, .offset_size = 4, .address_size = 8};
+  DataReader reader(bytes, Endian::kLittle);
+  ASSERT_TRUE(decl->SkipAttributes(params, reader));
+  EXPECT_EQ(kFixedBytes + 2, reader.offset());
+
+  for (size_t size : {kFixedBytes - 1, kFixedBytes + 1}) {
+    SCOPED_TRACE(size);
+    DataReader truncated(std::span(bytes).first(size), Endian::kLittle);
+    EXPECT_FALSE(decl->SkipAttributes(params, truncated));
+  }
 }
 
 TEST(AbbrevTable, ConsecutiveCodes) {

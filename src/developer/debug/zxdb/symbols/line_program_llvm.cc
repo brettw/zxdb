@@ -9,7 +9,6 @@
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "src/developer/debug/zxdb/common/checked_math.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 
 namespace zxdb {
@@ -33,18 +32,15 @@ LineStringSections GetLineStringSections(const DwarfSections& sections, llvm::DW
   return result;
 }
 
-std::optional<uint64_t> GetUnitLineTableOffset(DwarfDie unit_die, const DwarfBinary* binary) {
-  if (!unit_die)
-    return std::nullopt;
-  llvm::DWARFUnit* unit = unit_die.llvm_unit();
-  auto context = GetUnitContext(*unit, binary);
+std::optional<uint64_t> GetUnitLineTableOffset(llvm::DWARFUnit& unit, const DwarfBinary* binary) {
+  auto context = GetUnitContext(unit, binary);
   if (!context || !context.value()->stmt_list())
     return std::nullopt;
-  return CheckedAdd(*context.value()->stmt_list(), unit->getLineTableOffset());
+  return CheckedAdd(*context.value()->stmt_list(), unit.getLineTableOffset());
 }
 
 ErrOr<LineProgram> ParseLineProgramForUnit(const DwarfSections& sections, llvm::DWARFUnit& unit) {
-  std::optional<uint64_t> offset = GetUnitLineTableOffset(DwarfDie::FromUnitRoot(&unit));
+  std::optional<uint64_t> offset = GetUnitLineTableOffset(unit);
   if (!offset)
     return Err("The unit has no line table.");
   return ParseLineProgramForUnit(sections, unit, *offset, nullptr);

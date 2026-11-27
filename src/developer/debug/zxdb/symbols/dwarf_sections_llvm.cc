@@ -30,15 +30,13 @@ std::span<const uint8_t> GetSingleSection(const llvm::DWARFObject& object,
   return count == 1 ? result : std::span<const uint8_t>();
 }
 
-const llvm::DWARFUnitIndex::Entry* GetPackageEntry(llvm::DWARFUnit& unit,
-                                                   const UnitHeader& header) {
-  if (!unit.isDWOUnit())
+const llvm::DWARFUnitIndex::Entry* GetPackageEntry(llvm::DWARFContext* context,
+                                                   const UnitHeader& header, bool is_dwo) {
+  if (!context || !is_dwo)
     return nullptr;
 
-  // Match LLVM's split-unit lookup by signature, then by section offset.
-  const auto& index =
-      unit.isTypeUnit() ? unit.getContext().getTUIndex() : unit.getContext().getCUIndex();
-  auto signature = unit.isTypeUnit() ? header.type_signature : header.dwo_id;
+  const auto& index = header.is_type_unit() ? context->getTUIndex() : context->getCUIndex();
+  auto signature = header.is_type_unit() ? header.type_signature : header.dwo_id;
   if (signature && index) {
     if (auto* entry = index.getFromHash(*signature))
       return entry;
@@ -65,24 +63,16 @@ std::span<const uint8_t> GetInfoSection(const DwarfSections& sections, bool is_d
 
 struct UnitSections {
   UnitHeader header;
-  std::span<const uint8_t> info;
   std::span<const uint8_t> abbrev;
   std::optional<UnitContext::PackageContributions> package;
 };
 
-ErrOr<UnitSections> GetUnitSections(const DwarfSections& sections, llvm::DWARFUnit& unit,
-                                    UnitSection kind) {
-  bool is_dwo = unit.isDWOUnit();
-  auto info = GetInfoSection(sections, is_dwo, kind);
-  auto header = ReadUnitHeader(info, unit.getOffset(), sections.endian, kind);
-  if (!header)
-    return header.err();
-
-  UnitSections result{.header = header.value(),
-                      .info = info,
+ErrOr<UnitSections> GetUnitSections(const DwarfSections& sections, llvm::DWARFContext* context,
+                                    UnitHeader header, bool is_dwo) {
+  UnitSections result{.header = header,
                       .abbrev = is_dwo ? sections.abbrev_dwo : sections.abbrev,
                       .package = std::nullopt};
-  if (const auto* entry = GetPackageEntry(unit, result.header)) {
+  if (const auto* entry = GetPackageEntry(context, header, is_dwo)) {
     auto contribution =
         [entry](llvm::DWARFSectionKind section) -> std::optional<UnitContext::Contribution> {
       if (const auto* part = entry->getContribution(section))
@@ -195,52 +185,48 @@ UnitContextResult UnitContextCache::GetOrParse(const DwarfSections& sections, ll
 
 void UnitContextCache::Clear() {
   units_ = decltype(units_)();
-  attributes_ = decltype(attributes_)();
+  std::lock_guard lock(abbrev_mutex_);
   abbrevs_.clear();
 }
 
-const UnitAttributeData* UnitContextCache::GetAttributeData(const DwarfSections& sections,
-                                                            llvm::DWARFUnit& unit) {
-  auto found = attributes_.find(&unit);
-  if (found == attributes_.end())
-    found = attributes_.emplace(&unit, ParseAttributeData(sections, unit)).first;
-  return found->second ? &found->second.value() : nullptr;
-}
-
-ErrOr<UnitAttributeData> UnitContextCache::ParseAttributeData(const DwarfSections& sections,
-                                                              llvm::DWARFUnit& unit) {
-  auto data = GetUnitSections(sections, unit, GetUnitSection(unit));
+std::optional<UnitContextCache::AbbrevSection> UnitContextCache::GetPackageAbbrev(
+    const DwarfSections& sections, llvm::DWARFContext& context, const UnitHeader& header) {
+  auto data = GetUnitSections(sections, &context, header, true);
   if (!data)
-    return data.err();
-  const auto& header = data.value().header;
-  const auto& abbrevs = GetAbbrevs(unit.isDWOUnit(), data.value().abbrev, header.abbrev_offset);
-  if (!abbrevs)
-    return abbrevs.err();
-  return UnitAttributeData{
-      .info = data.value().info.subspan(header.die_offset(),
-                                        header.next_unit_offset() - header.die_offset()),
-      .first_die_offset = header.die_offset(),
-      .params = header.form_params(),
-      .endian = sections.endian,
-      .abbrevs = &abbrevs.value(),
-  };
+    return std::nullopt;
+  return AbbrevSection{data.value().abbrev, data.value().header.abbrev_offset};
 }
 
-const ErrOr<AbbrevTable>& UnitContextCache::GetAbbrevs(bool is_dwo,
-                                                       std::span<const uint8_t> section,
-                                                       uint64_t offset) {
+std::shared_ptr<const AbbrevTable> UnitContextCache::GetDieAbbrevs(bool is_dwo,
+                                                                   AbbrevSection section) {
+  auto abbrevs = GetAbbrevs(is_dwo, section.bytes, section.offset);
+  if (!*abbrevs)
+    return {};
+  const auto* table = &abbrevs->value();
+  return std::shared_ptr<const AbbrevTable>(std::move(abbrevs), table);
+}
+
+std::shared_ptr<const ErrOr<AbbrevTable>> UnitContextCache::GetAbbrevs(
+    bool is_dwo, std::span<const uint8_t> section, uint64_t offset) {
   AbbrevKey key(is_dwo, offset, section.size());
+  std::lock_guard lock(abbrev_mutex_);
   auto found = abbrevs_.find(key);
   if (found != abbrevs_.end())
     return found->second;
-  return abbrevs_.emplace(key, AbbrevTable::Parse(section, offset)).first->second;
+  return abbrevs_
+      .emplace(key, std::make_shared<const ErrOr<AbbrevTable>>(AbbrevTable::Parse(section, offset)))
+      .first->second;
 }
 
 UnitContextResult UnitContextCache::Parse(const DwarfSections& sections, llvm::DWARFUnit& unit,
                                           UnitContextSource skeleton, UnitContextCache* cache) {
   bool is_dwo = unit.isDWOUnit();
   UnitSection kind = GetUnitSection(unit);
-  auto data = GetUnitSections(sections, unit, kind);
+  auto header = ReadUnitHeader(GetInfoSection(sections, is_dwo, kind), unit.getOffset(),
+                               sections.endian, kind);
+  if (!header)
+    return header.err();
+  auto data = GetUnitSections(sections, &unit.getContext(), header.value(), is_dwo);
   if (!data)
     return data.err();
 
@@ -277,15 +263,11 @@ UnitContextResult UnitContextCache::Parse(const DwarfSections& sections, llvm::D
     }
   }
 
-  UnitContext::AbbrevLookup lookup_abbrevs;
-  if (cache) {
-    lookup_abbrevs = [cache, is_dwo](std::span<const uint8_t> section,
-                                     uint64_t offset) -> const ErrOr<AbbrevTable>& {
-      return cache->GetAbbrevs(is_dwo, section, offset);
-    };
-  }
+  auto abbrevs =
+      cache ? cache->GetAbbrevs(is_dwo, data.value().abbrev, data.value().header.abbrev_offset)
+            : nullptr;
   auto context =
-      UnitContext::Parse(unit_sections, data.value().header, kind, options, lookup_abbrevs);
+      UnitContext::Parse(unit_sections, data.value().header, kind, options, abbrevs.get());
   if (context.has_error())
     return context.err();
   return std::make_shared<const UnitContext>(context.take_value());

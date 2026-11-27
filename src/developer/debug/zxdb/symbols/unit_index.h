@@ -2,10 +2,12 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include <inttypes.h>
-
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_UNIT_INDEX_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_UNIT_INDEX_H_
+
+#include <inttypes.h>
+
+#include <compare>
 
 namespace zxdb {
 
@@ -16,6 +18,7 @@ struct UnitIndex {
   UnitIndex() = default;
   UnitIndex(bool d, uint32_t i) : is_dwo(d), index(i) {}
 
+  auto operator<=>(const UnitIndex& other) const = default;
   bool operator==(const UnitIndex& other) const = default;
 
   // When set, this means that the binary is a .dwo file and this index is into the ELF section for

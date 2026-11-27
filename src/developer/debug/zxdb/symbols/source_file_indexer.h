@@ -21,10 +21,13 @@
 #include "src/developer/debug/zxdb/symbols/line_program.h"
 #include "src/developer/debug/zxdb/symbols/unit_index.h"
 
+namespace llvm {
+class DWARFUnit;
+}
+
 namespace zxdb {
 
 class DwarfBinary;
-class DwarfDie;
 
 // Finds the source files that each unit of a binary has code for. The symbol index uses the result
 // to find the units for a file name.
@@ -55,7 +58,7 @@ struct LineTableJob {
 
 // Adds a job for the unit's line table, if it has one. Call it on the thread that owns the
 // context. first_code_address is DwarfBinary::GetFirstCodeAddress().
-void AddLineTableJob(const DwarfSections& sections, UnitIndex unit_index, DwarfDie unit_die,
+void AddLineTableJob(const DwarfSections& sections, UnitIndex unit_index, llvm::DWARFUnit& unit,
                      uint64_t first_code_address, std::vector<LineTableJob>* jobs,
                      const DwarfBinary* binary);
 

@@ -202,8 +202,6 @@ add_executable(zxdb_tests
   format/format_unittest.cc
   format/output_buffer_unittest.cc
   format/string_util_unittest.cc
-  symbols/address_range_map_builder_unittest.cc
-  symbols/address_range_map_unittest.cc
   symbols/build_id_index_unittest.cc
   symbols/code_block_unittest.cc
   symbols/collection_unittest.cc
@@ -212,6 +210,7 @@ add_executable(zxdb_tests
   symbols/dwarf/aranges_reader_unittest.cc
   symbols/dwarf/data_reader_unittest.cc
   symbols/dwarf/debug_names_reader_unittest.cc
+  symbols/dwarf/die_table_unittest.cc
   symbols/dwarf/dwarf_section_builder.cc
   symbols/dwarf/dwarf_section_builder_unittest.cc
   symbols/dwarf/form_value_unittest.cc
@@ -236,6 +235,7 @@ add_executable(zxdb_tests
   symbols/elf_symbol_record_unittest.cc
   symbols/elf_symbol_unittest.cc
   symbols/find_line_unittest.cc
+  symbols/function_address_map_unittest.cc
   symbols/function_type_unittest.cc
   symbols/identifier_unittest.cc
   symbols/index_node_unittest.cc
@@ -403,11 +403,12 @@ foreach(accelerator Disable Dwarf)
 endforeach()
 add_custom_target(zxdb_function_name_fixtures DEPENDS ${function_name_outputs})
 add_dependencies(zxdb_tests zxdb_function_name_fixtures)
-# Binaries from hand-written DWARF for dwarf_symbol_factory_unittest.cc:
+# Binaries from hand-written DWARF:
 #   - specification: DW_AT_specification chains and abstract origins in another unit.
 #   - data_forms: array bounds and constants in the DW_FORM_data<n> forms.
+#   - function_address: nested inline functions, discontiguous ranges, and crossing overlaps.
 set(assembly_fixture_outputs)
-foreach(name specification data_forms)
+foreach(name specification data_forms function_address)
   set(dir "${PROJECT_BINARY_DIR}/test_data/zxdb/${name}")
   set(source "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/${name}/${name}_fixture.s")
   set(output "${dir}/${name}.so")

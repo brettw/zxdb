@@ -30,25 +30,26 @@ class DwarfUnit;
 // time.
 //
 // The scan tracks which entries are inside a function. The second pass reads parent indices
-// directly from the unit's DIE array.
+// directly from the unit's DIE table.
 class DwarfDieScanner {
  public:
-  static constexpr uint32_t kNoParent = static_cast<uint32_t>(-1);
+  static constexpr uint32_t kNoParent = DieTable::kNoIndex;
 
-  // The unit must outlive this class.
+  // The binary must keep the unit's section data alive.
   explicit DwarfDieScanner(const DwarfUnit& unit);
 
   ~DwarfDieScanner();
 
-  // Call at the beginning of each iteration (when !done()) to get the current DIE. This is required
-  // to be called before Advance() as it sets some internal state.
-  DwarfDie Prepare();
+  // Requires !done(). Call before Advance() to update the current DIE and its scope. The reference
+  // is valid until the next call to Prepare() or until the scanner is destroyed.
+  const DwarfDie& Prepare();
 
   // Advances to the next DIE.
   void Advance();
 
   uint32_t die_index() const { return die_index_; }
   uint32_t die_count() const { return die_count_; }
+  DwarfDie GetDieAtIndex(uint64_t index) const { return current_die_.die_at_index(index); }
 
   bool done() const { return die_index_ == die_count_; }
 
@@ -76,7 +77,7 @@ class DwarfDieScanner {
     bool inside_function;
   };
 
-  const DwarfUnit& unit_;
+  DwarfDie current_die_;
 
   uint64_t die_count_ = 0;
   uint64_t die_index_ = 0;

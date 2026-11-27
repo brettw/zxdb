@@ -7,8 +7,6 @@
 
 #include <span>
 
-#include "src/developer/debug/zxdb/common/address_ranges.h"
-#include "src/developer/debug/zxdb/common/err_or.h"
 #include "src/developer/debug/zxdb/symbols/array_type.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_lang.h"
@@ -27,7 +25,6 @@ struct FormValue;
 class LazySymbol;
 class ModuleSymbols;
 class UncachedLazySymbol;
-class UnitContext;
 struct UnitContextSource;
 class VariableLocation;
 
@@ -61,6 +58,9 @@ class DwarfSymbolFactory : public SymbolFactory {
   using SymbolFactory::MakeLazy;
   using SymbolFactory::MakeUncachedLazy;
 
+  // The unit that supplies the address table for a separate DWO file, if any.
+  UnitContextSource GetSkeletonUnit() const;
+
  private:
   FRIEND_REF_COUNTED_THREAD_SAFE(DwarfSymbolFactory);
   FRIEND_MAKE_REF_COUNTED(DwarfSymbolFactory);
@@ -69,10 +69,10 @@ class DwarfSymbolFactory : public SymbolFactory {
                      FileType file_type);
   ~DwarfSymbolFactory() override;
 
-  LazySymbol MakeLazy(DwarfDie die) const;
-  UncachedLazySymbol MakeUncachedLazy(DwarfDie die) const;
+  LazySymbol MakeLazy(const DwarfDie& die) const;
+  UncachedLazySymbol MakeUncachedLazy(const DwarfDie& die) const;
 
-  VariableLocation DecodeLocation(DwarfDie die, const FormValue& form) const;
+  VariableLocation DecodeLocation(const DwarfDie& die, const FormValue& form) const;
 
   // The size of one array dimension. At most one is set. Neither is set when the size is unknown.
   struct ArraySubrange {
@@ -82,7 +82,7 @@ class DwarfSymbolFactory : public SymbolFactory {
 
   // Reads an array subrange. The decoder must use kArraySubrangeAttrs. The default lower bound
   // depends on the language of the unit.
-  ArraySubrange ReadArraySubrange(DwarfDieDecoder& range_decoder, DwarfDie subrange_die,
+  ArraySubrange ReadArraySubrange(DwarfDieDecoder& range_decoder, const DwarfDie& subrange_die,
                                   int64_t default_lower_bound) const;
 
   // Reads a bound that is a reference or an expression (DWARF 5 section 2.19). The decoder must
@@ -96,58 +96,43 @@ class DwarfSymbolFactory : public SymbolFactory {
 
   // Returns the byte size of the discriminant member of the variant part that contains the
   // variant, or nullopt if it's unknown.
-  std::optional<uint64_t> GetDiscriminantByteSize(DwarfDie variant) const;
+  std::optional<uint64_t> GetDiscriminantByteSize(const DwarfDie& variant) const;
 
   // Returns the language of the unit that contains the DIE.
-  DwarfLang GetLanguage(DwarfDie die) const;
-
-  UnitContextSource GetSkeletonUnit() const;
+  DwarfLang GetLanguage(const DwarfDie& die) const;
 
   // Makes a decoder for the given attribute table. The decoder uses the binary, so it finds type
   // unit signatures and file tables in the binary's caches.
   DwarfDieDecoder MakeDecoder(std::span<const DwarfAttr> attributes) const;
 
   // Internal version that creates a symbol from a Die.
-  fxl::RefPtr<Symbol> DecodeSymbol(DwarfDie die) const;
+  fxl::RefPtr<Symbol> DecodeSymbol(const DwarfDie& die) const;
 
   // As with SymbolFactory::CreateSymbol, these should never return null but rather an empty Symbol
   // implementation on error.
   //
   // The tag is DW_TAG_subprogram or DW_TAG_inlined_subroutine.
-  fxl::RefPtr<Symbol> DecodeFunction(DwarfDie die, DwarfTag tag) const;
-  fxl::RefPtr<Symbol> DecodeArrayType(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeBaseType(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeCallSite(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeCallSiteParameter(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeCollection(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeCompileUnit(DwarfDie die, DwarfTag tag) const;
-  fxl::RefPtr<Symbol> DecodeDataMember(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeEnum(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeFunctionType(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeImportedDeclaration(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeInheritedFrom(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeLexicalBlock(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeMemberPtr(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeModifiedType(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeNamespace(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeTemplateParameter(DwarfDie die, DwarfTag tag) const;
-  fxl::RefPtr<Symbol> DecodeUnspecifiedType(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeVariable(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeVariant(DwarfDie die) const;
-  fxl::RefPtr<Symbol> DecodeVariantPart(DwarfDie die) const;
-
-  // Generates ranges for a CodeBlock from a decoded DIE. The decoder must have DW_AT_low_pc,
-  // DW_AT_high_pc, and DW_AT_ranges in its attribute table. The attributes may be not present, this
-  // function will compute what it can given the information (which may be an empty vector).
-  AddressRanges GetCodeRanges(const DwarfDieDecoder& decoder) const;
-
-  // Returns the range from DW_AT_low_pc and DW_AT_high_pc. An empty set means that the
-  // pair describes no code. An empty optional means that there is no usable pair.
-  std::optional<AddressRanges> GetLowHighEncodedCodeRange(const DwarfDieDecoder& decoder) const;
-
-  // Uses the range list contribution and address table selected for the attribute's unit.
-  ErrOr<AddressRanges::RangeVector> GetCodeRangesFromRangelistXIndex(const UnitContext& unit,
-                                                                     uint64_t index) const;
+  fxl::RefPtr<Symbol> DecodeFunction(const DwarfDie& die, DwarfTag tag) const;
+  fxl::RefPtr<Symbol> DecodeArrayType(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeBaseType(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeCallSite(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeCallSiteParameter(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeCollection(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeCompileUnit(const DwarfDie& die, DwarfTag tag) const;
+  fxl::RefPtr<Symbol> DecodeDataMember(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeEnum(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeFunctionType(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeImportedDeclaration(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeInheritedFrom(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeLexicalBlock(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeMemberPtr(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeModifiedType(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeNamespace(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeTemplateParameter(const DwarfDie& die, DwarfTag tag) const;
+  fxl::RefPtr<Symbol> DecodeUnspecifiedType(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeVariable(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeVariant(const DwarfDie& die) const;
+  fxl::RefPtr<Symbol> DecodeVariantPart(const DwarfDie& die) const;
 
   // These can be null if the module is unloaded but there are still some dangling type references
   // to them.

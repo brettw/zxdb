@@ -4,7 +4,6 @@
 
 #include "src/developer/debug/zxdb/symbols/line_table_cache.h"
 
-#include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
 #include "src/developer/debug/zxdb/symbols/line_program_llvm.h"
@@ -15,7 +14,7 @@ std::shared_ptr<const LineFileTable> LineTableCache::GetFileTable(const DwarfSec
                                                                   llvm::DWARFUnit& unit,
                                                                   uint64_t file_index,
                                                                   const DwarfBinary* binary) {
-  std::optional<uint64_t> offset = GetUnitLineTableOffset(DwarfDie::FromUnitRoot(&unit), binary);
+  std::optional<uint64_t> offset = GetUnitLineTableOffset(unit, binary);
   if (!offset)
     return nullptr;
 
@@ -43,7 +42,7 @@ std::shared_ptr<const LineFileTable> LineTableCache::GetFileTable(const DwarfSec
 
 LineTable LineTableCache::DecodeLineTable(const DwarfSections& sections, llvm::DWARFUnit& unit,
                                           uint64_t first_code_address, const DwarfBinary* binary) {
-  std::optional<uint64_t> offset = GetUnitLineTableOffset(DwarfDie::FromUnitRoot(&unit), binary);
+  std::optional<uint64_t> offset = GetUnitLineTableOffset(unit, binary);
   if (!offset)
     return LineTable();
 

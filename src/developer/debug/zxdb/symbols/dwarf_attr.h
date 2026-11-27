@@ -261,6 +261,9 @@ enum class DwarfAttr : int {
   // User-defined range.
   kLoUser = 0x2000,
 
+  // Legacy vendor attribute for the mangled name.
+  kMipsLinkageName = 0x2007,
+
   // GNU extension for the name of the .dwo file of a split DWARF skeleton unit. Used before DWARF 5
   // added kDwoName.
   kGnuDwoName = 0x2130,

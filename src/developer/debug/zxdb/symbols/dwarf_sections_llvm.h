@@ -7,6 +7,7 @@
 
 #include <map>
 #include <memory>
+#include <mutex>
 #include <tuple>
 #include <unordered_map>
 
@@ -45,16 +46,6 @@ struct UnitContextSource {
 
 using UnitContextResult = ErrOr<std::shared_ptr<const UnitContext>>;
 
-// The bytes and abbreviation table used to read individual DIEs. The info view covers only
-// the DIE data of this unit.
-struct UnitAttributeData {
-  std::span<const uint8_t> info;
-  uint64_t first_die_offset;
-  FormParams params;
-  Endian endian;
-  const AbbrevTable* abbrevs;
-};
-
 // Parses the requested unit from these sections without caching it. Call on the LLVM context
 // thread and keep the section bytes alive while using the result.
 UnitContextResult ReadUnitContextUncached(const DwarfSections& sections, llvm::DWARFUnit& unit,
@@ -66,16 +57,13 @@ UnitContextResult GetUnitContext(llvm::DWARFUnit& unit, const DwarfBinary* binar
                                  UnitContextSource skeleton = {},
                                  const DwarfSections* fallback_sections = nullptr);
 
-// Caches results for one binary. Call on the thread that owns its LLVM context.
+// Caches results for one binary. Unit context access stays on the owner thread.
 class UnitContextCache {
  private:
   friend class DwarfBinaryImpl;
   friend class UnitContextCacheTest;
   friend UnitContextResult ReadUnitContextUncached(const DwarfSections&, llvm::DWARFUnit&,
                                                    UnitContextSource);
-
-  // The result borrows the section bytes and stays valid until Clear() or destruction.
-  const UnitAttributeData* GetAttributeData(const DwarfSections& sections, llvm::DWARFUnit& unit);
 
   UnitContextResult GetOrParse(const DwarfSections& sections, llvm::DWARFUnit& unit,
                                UnitContextSource skeleton);
@@ -86,19 +74,29 @@ class UnitContextCache {
     UnitContextResult result;
   };
 
+  struct AbbrevSection {
+    std::span<const uint8_t> bytes;
+    uint64_t offset;
+  };
+
+  static std::optional<AbbrevSection> GetPackageAbbrev(const DwarfSections& sections,
+                                                       llvm::DWARFContext& context,
+                                                       const UnitHeader& header);
   static UnitContextResult Parse(const DwarfSections& sections, llvm::DWARFUnit& unit,
                                  UnitContextSource skeleton, UnitContextCache* cache);
-  ErrOr<UnitAttributeData> ParseAttributeData(const DwarfSections& sections, llvm::DWARFUnit& unit);
-  const ErrOr<AbbrevTable>& GetAbbrevs(bool is_dwo, std::span<const uint8_t> section,
-                                       uint64_t offset);
+  std::shared_ptr<const AbbrevTable> GetDieAbbrevs(bool is_dwo, AbbrevSection section);
+  std::shared_ptr<const ErrOr<AbbrevTable>> GetAbbrevs(bool is_dwo,
+                                                       std::span<const uint8_t> section,
+                                                       uint64_t offset);
 
   // A split unit can be read with a skeleton or before its skeleton is known.
   std::unordered_multimap<const llvm::DWARFUnit*, Entry> units_;
-  std::unordered_map<const llvm::DWARFUnit*, ErrOr<UnitAttributeData>> attributes_;
 
-  // Section kind, table offset, and section or package contribution end.
+  // Section kind, table offset, and section or package contribution end. Raw DIE table builds
+  // share these abbreviations with the owner thread.
   using AbbrevKey = std::tuple<bool, uint64_t, size_t>;
-  std::map<AbbrevKey, ErrOr<AbbrevTable>> abbrevs_;
+  std::mutex abbrev_mutex_;
+  std::map<AbbrevKey, std::shared_ptr<const ErrOr<AbbrevTable>>> abbrevs_;
 };
 
 }  // namespace zxdb

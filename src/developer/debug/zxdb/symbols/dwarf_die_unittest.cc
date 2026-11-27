@@ -4,8 +4,9 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 
+#include <latch>
 #include <memory>
-#include <type_traits>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -16,18 +17,18 @@
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 
 namespace zxdb {
 namespace {
 
-static_assert(std::is_trivially_copyable_v<DwarfDie>);
-static_assert(sizeof(DwarfDie) <= 2 * sizeof(void*));
+static_assert(sizeof(DwarfDie) <= 3 * sizeof(void*));
 
 // The unit has a namespace with one variable, followed by a subprogram at unit scope.
 class DieTree {
  public:
-  DieTree() {
+  explicit DieTree(bool leading_unknown_tag = false) {
     constexpr Endian kEndian = Endian::kLittle;
     std::vector<uint8_t> abbrev;
     DwarfSectionBuilder table(abbrev, kEndian);
@@ -42,6 +43,8 @@ class DieTree {
          static_cast<uint64_t>(DwarfForm::kString),
          {}}};
     table.AbbrevDeclaration(4, static_cast<uint64_t>(DwarfTag::kSubprogram), false, specs);
+    if (leading_unknown_tag)
+      table.AbbrevDeclaration(5, uint64_t{1} << 32, false);
     table.EndAbbrevTable();
 
     std::vector<uint8_t> info;
@@ -49,6 +52,8 @@ class DieTree {
     auto unit = writer.BeginUnit({});
     root_offset = info.size();
     writer.Uleb(1);
+    if (leading_unknown_tag)
+      writer.Uleb(5);
     namespace_offset = info.size();
     writer.Uleb(2);
     variable_offset = info.size();
@@ -63,12 +68,13 @@ class DieTree {
 
     buffers_["debug_info"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(info));
     buffers_["debug_abbrev"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(abbrev));
-    context_ = llvm::DWARFContext::create(buffers_, 8, kEndian == Endian::kLittle);
+    binary_ = std::make_unique<DwarfBinaryImpl>(
+        llvm::DWARFContext::create(buffers_, 8, kEndian == Endian::kLittle));
   }
 
-  DwarfDie root() {
-    return DwarfDie::FromUnitRoot(context_->getUnitAtIndex(0), DwarfDie::Load::kAllDies);
-  }
+  DwarfBinaryImpl& binary() { return *binary_; }
+  fxl::RefPtr<DwarfUnit> unit() { return binary_->GetUnitAtIndex(UnitIndex(false, 0)); }
+  DwarfDie root(DwarfDie::Load load = DwarfDie::Load::kAllDies) { return unit()->GetUnitDie(load); }
 
   size_t root_offset;
   size_t namespace_offset;
@@ -77,7 +83,7 @@ class DieTree {
 
  private:
   llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers_;
-  std::unique_ptr<llvm::DWARFContext> context_;
+  std::unique_ptr<DwarfBinaryImpl> binary_;
 };
 
 TEST(DwarfDie, Navigation) {
@@ -122,6 +128,16 @@ TEST(DwarfDie, Navigation) {
   EXPECT_EQ((std::vector<uint64_t>{tree.variable_offset}), offsets);
 }
 
+TEST(DwarfDie, UnknownTagKeepsLaterChildren) {
+  DieTree tree(/*leading_unknown_tag=*/true);
+  const auto root = tree.root();
+  ASSERT_TRUE(root);
+  std::vector<DwarfTag> tags;
+  for (const DwarfDie& child : root.children())
+    tags.push_back(child.tag());
+  EXPECT_EQ((std::vector{DwarfTag::kNone, DwarfTag::kNamespace, DwarfTag::kSubprogram}), tags);
+}
+
 TEST(DwarfDie, Attributes) {
   DieTree tree;
   DwarfDie root = tree.root();
@@ -151,6 +167,222 @@ TEST(DwarfDie, Attributes) {
   ASSERT_TRUE(terminator);
   EXPECT_EQ(DwarfTag::kNone, terminator.tag());
   EXPECT_FALSE(terminator.attributes());
+}
+
+TEST(DwarfDie, NameLookupPrecedence) {
+  constexpr Endian kEndian = Endian::kLittle;
+  constexpr AbbrevTable::AttributeSpec kOriginAttrs[] = {
+      {static_cast<uint64_t>(DwarfAttr::kName), static_cast<uint64_t>(DwarfForm::kString)},
+      {static_cast<uint64_t>(DwarfAttr::kMipsLinkageName),
+       static_cast<uint64_t>(DwarfForm::kString)},
+  };
+  constexpr AbbrevTable::AttributeSpec kLinkedAttrs[] = {
+      {static_cast<uint64_t>(DwarfAttr::kSpecification), static_cast<uint64_t>(DwarfForm::kRef4)},
+      {static_cast<uint64_t>(DwarfAttr::kAbstractOrigin), static_cast<uint64_t>(DwarfForm::kRef4)},
+      {static_cast<uint64_t>(DwarfAttr::kLinkageName), static_cast<uint64_t>(DwarfForm::kString)},
+  };
+  std::vector<uint8_t> abbrev;
+  DwarfSectionBuilder table(abbrev, kEndian);
+  table.AbbrevDeclaration(1, static_cast<uint64_t>(DwarfTag::kCompileUnit), true);
+  table.AbbrevDeclaration(2, static_cast<uint64_t>(DwarfTag::kSubprogram), false, kOriginAttrs);
+  table.AbbrevDeclaration(3, static_cast<uint64_t>(DwarfTag::kSubprogram), false, kLinkedAttrs);
+  table.AbbrevDeclaration(4, static_cast<uint64_t>(DwarfTag::kSubprogram), false,
+                          std::span(kLinkedAttrs).first<1>());
+  table.AbbrevDeclaration(5, static_cast<uint64_t>(DwarfTag::kSubprogram), false,
+                          std::span(kLinkedAttrs).first<2>());
+  table.EndAbbrevTable();
+
+  std::vector<uint8_t> info;
+  DwarfSectionBuilder writer(info, kEndian);
+  auto unit = writer.BeginUnit({});
+  writer.Uleb(1);
+  uint64_t origin = info.size();
+  writer.Uleb(2);
+  writer.CString("origin");
+  writer.CString("legacy_origin");
+  uint64_t spec = info.size();
+  writer.Uleb(2);
+  writer.CString("spec");
+  writer.CString("legacy_spec");
+
+  // A reference chain can reach the declaration through several intermediate entries.
+  for (size_t i = 0; i < 40; ++i) {
+    uint64_t link = info.size();
+    writer.Uleb(4);
+    writer.Offset(spec, 4);
+    spec = link;
+  }
+
+  uint64_t target = info.size();
+  writer.Uleb(3);
+  writer.Offset(spec, 4);
+  writer.Offset(origin, 4);
+  writer.CString("concrete_linkage");
+
+  uint64_t no_direct_linkage = info.size();
+  writer.Uleb(5);
+  writer.Offset(spec, 4);
+  writer.Offset(origin, 4);
+
+  // Both paths to the origin exist. The path through the specification gives it priority over
+  // that entry's abstract origin.
+  uint64_t spec_path = info.size();
+  writer.Uleb(5);
+  writer.Offset(origin, 4);
+  writer.Offset(spec, 4);
+  uint64_t converging_paths = info.size();
+  writer.Uleb(5);
+  writer.Offset(spec_path, 4);
+  writer.Offset(origin, 4);
+  writer.Uleb(0);
+  writer.EndUnit(unit);
+
+  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
+  buffers["debug_info"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(info));
+  buffers["debug_abbrev"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(abbrev));
+  DwarfBinaryImpl binary(llvm::DWARFContext::create(buffers, 8, true));
+  auto die = binary.GetDieAtOffset(DwarfDieRef::Main(target));
+  ASSERT_TRUE(die);
+  EXPECT_STREQ("spec", die.short_name());
+  EXPECT_STREQ("concrete_linkage", die.linkage_name());
+
+  auto inherited = binary.GetDieAtOffset(DwarfDieRef::Main(no_direct_linkage));
+  ASSERT_TRUE(inherited);
+  EXPECT_STREQ("legacy_spec", inherited.linkage_name());
+
+  auto converging = binary.GetDieAtOffset(DwarfDieRef::Main(converging_paths));
+  ASSERT_TRUE(converging);
+  EXPECT_STREQ("origin", converging.short_name());
+  EXPECT_STREQ("legacy_origin", converging.linkage_name());
+}
+
+TEST(DwarfDie, NameFromTypeSignature) {
+  constexpr Endian kEndian = Endian::kLittle;
+  constexpr uint64_t kSignature = 0;
+  constexpr uint64_t kTypeOffset = 25;  // Type unit header plus the root's abbreviation code.
+  constexpr uint64_t kStructureTag = static_cast<uint64_t>(DwarfTag::kStructureType);
+  constexpr AbbrevTable::AttributeSpec kLinks[] = {
+      {static_cast<uint64_t>(DwarfAttr::kSignature), static_cast<uint64_t>(DwarfForm::kRefSig8)},
+      {static_cast<uint64_t>(DwarfAttr::kAbstractOrigin), static_cast<uint64_t>(DwarfForm::kRef4)},
+      {static_cast<uint64_t>(DwarfAttr::kSpecification), static_cast<uint64_t>(DwarfForm::kRef4)},
+  };
+  constexpr AbbrevTable::AttributeSpec kNames[] = {
+      {static_cast<uint64_t>(DwarfAttr::kName), static_cast<uint64_t>(DwarfForm::kString)},
+      {static_cast<uint64_t>(DwarfAttr::kLinkageName), static_cast<uint64_t>(DwarfForm::kString)},
+  };
+  std::vector<uint8_t> abbrev;
+  DwarfSectionBuilder table(abbrev, kEndian);
+  table.AbbrevDeclaration(1, static_cast<uint64_t>(DwarfTag::kCompileUnit), true);
+  table.AbbrevDeclaration(2, kStructureTag, false, std::span(kLinks).first<1>());
+  table.AbbrevDeclaration(3, static_cast<uint64_t>(DwarfTag::kTypeUnit), true);
+  table.AbbrevDeclaration(4, kStructureTag, false, kNames);
+  table.AbbrevDeclaration(5, kStructureTag, false, std::span(kLinks).first<2>());
+  table.AbbrevDeclaration(6, kStructureTag, false, kLinks);
+  table.EndAbbrevTable();
+
+  std::vector<uint8_t> info;
+  DwarfSectionBuilder writer(info, kEndian);
+  auto compile_unit = writer.BeginUnit({});
+  writer.Uleb(1);
+  uint64_t declaration_offset = info.size();
+  writer.Uleb(2);
+  writer.Fixed(kSignature, 8);
+
+  uint64_t origin_offset = info.size();
+  writer.Uleb(4);
+  writer.CString("OriginType");
+  writer.CString("origin_linkage");
+  uint64_t specification_offset = info.size();
+  writer.Uleb(4);
+  writer.CString("SpecificationType");
+  writer.CString("specification_linkage");
+
+  uint64_t origin_and_signature_offset = info.size();
+  writer.Uleb(5);
+  writer.Fixed(kSignature, 8);
+  writer.Offset(origin_offset, 4);
+  uint64_t all_links_offset = info.size();
+  writer.Uleb(6);
+  writer.Fixed(kSignature, 8);
+  writer.Offset(origin_offset, 4);
+  writer.Offset(specification_offset, 4);
+  writer.Uleb(0);
+  writer.EndUnit(compile_unit);
+  auto type_unit = writer.BeginUnit(
+      {.unit_type = kUnitTypeType, .type_signature = kSignature, .type_offset = kTypeOffset});
+  writer.Uleb(3);
+  writer.Uleb(4);
+  writer.CString("SignatureType");
+  writer.CString("signature_linkage");
+  writer.Uleb(0);
+  writer.EndUnit(type_unit);
+
+  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
+  buffers["debug_info"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(info));
+  buffers["debug_abbrev"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(abbrev));
+  DwarfBinaryImpl binary(llvm::DWARFContext::create(buffers, 8, true));
+  auto declaration = binary.GetDieAtOffset(DwarfDieRef::Main(declaration_offset));
+  ASSERT_TRUE(declaration);
+  EXPECT_STREQ("SignatureType", declaration.short_name());
+  EXPECT_STREQ("signature_linkage", declaration.linkage_name());
+
+  auto origin_and_signature = binary.GetDieAtOffset(DwarfDieRef::Main(origin_and_signature_offset));
+  ASSERT_TRUE(origin_and_signature);
+  EXPECT_STREQ("OriginType", origin_and_signature.short_name());
+  EXPECT_STREQ("origin_linkage", origin_and_signature.linkage_name());
+
+  auto all_links = binary.GetDieAtOffset(DwarfDieRef::Main(all_links_offset));
+  ASSERT_TRUE(all_links);
+  EXPECT_STREQ("SpecificationType", all_links.short_name());
+  EXPECT_STREQ("specification_linkage", all_links.linkage_name());
+}
+
+TEST(DwarfDie, CacheEvictionPreservesSnapshots) {
+  DieTree tree;
+  const auto unit = tree.unit();
+  auto root_only = tree.root(DwarfDie::Load::kRootOnly);
+  ASSERT_TRUE(root_only);
+  EXPECT_EQ(1u, root_only.unit_die_count());
+  EXPECT_FALSE(root_only.first_child());
+  EXPECT_FALSE(root_only.GetUnitRelativeDie(0));
+  EXPECT_FALSE(root_only.GetUnitRelativeDie(UINT64_MAX));
+  EXPECT_EQ(DwarfDieRef::Main(tree.function_offset),
+            root_only.GetUnitRelativeDie(tree.function_offset).ref());
+
+  auto full = tree.root();
+  ASSERT_TRUE(full.first_child());
+  EXPECT_EQ(root_only, full);
+  EXPECT_FALSE(root_only.first_child());
+  EXPECT_EQ(full, tree.root(DwarfDie::Load::kRootOnly));
+  EXPECT_EQ(full.unit_die_count(), tree.root(DwarfDie::Load::kRootOnly).unit_die_count());
+  EXPECT_FALSE(unit->GetDieAtIndex(full.unit_die_count()));
+  EXPECT_FALSE(unit->GetDieAtIndex(uint64_t{1} << 32));
+  EXPECT_FALSE(unit->GetDieAtOffset(DwarfDieRef::Type(tree.function_offset)));
+  EXPECT_FALSE(unit->GetDieAtOffset(DwarfDieRef::Main(tree.function_offset + 1)));
+
+  DwarfDieRef root_ref = full.ref();
+  std::latch holding_table(1);
+  std::latch evicted(1);
+  std::thread reader([&] {
+    DwarfDie die = tree.binary().GetDieAtOffset(DwarfDieRef::Main(tree.function_offset));
+    holding_table.count_down();
+    evicted.wait();
+    ASSERT_TRUE(die);
+    EXPECT_EQ(DwarfTag::kSubprogram, die.tag());
+    EXPECT_EQ(root_ref, die.parent().ref());
+    EXPECT_EQ(die, tree.binary().GetDieAtOffset(die.ref()));
+  });
+  holding_table.wait();
+
+  root_only = {};
+  full = {};
+  unit->ClearDieCache();
+  EXPECT_FALSE(tree.root(DwarfDie::Load::kRootOnly).first_child());
+  tree.binary().ClearDwarfCaches();
+  EXPECT_FALSE(tree.root(DwarfDie::Load::kRootOnly).first_child());
+
+  evicted.count_down();
+  reader.join();
 }
 
 TEST(DwarfDie, Identity) {

@@ -23,3 +23,20 @@ struct InlineParamsClass {
 };
 
 int InlineParamsMethodCaller(InlineParamsClass* object, int x) { return object->Method(x, x); }
+
+// ELF labels identify instructions in each function regardless of where the compiler and linker
+// place them. Clang generates all DWARF for the calls and inline scopes.
+static inline __attribute__((always_inline)) int NestedInlineInner(int x) {
+  asm volatile(".globl NestedInlineInnerMarker\nNestedInlineInnerMarker:\n nop" : "+r"(x));
+  return InlineParamsSink(x);
+}
+
+static inline __attribute__((always_inline)) int NestedInlineMiddle(int x) {
+  asm volatile(".globl NestedInlineMiddleMarker\nNestedInlineMiddleMarker:\n nop" : "+r"(x));
+  return NestedInlineInner(x + 1) + x;
+}
+
+int NestedInlineCaller(int x) {
+  asm volatile(".globl NestedInlineCallerMarker\nNestedInlineCallerMarker:\n nop" : "+r"(x));
+  return NestedInlineMiddle(x + 2) + x;
+}

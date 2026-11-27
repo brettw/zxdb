@@ -142,6 +142,8 @@ VariableLocation DecodeVariableLocation(const DwarfSections& sections, llvm::DWA
     return VariableLocation(DwarfExpr(std::vector<uint8_t>(block.begin(), block.end()), source));
   }
 
+  if (!unit)
+    return {};
   auto context = GetUnitContext(*unit, binary, skeleton, &sections);
   if (!context)
     return VariableLocation();

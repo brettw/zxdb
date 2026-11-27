@@ -5,7 +5,6 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_UNIT_CONTEXT_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_UNIT_CONTEXT_H_
 
-#include <lib/fit/function.h>
 #include <stdint.h>
 
 #include <optional>
@@ -52,16 +51,15 @@ class UnitContext {
     uint8_t entry_size;
   };
 
-  // Supplies a table from an optional caller-owned cache.
-  using AbbrevLookup =
-      fit::inline_function<const ErrOr<AbbrevTable>&(std::span<const uint8_t>, uint64_t)>;
-
   // Reads the unit DIE within the bounds of the supplied header. An invalid abbreviation or
   // attribute encoding returns an error. A missing attribute or a failed section lookup gives
   // an empty optional for the affected value.
+  //
+  // If supplied, abbrevs must describe this unit's abbreviation table and remain alive for
+  // the call. The returned context only borrows the section bytes.
   static ErrOr<UnitContext> Parse(const DwarfSections& sections, const UnitHeader& header,
                                   UnitSection section, const Options& options,
-                                  const AbbrevLookup& lookup_abbrevs = {});
+                                  const ErrOr<AbbrevTable>* abbrevs = nullptr);
   static ErrOr<UnitContext> Parse(const DwarfSections& sections, const UnitHeader& header,
                                   UnitSection section = UnitSection::kInfo) {
     return Parse(sections, header, section, Options{});

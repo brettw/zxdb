@@ -5,102 +5,157 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_DIE_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_DIE_H_
 
+#include <lib/syslog/cpp/macros.h>
 #include <stdint.h>
 
+#include <iterator>
+#include <memory>
 #include <optional>
+#include <ranges>
+#include <span>
 
-#include "llvm/ADT/STLExtras.h"
-#include "llvm/DebugInfo/DWARF/DWARFAbbreviationDeclaration.h"
-#include "llvm/DebugInfo/DWARF/DWARFDie.h"
-#include "llvm/DebugInfo/DWARF/DWARFUnit.h"
-#include "src/developer/debug/zxdb/symbols/dwarf/abbrev_table.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/die_table.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
+#include "src/developer/debug/zxdb/symbols/unit_index.h"
 
 namespace zxdb {
 
-// Borrows an entry in a unit's DIE array. Check is_valid() before reading the entry.
-// Clearing the array or expanding a root-only array invalidates its handles.
+class DwarfBinary;
+class DwarfBinaryImpl;
+enum class DwarfAttr : int;
+
+// Keeps an immutable DIE table alive through cache eviction. The owning binary must stay alive
+// while reading the encoded attributes. A root-only handle keeps its original view of the tree
+// even after the binary loads all entries.
 class DwarfDie {
- private:
-  using LLVMSpec = llvm::DWARFAbbreviationDeclaration::AttributeSpec;
-  struct ReadSpec {
-    AbbrevTable::AttributeSpec operator()(const LLVMSpec& spec) const {
-      return {spec.Attr, spec.Form,
-              spec.isImplicitConst() ? std::optional(spec.getImplicitConstValue()) : std::nullopt};
-    }
-  };
-  using Attributes = llvm::iterator_range<llvm::mapped_iterator<const LLVMSpec*, ReadSpec>>;
-
  public:
+  using Load = DieTable::Load;
+
+  class ChildIterator;
+
   DwarfDie() = default;
-  enum class Load { kRootOnly, kAllDies };
 
-  // Entry points for LLVM-backed readers. A root-only lookup keeps any existing children.
-  static DwarfDie FromUnitRoot(llvm::DWARFUnit* unit, Load load = Load::kRootOnly);
-  // For an index in an already loaded DIE array.
-  static DwarfDie FromIndex(llvm::DWARFUnit& unit, uint32_t index) {
-    return DwarfDie(unit.getDIEAtIndex(index));
+  bool is_valid() const { return table_ != nullptr; }
+  explicit operator bool() const { return is_valid(); }
+  bool operator==(const DwarfDie& other) const;
+
+  bool belongs_to(const DwarfBinary& binary) const { return table_ && table_->binary == &binary; }
+  UnitIndex unit_index() const {
+    FX_DCHECK(is_valid());
+    return table_->unit;
   }
-  static DwarfDie FromSubroutineAddress(llvm::DWARFUnit& unit, uint64_t relative_address);
-  static DwarfDie FromOffset(llvm::DWARFUnit* unit, uint64_t offset) {
-    return unit ? DwarfDie(unit->getDIEForOffset(offset)) : DwarfDie();
+  bool unit_is_dwo() const { return unit_index().is_dwo; }
+  const UnitHeader& unit_header() const {
+    FX_DCHECK(is_valid());
+    return table_->header();
+  }
+  DwarfDie unit_root() const { return die_at_index(0); }
+  DwarfDie die_at_index(uint64_t index) const;
+  DwarfDie die_at_offset(uint64_t offset) const;
+  uint64_t unit_die_count() const { return table_ ? table_->size() : 0; }
+  uint32_t index() const { return index_; }
+
+  // Reuses this handle's table while scanning. Requires index < unit_die_count().
+  void SetIndexUnchecked(uint32_t index) {
+    FX_DCHECK(index < unit_die_count());
+    index_ = index;
   }
 
-  std::optional<uint32_t> index_in(const llvm::DWARFUnit& unit) const {
-    if (!is_valid() || die_.getDwarfUnit() != &unit)
-      return std::nullopt;
-    return unit.getDIEIndex(die_);
-  }
-  DwarfDie unit_root() const;
-  bool unit_is_dwo() const { return die_.getDwarfUnit()->isDWOUnit(); }
-
-  // Resolves a unit-relative offset. The offset must point to a DIE in this unit.
+  // Resolves a unit-relative offset in the handle's table or loads the full tree if needed.
   DwarfDie GetUnitRelativeDie(uint64_t offset) const;
 
-  DwarfDieRef ref() const {
-    if (!is_valid())
-      return {};
-    auto* unit = die_.getDwarfUnit();
-    return unit->isTypeUnit() ? DwarfDieRef::ForTypeUnit(unit->getVersion(), offset())
-                              : DwarfDieRef::Main(offset());
-  }
+  DwarfDieRef ref() const;
+  DwarfTag tag() const;
+  uint64_t offset() const;  // Requires a valid DIE.
 
-  bool is_valid() const { return die_.isValid(); }
-  explicit operator bool() const { return is_valid(); }
-  bool operator==(const DwarfDie&) const = default;
-
-  DwarfTag tag() const { return static_cast<DwarfTag>(die_.getTag()); }
-  uint64_t offset() const { return die_.getOffset(); }
+  // Names borrow section bytes. Call on the binary's owning thread to resolve string forms.
   const char* short_name() const;
   const char* linkage_name() const;
 
-  DwarfDie parent() const { return DwarfDie(die_.getParent()); }
-  std::optional<uint32_t> parent_index() const { return die_.getDebugInfoEntry()->getParentIdx(); }
-  DwarfDie first_child() const { return DwarfDie(die_.getFirstChild()); }
-  DwarfDie sibling() const { return DwarfDie(die_.getSibling()); }
+  // Resolves this DIE's direct DW_AT_abstract_origin reference, if present.
+  DwarfDie abstract_origin() const;
+
+  DwarfDie parent() const;
+  std::optional<uint32_t> parent_index() const;
+  std::optional<uint32_t> parent_index_at(uint64_t index) const;
+  DwarfDie first_child() const;
+  DwarfDie sibling() const;
 
   // The child range excludes the null entry that ends a sibling chain.
-  auto children() const {
-    return llvm::map_range(die_.children(), [](llvm::DWARFDie child) { return DwarfDie(child); });
-  }
+  auto children() const;
 
-  // The abbreviation specifies the attributes in encoding order. An entry without an
-  // abbreviation (such as the end of a sibling chain) returns nullopt.
-  std::optional<Attributes> attributes() const {
-    if (const auto* abbrev = die_.getAbbreviationDeclarationPtr())
-      return llvm::map_range(abbrev->attributes(), ReadSpec{});
-    return std::nullopt;
-  }
-
-  // Temporary. Remove when the decoder, unit contexts and line programs use the new backend.
-  llvm::DWARFUnit* llvm_unit() const { return die_.getDwarfUnit(); }
+  // A null entry has no abbreviation or attributes.
+  std::optional<std::span<const AbbrevTable::AttributeSpec>> attributes() const;
 
  private:
-  explicit DwarfDie(llvm::DWARFDie die) : die_(die) {}
+  friend class DwarfBinaryImpl;
+  friend class DwarfDieDecoder;
 
-  llvm::DWARFDie die_;
+  struct UnitTable : DieTable {
+    UnitTable(const DwarfBinary* binary, UnitIndex unit, UnitSection section, DieTable table,
+              Endian endian, Load load)
+        : DieTable(std::move(table)),
+          binary(binary),
+          unit(unit),
+          section_kind(section),
+          endian(endian),
+          load(load) {}
+
+    const DwarfBinary* binary;
+    UnitIndex unit;
+    UnitSection section_kind;
+    Endian endian;
+    Load load;
+  };
+
+  DwarfDie(std::shared_ptr<const UnitTable> table, uint32_t index)
+      : table_(std::move(table)), index_(index) {}
+  const DieTable::Entry& entry() const {
+    FX_DCHECK(is_valid());
+    return *table_->Get(index_);
+  }
+
+  const char* ReadName(std::span<const DwarfAttr> attrs) const;
+  std::span<const uint8_t> encoded_entry() const;
+
+  std::shared_ptr<const UnitTable> table_;
+  uint32_t index_ = 0;
 };
+
+class DwarfDie::ChildIterator {
+ public:
+  using iterator_category = std::input_iterator_tag;
+  using value_type = DwarfDie;
+  using difference_type = std::ptrdiff_t;
+
+  ChildIterator() = default;
+  explicit ChildIterator(DwarfDie die)
+      : die_(die && die.entry().abbrev ? std::move(die) : DwarfDie()) {}
+
+  const DwarfDie& operator*() const { return die_; }
+  ChildIterator& operator++() {
+    uint32_t sibling = die_.entry().sibling;
+    if (sibling != DieTable::kNoIndex && die_.table_->Get(sibling)->abbrev)
+      die_.index_ = sibling;
+    else
+      die_ = {};
+    return *this;
+  }
+  ChildIterator operator++(int) {
+    auto previous = *this;
+    ++*this;
+    return previous;
+  }
+  bool operator==(const ChildIterator&) const = default;
+
+ private:
+  DwarfDie die_;
+};
+
+inline auto DwarfDie::children() const {
+  return std::ranges::subrange(ChildIterator(first_child()), ChildIterator());
+}
 
 }  // namespace zxdb
 

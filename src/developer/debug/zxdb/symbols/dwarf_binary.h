@@ -51,6 +51,10 @@ class SymbolContext;
 // the underlying LLVM objects. Mocks may return null for these. If a new test needs to be written
 // for such code, wrappers should be added so that the code no longer needs the llvm objects and
 // can use the mockable wrappers.
+//
+// Call on the binary's owning thread except for the raw DIE and type signature lookups below.
+// Immutable section views and DIE snapshots can be read from other threads while the binary
+// stays alive.
 class DwarfBinary {
  public:
   // A symbol from the ELF symbol tables. It has the fields that the symbol index uses. It doesn't
@@ -94,9 +98,13 @@ class DwarfBinary {
   virtual UnitContextResult GetUnitContext(llvm::DWARFUnit& unit,
                                            UnitContextSource skeleton = {}) const = 0;
 
-  // Returns the cached attribute data, or null for an invalid unit or abbreviation table.
-  // The result stays valid until ClearLLVMCache() or destruction.
-  virtual const UnitAttributeData* GetUnitAttributeData(DwarfDie die) const = 0;
+  UnitContextResult GetUnitContext(const DwarfDie& die, UnitContextSource skeleton = {}) const {
+    auto* unit = die.belongs_to(*this) ? GetLLVMUnit(die.unit_index()) : nullptr;
+    return unit ? GetUnitContext(*unit, skeleton) : UnitContextResult(Err("Unknown DWARF unit."));
+  }
+
+  // Supplies the remaining LLVM unit metadata while the split DWARF and line adapters use it.
+  virtual llvm::DWARFUnit* GetLLVMUnit(UnitIndex index) const = 0;
 
   // Returns the extent of the mapped segments in memory.
   virtual uint64_t GetMappedLength() const = 0;
@@ -140,17 +148,18 @@ class DwarfBinary {
   // returns the first DWO unit.
   fxl::RefPtr<DwarfUnit> GetDwoUnit() { return GetUnitAtIndex(UnitIndex(true, 0)); }
 
-  // Looks up a DIE across units by its DIE reference.
+  // Looks up a DIE across units by its DIE reference. Both overloads can run on any thread.
   virtual DwarfDie GetDieAtOffset(DwarfDieRef die_ref) const = 0;
 
   // Restricts the lookup to normal or split DWARF sections.
   virtual DwarfDie GetDieAtOffset(DwarfDieRef die_ref, bool is_dwo) const = 0;
 
   // Looks up a DIE reference by its 64-bit DWARF type signature (DW_FORM_ref_sig8 /
-  // DW_AT_signature).
+  // DW_AT_signature). Can run on any thread.
   virtual DwarfDieRef GetDieRefForSignature(uint64_t signature) const = 0;
 
-  // Looks up a type signature, preferring the source DIE's normal or split section set.
+  // Looks up a type signature, preferring the source DIE's normal or split section set. Can run
+  // on any thread.
   virtual DwarfDie GetDieForSignature(uint64_t signature, bool is_dwo) const = 0;
 
   // Returns the .debug_names reader, or nullptr if there are no readable contributions.
@@ -162,14 +171,21 @@ class DwarfBinary {
   virtual std::shared_ptr<const LineFileTable> GetLineFileTable(llvm::DWARFUnit* unit,
                                                                 uint64_t file_index) const = 0;
 
+  std::shared_ptr<const LineFileTable> GetLineFileTable(const DwarfDie& die,
+                                                        uint64_t file_index) const {
+    return die.belongs_to(*this) ? GetLineFileTable(GetLLVMUnit(die.unit_index()), file_index)
+                                 : nullptr;
+  }
+
   // Returns the lowest address of a code section of the binary, or 0 if it has none. Line table
   // sequences that start below it are for code that the linker removed. See
   // IsStrippedSequenceStart().
   virtual uint64_t GetFirstCodeAddress() const = 0;
 
-  // Purges cached DIE arrays, line tables, type signature maps, unit wrappers, unit contexts,
-  // and abbreviation tables so transient parse structures can be reclaimed and rebuilt on demand.
-  virtual void ClearLLVMCache() = 0;
+  // Releases cached DIE tables, line tables, unit wrappers, unit contexts, abbreviation tables,
+  // and type signature maps. Later requests rebuild them on demand.
+  // Call on the context's owning thread. Existing DIE handles remain valid.
+  virtual void ClearDwarfCaches() = 0;
 };
 
 }  // namespace zxdb
