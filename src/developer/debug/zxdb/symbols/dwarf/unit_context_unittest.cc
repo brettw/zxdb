@@ -313,11 +313,6 @@ TEST(UnitContext, Dwarf4SplitUnit) {
   EXPECT_EQ(std::nullopt, unlinked.value().addr_base());
   EXPECT_EQ(std::nullopt, unlinked.value().ranges_base());
   EXPECT_EQ(std::nullopt, unlinked.value().base_address());
-
-  auto addresses_only = dwo.Parse({.address_table = &main.value()});
-  ASSERT_TRUE(addresses_only.ok()) << addresses_only.err().msg();
-  EXPECT_EQ(0xabcdu, addresses_only.value().base_address());
-  EXPECT_EQ(std::nullopt, addresses_only.value().ranges_base());
 }
 
 TEST(UnitContext, Dwarf5SplitUnit) {
@@ -390,9 +385,9 @@ TEST(UnitContext, PackageContributions) {
   WriteListTable(DwarfSectionBuilder(dwo.rnglists, Endian::kLittle), 4, 8, 1, {4});
   WriteListTable(DwarfSectionBuilder(dwo.loclists, Endian::kLittle), 4, 8, 1, {4});
   UnitContext::PackageContributions package{
-      UnitContext::Contribution{4, 12},
-      UnitContext::Contribution{20, 17},
-      UnitContext::Contribution{10, 17},
+      PackageIndex::Contribution{4, 12},
+      PackageIndex::Contribution{20, 17},
+      PackageIndex::Contribution{10, 17},
   };
   auto context = dwo.Parse({.package = package});
   ASSERT_TRUE(context.ok()) << context.err().msg();

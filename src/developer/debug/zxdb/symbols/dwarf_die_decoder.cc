@@ -14,9 +14,9 @@
 #include "src/developer/debug/zxdb/symbols/const_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/range_list_reader.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/unit_context.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/line_file_table.h"
 
 namespace zxdb {

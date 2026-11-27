@@ -71,6 +71,7 @@ add_library(zxdb_symbols STATIC
   target_symbols.cc
   template_parameter.cc
   type.cc
+  unit_context_cache.cc
   value.cc
   variable.cc
   variable_location.cc

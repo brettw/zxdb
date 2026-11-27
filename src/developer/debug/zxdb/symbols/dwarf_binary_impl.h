@@ -15,10 +15,12 @@
 #include "src/developer/debug/zxdb/common/err.h"
 #include "src/developer/debug/zxdb/common/err_or.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/debug_names_reader.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/package_index.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/unit_header.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_symbol_factory.h"
 #include "src/developer/debug/zxdb/symbols/line_table_cache.h"
+#include "src/developer/debug/zxdb/symbols/unit_context_cache.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
 
 namespace llvm {
@@ -28,7 +30,6 @@ class MemoryBuffer;
 
 namespace object {
 class Binary;
-class ObjectFile;
 }  // namespace object
 
 }  // namespace llvm
@@ -41,7 +42,6 @@ class DwarfBinaryImpl final : public DwarfBinary {
   DwarfBinaryImpl(const std::string& name, const std::string& binary_name,
                   const std::string& build_id);
   // For byte fixtures. The section buffers must outlive the binary and its readers.
-  // Load split units from a file when they need skeleton or package metadata.
   explicit DwarfBinaryImpl(DwarfSections sections);
   ~DwarfBinaryImpl();
 
@@ -56,8 +56,6 @@ class DwarfBinaryImpl final : public DwarfBinary {
   std::time_t GetModificationTime() const override;
   const DwarfSymbolFactory* GetSymbolFactory() const override;
   bool HasBinary() const override;
-  llvm::object::ObjectFile* GetLLVMObjectFile() override;
-  llvm::DWARFContext* GetLLVMContext() const override;
   const DwarfSections& GetSections() const override;
   UnitContextResult GetUnitContext(UnitIndex index, UnitContextSource skeleton = {}) const override;
   using DwarfBinary::GetUnitContext;
@@ -103,9 +101,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
 
   std::optional<IndexedUnit> GetUnitHeader(UnitIndex index) const;
   void InitUnitLists();
-  llvm::DWARFUnit* GetLLVMUnit(UnitIndex index) const;
   const UnitList& GetUnitList(bool is_dwo, UnitSection section) const;
-  llvm::DWARFUnit* FindLLVMUnit(bool is_dwo, UnitSection section, uint64_t unit_offset) const;
 
   std::optional<UnitIndex> FindUnitForRef(DwarfDieRef die_ref, bool is_dwo) const;
   std::shared_ptr<const DwarfDie::UnitTable> GetDieTable(UnitIndex index,
@@ -144,10 +140,20 @@ class DwarfBinaryImpl final : public DwarfBinary {
 
   // The binary's owner accesses the wrappers and LLVM context.
   mutable std::map<UnitIndex, fxl::RefPtr<DwarfUnit>> unit_map_;
-  mutable std::array<std::optional<std::vector<llvm::DWARFUnit*>>, 2> llvm_units_;
 
-  // Package abbreviation bounds come from LLVM at load time and stay immutable.
-  std::vector<std::optional<UnitContextCache::AbbrevSection>> package_abbrevs_;
+  struct PackageUnit {
+    UnitContextCache::AbbrevSection abbrev;
+    UnitContext::PackageContributions contributions;
+    std::optional<PackageIndex::Contribution> line;
+  };
+
+  using PackageUnitResult = ErrOr<std::optional<PackageUnit>>;
+  PackageUnitResult ReadPackageUnit(const ErrOr<PackageIndex>& package_index,
+                                    const UnitHeader& header, UnitSection kind) const;
+
+  // Split unit order. Entries hold contributions, an error, or nullopt for an unpackaged unit.
+  // An empty vector means every split unit is unpackaged.
+  std::vector<PackageUnitResult> package_units_;
 
   // Serializes table builds and eviction across units, and protects the signature maps. A
   // table build can take the abbreviation cache lock while holding this lock.

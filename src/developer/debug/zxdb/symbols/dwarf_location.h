@@ -10,7 +10,7 @@
 #include <span>
 
 #include "src/developer/debug/zxdb/symbols/arch.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
+#include "src/developer/debug/zxdb/symbols/unit_context_source.h"
 #include "src/developer/debug/zxdb/symbols/variable_location.h"
 
 namespace zxdb {

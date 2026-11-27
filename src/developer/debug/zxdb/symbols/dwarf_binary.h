@@ -13,22 +13,11 @@
 
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_sections.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
 #include "src/developer/debug/zxdb/symbols/symbol_context.h"
+#include "src/developer/debug/zxdb/symbols/unit_context_source.h"
 #include "src/developer/debug/zxdb/symbols/unit_index.h"
-
-namespace llvm {
-
-class DWARFContext;
-
-namespace object {
-class Binary;
-class ObjectFile;
-}  // namespace object
-
-}  // namespace llvm
 
 namespace zxdb {
 
@@ -73,10 +62,6 @@ class DwarfBinary {
   // itself, such as PLT entries.
   virtual bool HasBinary() const = 0;
 
-  // File-backed binaries expose the LLVM objects that own their sections.
-  virtual llvm::object::ObjectFile* GetLLVMObjectFile() = 0;
-  virtual llvm::DWARFContext* GetLLVMContext() const = 0;
-
   // Returns views of this binary's DWARF sections. The views stay valid while this DwarfBinary
   // exists. A view is empty when its section is absent.
   virtual const DwarfSections& GetSections() const = 0;
@@ -85,6 +70,7 @@ class DwarfBinary {
   virtual UnitContextResult GetUnitContext(UnitIndex index,
                                            UnitContextSource skeleton = {}) const = 0;
 
+  // Use the native unit index only after checking that the DIE belongs to this binary.
   UnitContextResult GetUnitContext(const DwarfDie& die, UnitContextSource skeleton = {}) const {
     return die.belongs_to(*this) ? GetUnitContext(die.unit_index(), skeleton)
                                  : UnitContextResult(Err("Unknown DWARF unit."));

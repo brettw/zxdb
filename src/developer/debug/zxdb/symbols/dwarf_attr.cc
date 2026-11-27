@@ -168,6 +168,8 @@ const char* GetVendorAttrName(DwarfAttr attr) {
       return "DW_AT_MIPS_linkage_name";
     case DwarfAttr::kGnuDwoName:
       return "DW_AT_GNU_dwo_name";
+    case DwarfAttr::kGnuDwoId:
+      return "DW_AT_GNU_dwo_id";
     case DwarfAttr::kGnuRangesBase:
       return "DW_AT_GNU_ranges_base";
     case DwarfAttr::kGnuAddrBase:

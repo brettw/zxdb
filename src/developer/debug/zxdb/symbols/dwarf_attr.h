@@ -267,6 +267,7 @@ enum class DwarfAttr : int {
   // GNU extension for the name of the .dwo file of a split DWARF skeleton unit. Used before DWARF 5
   // added kDwoName.
   kGnuDwoName = 0x2130,
+  kGnuDwoId = 0x2131,
   kGnuRangesBase = 0x2132,
   kGnuAddrBase = 0x2133,
 

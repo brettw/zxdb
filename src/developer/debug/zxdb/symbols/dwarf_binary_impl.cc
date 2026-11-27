@@ -19,7 +19,6 @@
 #include <llvm/DebugInfo/DWARF/DWARFContext.h>
 #include <llvm/DebugInfo/DWARF/DWARFDataExtractor.h>
 #include <llvm/DebugInfo/DWARF/DWARFObject.h>
-#include <llvm/DebugInfo/DWARF/DWARFUnit.h>
 #include <llvm/Object/Binary.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Support/Error.h>
@@ -297,17 +296,20 @@ Err DwarfBinaryImpl::Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
   binary_buffer_ = std::move(binary_pair.second);
   binary_ = std::move(binary_pair.first);
 
-  auto first_code_address = InspectObjectSections(*GetLLVMObjectFile());
+  const auto* object_file = llvm::dyn_cast<llvm::object::ObjectFile>(binary_.get());
+  if (!object_file)
+    return Err("Expected an object file for " + name_ + ".");
+  auto first_code_address = InspectObjectSections(*object_file);
   if (first_code_address.has_error())
     return first_code_address.err();
   first_code_address_ = first_code_address.value();
 
   // Overwrite the default Error handler object, but leave everything else default.
-  context_ = llvm::DWARFContext::create(*GetLLVMObjectFile(),
-                                        llvm::DWARFContext::ProcessDebugRelocations::Process,
-                                        nullptr, "", &LLVMErrorHandler);
-  sections_ = GetDwarfSections(*context_);
-  if (GetLLVMObjectFile()->isRelocatableObject() && !sections_.names.empty()) {
+  context_ =
+      llvm::DWARFContext::create(*object_file, llvm::DWARFContext::ProcessDebugRelocations::Process,
+                                 nullptr, "", &LLVMErrorHandler);
+  sections_ = GetDwarfSections(context_->getDWARFObj());
+  if (object_file->isRelocatableObject() && !sections_.names.empty()) {
     // In a relocatable object LLVM keeps the relocations separate from the section bytes.
     // Resolve name index table relocations before publishing the reader.
     const auto& object = context_->getDWARFObj();
@@ -330,26 +332,58 @@ void DwarfBinaryImpl::InitUnitLists() {
   die_tables_[false].resize(GetNormalUnitCount());
   die_tables_[true].resize(GetDWOUnitCount());
 
-  if (!context_)
+  if (sections_.cu_index.empty() && sections_.tu_index.empty())
     return;
-  const auto& object = context_->getDWARFObj();
-  if (!object.getCUIndexSection().empty() || !object.getTUIndexSection().empty()) {
-    // LLVM can mutate its indexes during lookup. Resolve the bounds before raw DIE lookups
-    // can run on another thread.
-    package_abbrevs_.reserve(GetDWOUnitCount());
-    for (const UnitList* units : {&info_dwo_units_, &types_dwo_units_}) {
-      for (const UnitHeader& header : *units)
-        package_abbrevs_.push_back(
-            UnitContextCache::GetPackageAbbrev(sections_, *context_, header));
+  auto cu_index =
+      PackageIndex::Parse(sections_.cu_index, sections_.endian, PackageIndex::Kind::kCu);
+  auto tu_index =
+      PackageIndex::Parse(sections_.tu_index, sections_.endian, PackageIndex::Kind::kTu);
+
+  package_units_.reserve(GetDWOUnitCount());
+  for (UnitSection section : {UnitSection::kInfo, UnitSection::kTypes}) {
+    for (const auto& header : GetUnitList(true, section)) {
+      package_units_.push_back(
+          ReadPackageUnit(header.is_type_unit() ? tu_index : cu_index, header, section));
     }
   }
 }
 
-llvm::object::ObjectFile* DwarfBinaryImpl::GetLLVMObjectFile() {
-  return static_cast<llvm::object::ObjectFile*>(binary_.get());
-}
+DwarfBinaryImpl::PackageUnitResult DwarfBinaryImpl::ReadPackageUnit(
+    const ErrOr<PackageIndex>& package_index, const UnitHeader& header, UnitSection kind) const {
+  if (!package_index)
+    return package_index.err();
+  const auto& index = package_index.value();
+  auto abbrev_bytes = sections_.abbrev_dwo;
+  using Section = PackageIndex::Section;
+  auto id = header.is_type_unit() ? header.type_signature : header.dwo_id;
+  auto row = id ? index.FindByHash(*id) : std::nullopt;
+  if (!row)
+    row = index.FindByOffset(header.offset);
+  if (!row)
+    return std::optional<PackageUnit>();
 
-llvm::DWARFContext* DwarfBinaryImpl::GetLLVMContext() const { return context_.get(); }
+  auto unit =
+      index.GetContribution(*row, kind == UnitSection::kInfo ? Section::kInfo : Section::kTypes);
+  // Check that the row describes this unit before using any of its other contributions.
+  if (!unit || unit->offset != header.offset ||
+      unit->size != header.next_unit_offset() - header.offset) {
+    return Err("Inconsistent DWARF package unit contribution.");
+  }
+  auto abbrev = index.GetContribution(*row, Section::kAbbrev);
+  // The header's abbreviation offset is relative to the contribution (DWARF 5 section 7.3.5.3).
+  // LLVM 19 and LLDB reject a nonzero offset.
+  if (!abbrev || header.abbrev_offset >= abbrev->size || abbrev->Slice(abbrev_bytes).empty())
+    return Err("Invalid DWARF package abbreviation contribution.");
+
+  return std::optional(PackageUnit{
+      .abbrev = {abbrev_bytes.first(abbrev->offset + abbrev->size),
+                 abbrev->offset + header.abbrev_offset},
+      .contributions = {index.GetContribution(*row, Section::kStrOffsets),
+                        index.GetContribution(*row, Section::kLoclists),
+                        index.GetContribution(*row, Section::kRnglists)},
+      .line = index.GetContribution(*row, Section::kLine),
+  });
+}
 
 const DwarfSections& DwarfBinaryImpl::GetSections() const { return sections_; }
 
@@ -388,38 +422,6 @@ std::optional<DwarfBinaryImpl::IndexedUnit> DwarfBinaryImpl::GetUnitHeader(UnitI
   if (types_index < types.size())
     return IndexedUnit{types[types_index], UnitSection::kTypes};
   return std::nullopt;
-}
-
-llvm::DWARFUnit* DwarfBinaryImpl::FindLLVMUnit(bool is_dwo, UnitSection section,
-                                               uint64_t unit_offset) const {
-  const llvm::DWARFUnitVector& units =
-      is_dwo ? context_->getDWOUnitsVector() : context_->getNormalUnitsVector();
-  if (section == UnitSection::kInfo) {
-    // LLVM's offset lookup covers only the info units and can return a containing unit.
-    auto* unit = units.getUnitForOffset(unit_offset);
-    return unit && unit->getOffset() == unit_offset ? unit : nullptr;
-  }
-
-  const auto end = units.end();
-  auto found = std::lower_bound(
-      units.begin() + units.getNumInfoUnits(), end, unit_offset,
-      [](const auto& unit, uint64_t offset) { return unit->getOffset() < offset; });
-  return found != end && (*found)->getOffset() == unit_offset ? found->get() : nullptr;
-}
-
-llvm::DWARFUnit* DwarfBinaryImpl::GetLLVMUnit(UnitIndex index) const {
-  if (!context_)
-    return nullptr;
-  const bool is_dwo = index.is_dwo;
-  auto& units = llvm_units_[is_dwo];
-  if (!units) {
-    auto& by_index = units.emplace();
-    for (UnitSection section : {UnitSection::kInfo, UnitSection::kTypes}) {
-      for (const UnitHeader& header : GetUnitList(is_dwo, section))
-        by_index.push_back(FindLLVMUnit(is_dwo, section, header.offset));
-    }
-  }
-  return index.index < units->size() ? (*units)[index.index] : nullptr;
 }
 
 fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::GetUnitAtIndex(UnitIndex i) {
@@ -505,8 +507,13 @@ std::shared_ptr<const DwarfDie::UnitTable> DwarfBinaryImpl::GetDieTable(UnitInde
   const auto unit = GetUnitHeader(index);
   std::optional<UnitContextCache::AbbrevSection> abbrev_section = UnitContextCache::AbbrevSection{
       index.is_dwo ? sections_.abbrev_dwo : sections_.abbrev, unit->header.abbrev_offset};
-  if (index.is_dwo && !package_abbrevs_.empty())
-    abbrev_section = package_abbrevs_[index.index];
+  if (index.is_dwo && !package_units_.empty()) {
+    const auto& package = package_units_[index.index];
+    if (!package)
+      abbrev_section.reset();
+    else if (package.value())
+      abbrev_section = package.value()->abbrev;
+  }
   auto abbrevs =
       abbrev_section ? unit_contexts_.GetDieAbbrevs(index.is_dwo, *abbrev_section) : nullptr;
 
@@ -625,13 +632,24 @@ std::optional<LineProgramSource> DwarfBinaryImpl::GetLineProgramSource(UnitIndex
   if (!context || !context.value()->stmt_list())
     return std::nullopt;
   uint64_t offset = *context.value()->stmt_list();
-  if (index.is_dwo) {
-    auto* unit = GetLLVMUnit(index);
-    auto adjusted = CheckedAdd(offset, unit->getLineTableOffset());
-    if (!adjusted)
+  auto line = index.is_dwo ? sections_.line_dwo : sections_.line;
+  if (index.is_dwo && !package_units_.empty()) {
+    const auto& entry = package_units_[index.index];
+    if (!entry)
       return std::nullopt;
-    offset = *adjusted;
+    if (const auto& package = entry.value()) {
+      const auto& contribution = package->line;
+      if (!contribution || offset >= contribution->size)
+        return std::nullopt;
+      auto absolute = CheckedAdd(contribution->offset, offset);
+      if (!absolute)
+        return std::nullopt;
+      offset = *absolute;
+    }
   }
+  if (offset >= line.size())
+    return std::nullopt;
+
   LineStringSections strings = GetLineStringSections(sections_);
   if (index.is_dwo)
     strings.str = AsStringView(sections_.str_dwo);
@@ -641,8 +659,7 @@ std::optional<LineProgramSource> DwarfBinaryImpl::GetLineProgramSource(UnitIndex
     strings.str_offsets_base = contribution->base;
     strings.str_offset_size = contribution->entry_size;
   }
-  return LineProgramSource{AsStringView(index.is_dwo ? sections_.line_dwo : sections_.line), offset,
-                           sections_.endian, strings};
+  return LineProgramSource{AsStringView(line), offset, sections_.endian, strings};
 }
 
 std::shared_ptr<const LineFileTable> DwarfBinaryImpl::GetLineFileTable(UnitIndex unit,

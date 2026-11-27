@@ -21,12 +21,8 @@ namespace {
 constexpr uint8_t InitialLengthSize(uint8_t offset_size) { return offset_size == 8 ? 12 : 4; }
 
 std::span<const uint8_t> SliceContribution(std::span<const uint8_t> section,
-                                           std::optional<UnitContext::Contribution> contribution) {
-  if (!contribution || contribution->offset > section.size() ||
-      contribution->size > section.size() - contribution->offset) {
-    return {};
-  }
-  return section.subspan(contribution->offset, contribution->size);
+                                           std::optional<PackageIndex::Contribution> contribution) {
+  return contribution ? contribution->Slice(section) : std::span<const uint8_t>();
 }
 
 std::optional<uint64_t> ReadEntry(std::span<const uint8_t> section, uint64_t base, uint64_t index,
@@ -147,6 +143,7 @@ ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitH
       DwarfAttr::kRnglistsBase,   DwarfAttr::kGnuRangesBase, DwarfAttr::kLoclistsBase,
       DwarfAttr::kCompDir,        DwarfAttr::kLowPc,         DwarfAttr::kEntryPc,
       DwarfAttr::kRanges,         DwarfAttr::kStmtList,      DwarfAttr::kHighPc,
+      DwarfAttr::kGnuDwoId,
   };
   std::array<std::optional<FormValue>, kAttributes.size()> values;
   auto find = [&](DwarfAttr attr) -> std::optional<FormValue>& {
@@ -169,6 +166,11 @@ ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitH
   }
 
   UnitContext result;
+  result.dwo_id_ = header.dwo_id;
+  if (header.version < 5) {
+    if (const auto& id = find(DwarfAttr::kGnuDwoId))
+      result.dwo_id_ = id->AsUnsignedConstant();
+  }
   result.params_ = params;
   result.endian_ = sections.endian;
   result.is_dwo_ = options.is_dwo;
@@ -198,8 +200,7 @@ ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitH
       if (result.rnglists_.size() >= prefix_size)
         result.rnglists_base_ = result.rnglists_section_offset_ + prefix_size;
     }
-    const UnitContext* address_table = options.skeleton ? options.skeleton : options.address_table;
-    if (address_table) {
+    if (const UnitContext* address_table = options.skeleton) {
       result.addr_ = address_table->addr_;
       result.addr_base_ = address_table->addr_base_;
       result.addr_entry_size_ = address_table->addr_entry_size_;

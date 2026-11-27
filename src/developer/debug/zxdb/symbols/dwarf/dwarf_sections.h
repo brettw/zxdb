@@ -41,6 +41,9 @@ struct DwarfSections {
   std::span<const uint8_t> rnglists_dwo;
   std::span<const uint8_t> types_dwo;
 
+  std::span<const uint8_t> cu_index;
+  std::span<const uint8_t> tu_index;
+
   Endian endian = Endian::kLittle;
 };
 

@@ -28,7 +28,6 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_lang.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_location.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_op.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/enumeration.h"
 #include "src/developer/debug/zxdb/symbols/function.h"

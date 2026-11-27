@@ -171,16 +171,23 @@ Callers and implementations must preserve these invariants:
 - All file names from line tables come from `ResolveLineFileName()`, so names
   from line rows, `DW_AT_decl_file`, and the file index compare equal.
 - The DIE attribute, line table, location list, range list, aranges, and
-  name index parsers read section bytes from `DwarfSections`.
+  name and package index parsers read section bytes from `DwarfSections`.
   `dwarf_sections_llvm.cc` maps the LLVM sections to these views. The byte
   readers expect any required ELF relocations to be applied to the bytes.
   `UnitContext` reads root DIE metadata for string offsets, indexed addresses,
   location lists, range lists, compilation directories, and line table
-  offsets. LLVM supplies split package contributions and skeleton links.
-- Each binary caches immutable unit contexts by the address of the native unit header. A split
-  unit also uses its skeleton identity when it has one. The split unit gets
-  the skeleton context from the skeleton binary's cache when possible. The
-  skeleton binary keeps its section bytes alive for the split binary.
+  offsets. The binary resolves package contributions from the native CU and
+  TU indexes at load time. The binary checks `DW_AT_stmt_list` against the
+  line contribution and passes the absolute offset in `.debug_line.dwo`
+  to the line parser. DWARF 4 split location lists in `.debug_loc.dwo` are
+  unsupported.
+- Each binary caches immutable unit contexts by native unit header. An
+  explicit skeleton supplied by the caller also participates in the cache key.
+  For split and normal sections in the same binary, the default lookup matches
+  the DWO ID in a DWARF 5 header or the GNU DWO ID in a DWARF 4 root DIE.
+  Automatic linking requires one matching skeleton. LLVM 19 can use the sole
+  normal info unit as an address provider for an unmatched split unit.
+  A separate skeleton binary keeps its section bytes alive for the split binary.
 - The binary shares parsed abbreviation tables by section kind, offset, and
   contribution end. The unit context and DIE table use the same abbreviations.
   Each DIE table holds the abbreviations it needs through cache eviction.
@@ -213,8 +220,8 @@ Callers and implementations must preserve these invariants:
   `line_tables.md`. Their tests check expected values. Don't add tests that
   compare zxdb's results with LLVM's: zxdb is reducing its dependency on LLVM.
 - `SourceFileIndexer` workers read only immutable section data. Before
-  the thread that owns the `DWARFContext` starts the workers, it
-  selects each unit's line and string sections from `DwarfSections` and
+  the binary's owning thread starts the workers, it selects each unit's
+  line and string sections from `DwarfSections` and
   collects its `LineStringSections`. This includes the string offsets base,
   entry size, and contribution bounds from `UnitContext` for `DW_FORM_strx`.
 - `DW_LNE_define_file` can add files that the line table header doesn't have.
@@ -274,9 +281,8 @@ same DIE tables, abbreviation cache, unit contexts, and line parser as the
 debugger. Expected values come from the encoded bytes or the DWARF standard.
 
 File fixtures use `DwarfBinaryImpl::Load()`, which uses LLVM to open the
-object and supply its sections. Split-unit tests use this path for skeleton
-links and package contributions. A test can read raw DIEs in split sections
-from memory when it needs only the DIE tree and its encoded attributes.
+object and supply its sections. The package and skeleton-link tests build
+their sections in memory.
 
 Run these commands to build and test `zxdb/symbols`:
 

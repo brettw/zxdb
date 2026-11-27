@@ -214,6 +214,7 @@ add_executable(zxdb_tests
   symbols/dwarf/dwarf_section_builder.cc
   symbols/dwarf/dwarf_section_builder_unittest.cc
   symbols/dwarf/form_value_unittest.cc
+  symbols/dwarf/package_index_unittest.cc
   symbols/dwarf/range_list_reader_unittest.cc
   symbols/dwarf/unit_context_unittest.cc
   symbols/dwarf/unit_header_unittest.cc

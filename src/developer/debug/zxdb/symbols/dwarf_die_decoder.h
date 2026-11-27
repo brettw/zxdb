@@ -17,7 +17,7 @@
 #include "src/developer/debug/zxdb/symbols/dwarf/form_value.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
+#include "src/developer/debug/zxdb/symbols/unit_context_source.h"
 #include "src/lib/fxl/macros.h"
 
 namespace zxdb {

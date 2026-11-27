@@ -450,7 +450,7 @@ TEST(RangeListReader, SplitRnglistsUseSkeletonAddresses) {
     UnitContext::Options options{.is_dwo = true, .skeleton = &main.value()};
     if (start != 0) {
       options.package = UnitContext::PackageContributions{
-          .rnglists = UnitContext::Contribution{start, split.rnglists.size() - start}};
+          .rnglists = PackageIndex::Contribution{start, split.rnglists.size() - start}};
     }
     auto context = split.Parse(options);
     ASSERT_TRUE(context.ok()) << context.err().msg();

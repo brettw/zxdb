@@ -10,7 +10,9 @@ edge case list current: add a test and an entry for each new edge case.
 zxdb parses each line table header and decodes the line program that follows
 it. The parser gets the section bytes and byte order from `DwarfSections`.
 `UnitContext` reads the line table offset and the string offsets contribution.
-For a unit in a package, LLVM supplies the start of the line contribution.
+For a unit in a package, the native package index supplies the line
+contribution. The binary checks the relative offset against the contribution
+size and passes the parser an absolute offset in `.debug_line.dwo`.
 DWO units use the `.dwo` line, string, and string offsets sections. All units
 use the main `.debug_line_str` section.
 
@@ -20,7 +22,7 @@ use the main `.debug_line_str` section.
 | `LineSequenceValidator`, `IsStrippedSequenceStart()` | `line_sequence.h` | Shared validation of sequence order and removed code. |
 | `LineFileTable`, `ResolveLineFileName()` | `line_file_table.*` | Resolved, normalized file names, indexed by the raw file register value. |
 | `LineProgram`, `LineFileEntries` | `line_program.*` | Immutable parsed program, explicit decode results, and views of effective file entries. |
-| Section adapter | `dwarf_sections_llvm.*` | Creates section views and selects the sections for each unit. |
+| Section adapter | `dwarf_sections_llvm.*` | Creates section views from the object loader. |
 | Line program source | `DwarfBinary::GetLineProgramSource()` | Collects the unit's line table offset and string sections on the binary's owning thread. |
 | `LineTable` | `line_table.*` | Concrete sequences and rows, address lookup, `GetLineDetails()`. |
 | `LineTableCache` | `line_table_cache.*` | One file table for each line table of a binary, shared by `DW_AT_decl_file` lookups and decoded tables. |
@@ -512,6 +514,9 @@ decoded rows (`DecodeAndCheck()`).
     (`GetLineDetailsLineOutsideIntRange`).
 - The existing `GetRowForAddress`, line 0, end-sequence, and prologue tests,
   converted from `MockLineTable`.
+- The DWARF 4 and 5 package tests in `dwarf_binary_impl_unittest.cc` resolve
+  the same relative line offset to different file tables in two contributions.
+  They also reject an offset at the contribution's end.
 
 **Real binaries** (`line_program_binary_unittest.cc`)
 

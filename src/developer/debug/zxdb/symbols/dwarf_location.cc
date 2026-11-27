@@ -10,6 +10,7 @@
 #include "src/developer/debug/zxdb/common/checked_math.h"
 #include "src/developer/debug/zxdb/common/data_extractor.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/form_value.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/unit_context.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 

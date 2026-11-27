@@ -7,6 +7,7 @@
 #include <elf.h>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <filesystem>
 #include <map>
@@ -291,62 +292,208 @@ TEST(DwarfBinaryImpl, SplitTypeSignatureWithOverlappingOffsets) {
   EXPECT_STREQ("SplitType", decoder.GetCString(DwarfAttr::kName).value_or(nullptr));
 }
 
-TEST(DwarfBinaryImpl, RawPackageDieUsesAbbreviationContribution) {
-  constexpr uint64_t kDwoId = 1;
-  constexpr AbbrevTable::AttributeSpec kName[] = {
-      {static_cast<uint64_t>(DwarfAttr::kName), static_cast<uint64_t>(DwarfForm::kString)}};
-  std::vector<uint8_t> abbrev;
-  DwarfSectionBuilder abbrev_builder(abbrev, Endian::kLittle);
-  abbrev_builder.EndAbbrevTable();  // Empty table at offset 0.
-  const size_t abbrev_offset = abbrev.size();
-  abbrev_builder.AbbrevDeclaration(1, static_cast<uint64_t>(DwarfTag::kCompileUnit), false, kName);
-  abbrev_builder.EndAbbrevTable();
+namespace {
 
-  std::vector<uint8_t> info;
-  DwarfSectionBuilder info_builder(info, Endian::kLittle);
-  auto unit = info_builder.BeginUnit({.unit_type = kUnitTypeSplitCompile, .dwo_id = kDwoId});
-  const auto ref = DwarfDieRef::Main(info.size());
-  info_builder.Uleb(1);
-  info_builder.CString("package.cc");
-  info_builder.EndUnit(unit);
+class DwarfPackageFixture {
+ public:
+  static constexpr std::array<uint64_t, 2> kIds{1, 2};
+  static constexpr std::array<const char*, 2> kNames{"first.cc", "second.cc"};
 
-  // DWARF 5 CU index with one unit, two hash slots, and info and abbreviation contributions.
-  std::vector<uint8_t> index;
-  DwarfSectionBuilder index_builder(index, Endian::kLittle);
-  for (uint32_t word : {5u, 2u, 1u, 2u})
-    index_builder.Fixed(word, 4);
-  index_builder.Fixed(0, 8);
-  index_builder.Fixed(kDwoId, 8);  // Hash slot 1 refers to row 1.
-  for (uint32_t word : {0u, 1u, 1u, 3u})
-    index_builder.Fixed(word, 4);  // Row indexes, then DW_SECT_INFO and DW_SECT_ABBREV.
-  index_builder.Fixed(0, 4);
-  index_builder.Fixed(abbrev_offset, 4);
-  index_builder.Fixed(info.size(), 4);
-  index_builder.Fixed(abbrev.size() - abbrev_offset, 4);
+  explicit DwarfPackageFixture(uint16_t version, bool bad_first_line_offset = false)
+      : version_(version) {
+    DwarfSectionBuilder abbrevs(abbrev_, Endian::kLittle);
+    DwarfSectionBuilder units(info_, Endian::kLittle);
+    std::array<std::array<uint64_t, 3>, 2> offsets, sizes;
+    for (size_t i = 0; i < kIds.size(); ++i) {
+      LineTableBuilder line(version_);
+      line.set_string_form(LineTableBuilder::StringForm::kString);
+      if (version_ == 5)
+        line.AddDirectory("/build");
+      line.AddFile(kNames[i], line.AddDirectory("/src"));
+      uint64_t line_offset = lines_.Add(line);
+      uint64_t line_size = lines_.line_size() - line_offset;
+      offsets[i] = {info_.size(), abbrev_.size(), line_offset};
 
-  files::ScopedTempDir temp_dir;
-  std::string path;
-  ASSERT_TRUE(temp_dir.NewTempFileWithData(
-      MakeElf(
-          {{".debug_info.dwo", info}, {".debug_abbrev.dwo", abbrev}, {".debug_cu_index", index}}),
-      &path));
-  DwarfBinaryImpl binary(path, "", "");
-  ASSERT_TRUE(binary.Load({}, DwarfSymbolFactory::kDWO).ok());
+      // DWARF 5 section 7.3.5.3 makes both offsets relative to their contributions.
+      uint64_t relative_abbrev = version_ == 5 && i == 1 ? 1 : 0;
+      if (relative_abbrev)
+        abbrevs.EndAbbrevTable();
+      std::vector<Spec> attrs{Attr(DwarfAttr::kName, DwarfForm::kString),
+                              Attr(DwarfAttr::kStmtList, DwarfForm::kSecOffset)};
+      if (version_ < 5)
+        attrs.push_back(Attr(DwarfAttr::kGnuDwoId, DwarfForm::kData8));
+      abbrevs.AbbrevDeclaration(i + 1, static_cast<uint64_t>(DwarfTag::kCompileUnit), false, attrs);
+      abbrevs.EndAbbrevTable();
 
-  DwarfDie die;
-  std::jthread reader([&] { die = binary.GetDieAtOffset(ref, true); });
-  auto split = binary.GetDwoUnit();
-  ASSERT_TRUE(split);
-  auto context = binary.GetUnitContext(split->GetUnitIndex());
-  ASSERT_TRUE(context) << context.err().msg();
+      auto unit = units.BeginUnit({.version = version_,
+                                   .unit_type = kUnitTypeSplitCompile,
+                                   .abbrev_offset = relative_abbrev,
+                                   .dwo_id = kIds[i]});
+      refs_[i] = DwarfDieRef::Main(info_.size());
+      units.Uleb(i + 1);
+      units.CString(kNames[i]);
+      units.Fixed(bad_first_line_offset && i == 0 ? line_size : 0, 4);
+      if (version_ < 5)
+        units.Fixed(kIds[i], 8);
+      units.EndUnit(unit);
+      sizes[i] = {info_.size() - offsets[i][0], abbrev_.size() - offsets[i][1], line_size};
+    }
+    lines_.Finish();
+
+    DwarfSectionBuilder index(cu_index_, Endian::kLittle);
+    for (uint32_t word : {version_ == 5 ? 5u : 2u, 3u, 2u, 4u})
+      index.Fixed(word, 4);
+    for (uint64_t hash : {uint64_t{0}, kIds[0], kIds[1], uint64_t{0}})
+      index.Fixed(hash, 8);
+    // The row numbers reverse unit order. The column IDs are INFO, ABBREV, and LINE.
+    for (uint32_t word : {0, 2, 1, 0, 1, 3, 4})
+      index.Fixed(word, 4);
+    for (const auto& table : {offsets, sizes}) {
+      for (size_t i : {1, 0}) {
+        for (uint64_t word : table[i])
+          index.Fixed(word, 4);
+      }
+    }
+  }
+
+  void AddSkeleton(uint64_t id, uint64_t address) {
+    if (skeleton_abbrev_.empty()) {
+      DwarfSectionBuilder abbrev(skeleton_abbrev_, Endian::kLittle);
+      std::vector<Spec> attrs{Attr(version_ == 5 ? DwarfAttr::kAddrBase : DwarfAttr::kGnuAddrBase,
+                                   DwarfForm::kSecOffset),
+                              Attr(DwarfAttr::kLowPc, DwarfForm::kAddr)};
+      if (version_ < 5)
+        attrs.push_back(Attr(DwarfAttr::kGnuDwoId, DwarfForm::kData8));
+      auto tag = version_ == 5 ? DwarfTag::kSkeletonUnit : DwarfTag::kCompileUnit;
+      abbrev.AbbrevDeclaration(1, static_cast<uint64_t>(tag), false, attrs);
+      abbrev.EndAbbrevTable();
+    }
+
+    DwarfSectionBuilder skeleton(skeleton_info_, Endian::kLittle);
+    auto unit =
+        skeleton.BeginUnit({.version = version_, .unit_type = kUnitTypeSkeleton, .dwo_id = id});
+    skeleton.Uleb(1);
+    skeleton.Fixed(addresses_.size(), 4);
+    skeleton.Fixed(address, 8);
+    if (version_ < 5)
+      skeleton.Fixed(id, 8);
+    skeleton.EndUnit(unit);
+    DwarfSectionBuilder(addresses_, Endian::kLittle).Fixed(address, 8);
+  }
+
+  DwarfSections sections() const {
+    return {.info = skeleton_info_,
+            .abbrev = skeleton_abbrev_,
+            .addr = addresses_,
+            .info_dwo = info_,
+            .abbrev_dwo = abbrev_,
+            .line_dwo = lines_.sections().line,
+            .cu_index = cu_index_};
+  }
+
+  DwarfDieRef root_ref(size_t i) const { return refs_[i]; }
+
+ private:
+  using Spec = AbbrevTable::AttributeSpec;
+
+  static Spec Attr(DwarfAttr name, DwarfForm form) {
+    return {static_cast<uint64_t>(name), static_cast<uint64_t>(form)};
+  }
+
+  uint16_t version_;
+  std::vector<uint8_t> abbrev_, info_, cu_index_;
+  std::vector<uint8_t> skeleton_abbrev_, skeleton_info_, addresses_;
+  LineTableTestSections lines_;
+  std::array<DwarfDieRef, 2> refs_;
+};
+
+class DwarfPackageTest : public testing::TestWithParam<uint16_t> {};
+
+TEST_P(DwarfPackageTest, ReadsPackageAbbreviationsOnWorkerThread) {
+  DwarfPackageFixture fixture(GetParam());
+  DwarfBinaryImpl binary(fixture.sections());
+  std::array<DwarfDie, 2> roots;
+  std::jthread reader([&] {
+    for (size_t i = 0; i < roots.size(); ++i)
+      roots[i] = binary.GetDieAtOffset(fixture.root_ref(i), true);
+  });
+  // Unit context lookups on the owning thread share the abbreviation cache with raw DIE lookups.
+  for (size_t i = 0; i < fixture.kIds.size(); ++i) {
+    auto context = binary.GetUnitContext(UnitIndex(true, i));
+    EXPECT_TRUE(context) << context.err().msg();
+  }
   reader.join();
 
-  ASSERT_TRUE(die);
-  EXPECT_EQ(DwarfTag::kCompileUnit, die.tag());
-  EXPECT_STREQ("package.cc", die.short_name());
-  binary.ClearDwarfCaches();
-  EXPECT_EQ(die, binary.GetDieAtOffset(ref, true));
+  // Each fixture root uses a distinct abbreviation code and encodes its file name.
+  for (size_t i = 0; i < roots.size(); ++i) {
+    ASSERT_TRUE(roots[i]);
+    EXPECT_STREQ(fixture.kNames[i], roots[i].short_name());
+  }
 }
+
+TEST_P(DwarfPackageTest, ResolvesLineTablesByContribution) {
+  DwarfPackageFixture fixture(GetParam());
+  DwarfBinaryImpl binary(fixture.sections());
+  ASSERT_EQ(2u, binary.GetDWOUnitCount());
+
+  // Both fixture units reference relative offset zero and each encodes its own file.
+  auto file_index = GetParam() == 5 ? 0 : 1;
+  for (size_t i = 0; i < fixture.kNames.size(); ++i) {
+    auto files = binary.GetLineFileTable(UnitIndex(true, i), file_index);
+    ASSERT_TRUE(files);
+    const auto* file = files->GetFileName(file_index);
+    ASSERT_TRUE(file);
+    EXPECT_EQ(std::string("/src/") + fixture.kNames[i], *file);
+  }
+}
+
+TEST_P(DwarfPackageTest, RejectsLineOffsetAtContributionEnd) {
+  // DWARF 5 section 7.3.5.3 bases the offset on the unit's contribution. The first
+  // unit's invalid offset reaches the second table in the same section.
+  DwarfPackageFixture fixture(GetParam(), true);
+  DwarfBinaryImpl binary(fixture.sections());
+  EXPECT_FALSE(binary.GetLineProgramSource(UnitIndex(true, 0)));
+}
+
+TEST_P(DwarfPackageTest, MatchesSkeletonsByDwoId) {
+  DwarfPackageFixture fixture(GetParam());
+  // The fixture writes the matching skeletons' addresses in reverse unit order.
+  constexpr uint64_t kAddresses[] = {0x1000, 0x2000};
+  for (size_t i : {1, 0})
+    fixture.AddSkeleton(fixture.kIds[i], kAddresses[i]);
+  DwarfBinaryImpl binary(fixture.sections());
+  for (size_t i = 0; i < fixture.kIds.size(); ++i) {
+    auto context = binary.GetUnitContext(UnitIndex(true, i));
+    ASSERT_TRUE(context) << context.err().msg();
+    EXPECT_EQ(kAddresses[i], context.value()->base_address());
+    EXPECT_EQ(kAddresses[i], context.value()->ReadAddress(0));
+  }
+}
+
+TEST_P(DwarfPackageTest, LeavesUnmatchedUnitUnlinked) {
+  DwarfPackageFixture fixture(GetParam());
+  // The fixture's only skeleton ID matches the second split unit.
+  fixture.AddSkeleton(fixture.kIds[1], 0x2000);
+  DwarfBinaryImpl binary(fixture.sections());
+  auto context = binary.GetUnitContext(UnitIndex(true, 0));
+  ASSERT_TRUE(context) << context.err().msg();
+  EXPECT_FALSE(context.value()->ReadAddress(0));
+}
+
+TEST_P(DwarfPackageTest, LeavesDuplicateSkeletonIdsUnlinked) {
+  DwarfPackageFixture fixture(GetParam());
+  // Both skeletons claim the first split unit, so neither supplies its address table.
+  fixture.AddSkeleton(fixture.kIds[0], 0x1000);
+  fixture.AddSkeleton(fixture.kIds[0], 0x2000);
+  DwarfBinaryImpl binary(fixture.sections());
+  auto context = binary.GetUnitContext(UnitIndex(true, 0));
+  ASSERT_TRUE(context) << context.err().msg();
+  EXPECT_FALSE(context.value()->ReadAddress(0));
+}
+
+INSTANTIATE_TEST_SUITE_P(Dwarf4And5, DwarfPackageTest, testing::Values(4, 5));
+
+}  // namespace
 
 TEST(DwarfBinaryImpl, Dwarf4TypeUnits) {
   std::string path = TestSymbolModule::GetTestDataDir() + "type_unit/gcc_dwarf4.so";

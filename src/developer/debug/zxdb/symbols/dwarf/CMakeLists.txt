@@ -6,6 +6,7 @@ add_library(zxdb_dwarf STATIC
   die_table.cc
   form_encoding.cc
   form_value.cc
+  package_index.cc
   range_list_reader.cc
   unit_context.cc
   unit_header.cc

@@ -47,6 +47,10 @@
   visits the entries for all names with a given stored hash.
   `VisitNamesWithPrefix()` visits the names that start with the prefix.
   `ReadParent()` reads the parent record for one entry.
+- `PackageIndex::Parse()` reads `.debug_cu_index` and `.debug_tu_index`.
+  `FindByHash()` finds a row by DWO ID or type signature, and
+  `FindByOffset()` finds a row by its exact unit start.
+  `GetContribution()` returns the section offset and size in that row.
 - `DwarfSectionBuilder` and `DwarfStringSectionBuilder` write section bytes
   for tests. `DwarfSectionBuilder` writes unit headers and abbreviation
   declarations. Write the abbreviation code and attribute values in DIE
@@ -62,7 +66,7 @@
 - `DwarfSections` borrows its bytes. For a byte fixture, finish writing the
   buffers before constructing the binary. Keep them alive while the binary
   or a reader uses them. A file fixture gets its bytes from the object loader.
-  The loader and the split-unit metadata adapter still use LLVM.
+  The file loader uses LLVM to supply these views.
 - DWARF offset zero and type signature zero are valid.
 - An unknown DWARF 5 unit type uses the compile unit header layout. The list
   uses the declared length to find the next header.
@@ -110,8 +114,21 @@
   DWARF 5 errata.
 - Blocks, inline strings, and 16-byte constants borrow the reader's input.
   Keep the input alive while using these values.
+- The package index accepts GNU version 2 and DWARF 5 headers in the file's
+  byte order. GNU version 2 type units use `.debug_types.dwo`. DWARF 5
+  compile and type units use `.debug_info.dwo`. A zero hash is valid when
+  the slot has a row. Probing is bounded by the number of slots. An absent
+  section yields an empty index. An absent column yields no contribution.
+  Contribution offsets and sizes use the 32-bit values stored in the file.
+  LLVM 19 can recover some offsets that wrap at 4 GiB.
+- Package unit abbreviation tables stay within their contribution.
+  The abbreviation offset in a unit header is relative to the contribution,
+  as specified in DWARF 5 section 7.3.5.3. LLVM 19 and the shared LLDB
+  header reader require this offset to be zero.
 - A `UnitContext` bounds the root DIE to its unit. It keeps the first value
-  for each attribute. It resolves indexed forms after it reads the bases.
+  for each attribute, including the GNU DWO ID in DWARF 4. In DWARF 5 the
+  unit header supplies the DWO ID. It resolves indexed forms after it reads
+  the bases.
   Errors in section lookups affect only the values that use those sections.
 - A split unit uses its skeleton's address table and base address. For
   DWARF 4 split units, the skeleton can supply GNU address and range bases.
@@ -174,4 +191,4 @@ Reads change only the reader's cursor and error state.
 ## Verification
 
 - Build with `cmake --build build --target zxdb_dwarf zxdb_tests`.
-- Run `FUCHSIA_ANALYTICS_DISABLED=1 ./build/zxdb_tests --gtest_filter='AbbrevTable.*:ArangesReader.*:DataReader.*:DebugNamesReader.*:DieTable.*:DwarfSectionBuilder.*:FormValue.*:Dwarf2To5/FormEncodingTest.*:RangeListReader.*:UnitContext.*:UnitHeader.*:UnitList.*'`.
+- Run `FUCHSIA_ANALYTICS_DISABLED=1 ./build/zxdb_tests --gtest_filter='AbbrevTable.*:ArangesReader.*:DataReader.*:DebugNamesReader.*:DieTable.*:DwarfSectionBuilder.*:FormValue.*:Dwarf2To5/FormEncodingTest.*:PackageIndex.*:RangeListReader.*:UnitContext.*:UnitHeader.*:UnitList.*'`.

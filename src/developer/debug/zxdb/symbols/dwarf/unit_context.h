@@ -14,6 +14,7 @@
 #include "src/developer/debug/zxdb/common/endian.h"
 #include "src/developer/debug/zxdb/common/err_or.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/form_value.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/package_index.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/unit_header.h"
 
 namespace zxdb {
@@ -25,22 +26,15 @@ class RangeListReader;
 // Keep the unit and skeleton section bytes alive while using it.
 class UnitContext {
  public:
-  struct Contribution {
-    uint64_t offset;
-    uint64_t size;
-  };
-
   struct PackageContributions {
-    std::optional<Contribution> str_offsets;
-    std::optional<Contribution> loclists;
-    std::optional<Contribution> rnglists;
+    std::optional<PackageIndex::Contribution> str_offsets;
+    std::optional<PackageIndex::Contribution> loclists;
+    std::optional<PackageIndex::Contribution> rnglists;
   };
 
   struct Options {
     bool is_dwo = false;
     const UnitContext* skeleton = nullptr;
-    // An address table provider for a DWO without a linked skeleton.
-    const UnitContext* address_table = nullptr;
     // Present for a unit in a DWARF package. The offsets are relative to the sections.
     std::optional<PackageContributions> package;
   };
@@ -65,6 +59,7 @@ class UnitContext {
     return Parse(sections, header, section, Options{});
   }
 
+  std::optional<uint64_t> dwo_id() const { return dwo_id_; }
   std::optional<uint64_t> str_offsets_base() const { return str_offsets_base_; }
   std::optional<uint64_t> addr_base() const { return addr_base_; }
   std::optional<uint64_t> rnglists_base() const { return rnglists_base_; }
@@ -110,6 +105,7 @@ class UnitContext {
   uint8_t addr_entry_size_;
   Endian addr_endian_;
 
+  std::optional<uint64_t> dwo_id_;
   std::optional<uint64_t> str_offsets_base_;
   std::optional<uint64_t> addr_base_;
   std::optional<uint64_t> rnglists_base_;
