@@ -174,7 +174,6 @@ DwarfSections ReadDwarfSections(elflib::ElfLib& elf, const std::string& path) {
       .str_dwo = read(".debug_str.dwo"),
       .str_offsets_dwo = read(".debug_str_offsets.dwo"),
       .line_dwo = read(".debug_line.dwo"),
-      .loc_dwo = read(".debug_loc.dwo"),
       .loclists_dwo = read(".debug_loclists.dwo"),
       .rnglists_dwo = read(".debug_rnglists.dwo"),
       .types_dwo = read(".debug_types.dwo"),
@@ -185,7 +184,8 @@ DwarfSections ReadDwarfSections(elflib::ElfLib& elf, const std::string& path) {
 
 }  // namespace
 
-// To work around https://github.com/llvm/llvm-project/issues/58641.
+// Maps code addresses to compilation units using .debug_aranges and root DIE ranges.
+// Omit ranges that start at zero because linkers can leave these behind for discarded code.
 class DwarfBinaryImpl::DebugAranges {
  public:
   explicit DebugAranges(const DwarfBinaryImpl& binary) {
@@ -241,7 +241,7 @@ class DwarfBinaryImpl::DebugAranges {
 
     std::sort(ranges_.begin(), ranges_.end(),
               [](const Range& first, const Range& second) { return first.begin < second.begin; });
-    // Check
+    // Clip overlapping ranges so the lookup can search by end address.
     Range* prev = nullptr;
     for (Range& range : ranges_) {
       if (prev && prev->end > range.begin) {

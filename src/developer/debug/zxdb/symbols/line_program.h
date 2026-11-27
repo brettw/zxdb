@@ -24,10 +24,8 @@ struct DwarfSections;
 // The zxdb line table parser.
 //
 // zxdb parses the header of each line table, including the directory and file tables, and decodes
-// the line number program that follows it. Neither part uses LLVM's line table parser, so worker
-// threads can parse line tables from section data alone. The decoder doesn't build intermediate
-// structures, so the indexer can find the referenced files of a unit much faster than a full LLVM
-// parse.
+// the line number program that follows it. Worker threads can parse line tables from section data
+// alone. The file indexer scans the program for referenced files without building line rows.
 //
 // The parser follows llvm::DWARFDebugLine::Prologue::parse() and the decoder follows the row
 // emission rules of llvm::DWARFDebugLine::LineTable::parse(). Line tables with more than one

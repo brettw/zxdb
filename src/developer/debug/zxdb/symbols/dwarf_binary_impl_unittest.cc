@@ -20,7 +20,6 @@
 #include <gtest/gtest.h>
 
 #include "src/developer/debug/zxdb/symbols/compile_unit.h"
-#include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"

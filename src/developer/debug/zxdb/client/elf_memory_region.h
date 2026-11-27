@@ -43,11 +43,8 @@ class ElfMemoryRegion : public unwinder::Memory {
 
   std::unique_ptr<FILE, decltype(&fclose)> file_;
 
-  // Elflib helps us calculate section offsets and fetching raw section data. We need to properly
-  // handle compressed debug_info regions while being able to supply the unwinder with direct file
-  // access. Due to this, it's not trivial to supply the data from the lowlevel LLVM objects, which
-  // are capable of decompressing the different sections, but don't provide a nice interface to
-  // easily access it like a file.
+  // The unwinder reads by file offset. Use elflib to locate sections and read their raw bytes
+  // so compressed sections can be decompressed and cached at their file offsets.
   std::unique_ptr<elflib::ElfLib> elflib_ = nullptr;
 };
 

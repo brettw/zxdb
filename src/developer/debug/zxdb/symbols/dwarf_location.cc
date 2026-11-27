@@ -84,11 +84,9 @@ VariableLocation DecodeDwarf4LocationReference(const DwarfSections& sections,
                                                const UnitContext& context, uint16_t version,
                                                const FormValue& form,
                                                const UncachedLazySymbol& source) {
-  if (sections.loc.empty()) {
-    // LLVM dumpLocation() falls back on the DWARFObject::getLocDWOSection() call in this case. We
-    // don't support DWOs yet so just fail.
+  // Only the main .debug_loc section is supported for DWARF 4 location lists.
+  if (sections.loc.empty())
     return VariableLocation();
-  }
 
   auto offset_or = form.AsSectionOffset(version);
   if (!offset_or)

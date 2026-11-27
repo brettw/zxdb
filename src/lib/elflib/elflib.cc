@@ -9,7 +9,6 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <zircon/assert.h>
 #include <zlib.h>
 #include <zstd.h>
 

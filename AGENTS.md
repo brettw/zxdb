@@ -32,8 +32,8 @@ tables, and unwind information, refer to the LLVM and LLDB source code.
   symbol model (`lldb/source/Plugins/SymbolFile/DWARF` and
   `lldb/source/Symbol`). LLDB uses some LLVM parsers, for example the line
   table parser.
-- zxdb links the LLVM libraries. Use the LLVM code to find how the data that
-  zxdb receives is parsed.
+- zxdb parses DWARF and ELF itself. Use the LLVM DWARF code as a second
+  reference for how producers encode data.
 - For the correct behavior of a debugger, the LLDB code is usually the better
   reference. Examples are how to find the code for a source line, how to
   select a row or a scope, and how to continue after malformed data.

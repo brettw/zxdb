@@ -20,7 +20,7 @@ Subdirectories follow a strict bottom-up dependency order (`common` <- `symbols`
 - [common](./common/README.md): Layer 1 (lowest) foundational utilities (`Err`,
   `ErrOr`, `AddressRanges`, `DataExtractor`, `Curl`, `CacheDir`). Cannot depend
   on any other `zxdb` layer.
-- [symbols](./symbols/README.md): Layer 2 LLVM DWARF/ELF symbol parser, indexer
+- [symbols](./symbols/README.md): Layer 2 DWARF and ELF symbol reader, indexer
   (`Index`), lazy object model (`Symbol`, `LazySymbol`, `Type`, `Function`), and
   `BuildIDIndex`.
 - [expr](./expr/README.md): Layer 3 C++/Rust expression tokenizer, parser, AST

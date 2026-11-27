@@ -655,7 +655,7 @@ Location ModuleSymbolsImpl::LocationForAddress(const SymbolContext& symbol_conte
   return Location(Location::State::kSymbolized, absolute_address);
 }
 
-// This function is similar to llvm::DWARFContext::getLineInfoForAddress.
+// Resolves an address using the compilation unit's function map and line table.
 std::optional<Location> ModuleSymbolsImpl::DwarfLocationForAddress(
     const SymbolContext& symbol_context, uint64_t absolute_address, const ResolveOptions& options,
     const Function* optional_func) const {
@@ -896,13 +896,11 @@ std::vector<Location> ModuleSymbolsImpl::ResolveElfName(const SymbolContext& sym
 // 1. The line might not be an exact match (the user can specify a blank line or something optimized
 //    out). In this case, find the next valid line.
 //
-// 2. Clang doesn't emit line table entries for the source of an inlined function call.
-//    See https://bugs.fuchsia.dev/p/fuchsia/issues/detail?id=112203 and
-//    https://github.com/llvm/llvm-project/issues/58483.
+// 2. Clang can omit line table rows for the call site of an inlined function.
+//    See https://github.com/llvm/llvm-project/issues/58483.
 //
-//    To work around this, for every function with a line table match from complication 1, we search
-//    for inlined function calls whose call location matches the input location. (Note: neither GDB
-//    nor LLDB do this as of this writing, this is more of a workaround for a Clang bug.)
+//    For every function with a line table match from complication 1, we search its inline DIEs
+//    for a call site that matches the input location. GDB and LLDB use the line table rows.
 //
 // 3. Conversely, rustc emits too many line table entries for await points. This causes the "best"
 //    match (see below) to not actually be the lowest address for this particular line. To solve
@@ -977,7 +975,7 @@ void ModuleSymbolsImpl::ResolveLineInputLocationForFile(const SymbolContext& sym
     return;
 
   // Complication 2 above: Get all unique functions we found from complication 1, and add in
-  // inline call site locations. This can be removed if the above-mentioned Clang bug is fixed.
+  // inline call site locations for binaries whose line tables omit those rows.
   //
   // The LineMatch contains the function DIE offset which we use for uniquifying functions, but
   // we currently don't have a convenient way to map this back to a Symbol object. Instead, look up

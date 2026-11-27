@@ -13,8 +13,8 @@
 
 namespace zxdb {
 
-// Non-owning views of DWARF bytes. A file-backed binary keeps the object and its decompressed
-// sections alive. An in-memory fixture owns its section buffers.
+// Non-owning views of DWARF bytes. A file-backed binary owns the ELF mapping and decompressed
+// buffers through elflib. An in-memory fixture owns its section buffers.
 struct DwarfSections {
   std::span<const uint8_t> info;
   std::span<const uint8_t> abbrev;
@@ -36,7 +36,6 @@ struct DwarfSections {
   std::span<const uint8_t> str_dwo;
   std::span<const uint8_t> str_offsets_dwo;
   std::span<const uint8_t> line_dwo;
-  std::span<const uint8_t> loc_dwo;
   std::span<const uint8_t> loclists_dwo;
   std::span<const uint8_t> rnglists_dwo;
   std::span<const uint8_t> types_dwo;

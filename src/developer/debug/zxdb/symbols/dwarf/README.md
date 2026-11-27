@@ -1,5 +1,9 @@
 # DWARF reader
 
+`zxdb_dwarf` parses DWARF records from section views. For file-backed symbols,
+`DwarfBinaryImpl` fills the views from `elflib`. It also takes section views
+directly from in-memory fixtures.
+
 ## Interface
 
 - `DataReader` reads values from a byte span in the specified byte order.
@@ -189,6 +193,8 @@
 Reads change only the reader's cursor and error state.
 
 ## Verification
+
+Tests check expected values from the DWARF standard or the fixture data.
 
 - Build with `cmake --build build --target zxdb_dwarf zxdb_tests`.
 - Run `FUCHSIA_ANALYTICS_DISABLED=1 ./build/zxdb_tests --gtest_filter='AbbrevTable.*:ArangesReader.*:DataReader.*:DebugNamesReader.*:DieTable.*:DwarfSectionBuilder.*:FormValue.*:Dwarf2To5/FormEncodingTest.*:PackageIndex.*:RangeListReader.*:UnitContext.*:UnitHeader.*:UnitList.*'`.

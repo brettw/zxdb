@@ -8,7 +8,8 @@ edge case list current: add a test and an entry for each new edge case.
 ## Design
 
 zxdb parses each line table header and decodes the line program that follows
-it. The parser gets the section bytes and byte order from `DwarfSections`.
+it. `DwarfBinaryImpl` fills `DwarfSections` from `elflib` and passes the
+selected section bytes and byte order to the parser.
 `UnitContext` reads the line table offset and the string offsets contribution.
 For a unit in a package, the native package index supplies the line
 contribution. The binary checks the relative offset against the contribution
@@ -22,7 +23,7 @@ use the main `.debug_line_str` section.
 | `LineSequenceValidator`, `IsStrippedSequenceStart()` | `line_sequence.h` | Shared validation of sequence order and removed code. |
 | `LineFileTable`, `ResolveLineFileName()` | `line_file_table.*` | Resolved, normalized file names, indexed by the raw file register value. |
 | `LineProgram`, `LineFileEntries` | `line_program.*` | Immutable parsed program, explicit decode results, and views of effective file entries. |
-| Section adapter | `dwarf_sections_llvm.*` | Creates section views from the object loader. |
+| `DwarfSections`, `ReadDwarfSections()` | `dwarf/dwarf_sections.h`, `dwarf_binary_impl.cc` | Section views backed by `elflib`'s mapping and decompressed buffers. |
 | Line program source | `DwarfBinary::GetLineProgramSource()` | Collects the unit's line table offset and string sections on the binary's owning thread. |
 | `LineTable` | `line_table.*` | Concrete sequences and rows, address lookup, `GetLineDetails()`. |
 | `LineTableCache` | `line_table_cache.*` | One file table for each line table of a binary, shared by `DW_AT_decl_file` lookups and decoded tables. |
@@ -183,8 +184,7 @@ with `ZXDB_INDEX_BENCHMARK_BINARY` set:
 - `SourceFileIndexer*` and the fission `ModuleSymbols` tests with
   `--gtest_repeat=200`.
 
-There must be no reports. The system `libLLVM` isn't built with TSan, but
-workers don't call LLVM, so the run covers all the worker code.
+There must be no reports.
 
 ## Known differences from LLVM
 
@@ -266,10 +266,10 @@ unit or entry.
 - Check in a libFuzzer target. A temporary one ran on 2026-11-20, with ASan
   and UBSan, for 20 minutes in 6 processes: 1.7 M inputs, seeded with the
   tables of the fixtures and `build/zxdb`. It covered the header parser, the
-  decoder, the file scan, file names, `LineTable` queries, `LineTableCache`
-  with an LLVM unit, and `SourceFileIndexer` with and without a worker. It
-  also checked that the paths that must agree do. It found the `FileLine`
-  failure for lines above `INT_MAX`, and nothing after the fix.
+  decoder, the file scan, file names, `LineTable` queries, `LineTableCache`,
+  and `SourceFileIndexer` with and without a worker. It also checked that
+  the paths that must agree do. It found the `FileLine` failure for lines
+  above `INT_MAX`, and nothing after the fix.
 
   A second set of runs on 2026-11-20 found no zxdb crash and no zxdb
   error:
@@ -304,11 +304,9 @@ The tests must run fast. They build line tables in memory with
 units directly from its section views. Tests of real binaries use the
 debugger's object loader.
 
-Each test checks expected rows and file names. The expected values come from
-the DWARF standard and the rules in this document. The tests don't compare
-with LLVM, because zxdb is reducing its dependency on LLVM. Don't add tests
-that do. Every decoder test also checks that the file scan agrees with the
-decoded rows (`DecodeAndCheck()`).
+Each test checks expected rows and file names. Use only expected values from
+the DWARF standard and the rules in this document. Every decoder test also
+checks that the file scan agrees with the decoded rows (`DecodeAndCheck()`).
 
 ### Edge cases that the tests must cover
 

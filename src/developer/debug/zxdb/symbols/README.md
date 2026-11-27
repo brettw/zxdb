@@ -9,9 +9,9 @@ lookup subsystem (Layer 2) for `zxdb`. It decodes DWARF Debug Information
 Entries (DIEs), line tables, and ELF symbols into a reference-counted object
 graph, and evaluates DWARF location expressions (`DwarfExprEval`).
 
-The [DWARF reader](dwarf/README.md) provides the section views and byte reader.
-The symbol library uses LLVM only to demangle C++ and Rust names. It links the
-demangler from `libLLVM`.
+`elflib` reads ELF files and supplies section bytes to the
+[DWARF reader](dwarf/README.md). The symbol library demangles C++ and Rust
+names with the demangler from `libLLVM`.
 
 For lookup behavior with incomplete DWARF or ELF symbols alone, see
 [Finding a breakpoint by function name](name_lookup.md).
@@ -100,10 +100,10 @@ Public headers expose these symbol classes, factories, and evaluators:
   made of `zxdb::LineRow` rows (`line_row.h`) and a `zxdb::LineFileTable`
   (`line_file_table.h`). Tests construct it directly with
   `line_table_test_support.h`. `zxdb::LineProgram` (`line_program.h`) parses
-  a line table header and decodes its program without LLVM's line table
-  parser. Its header remains immutable. Decode and scan results carry status,
-  output, and program-defined files. `LineFileEntries` views the effective
-  file entries without copying the header. `DwarfBinary::GetLineProgramSource()`
+  a line table header and decodes its program from section bytes. Its header
+  remains immutable. Decode and scan results carry status, output, and
+  program-defined files. `LineFileEntries` views the effective file entries
+  without copying the header. `DwarfBinary::GetLineProgramSource()`
   collects the section views and offset on the thread that owns the binary.
   `LineTable::SequenceView` separates ordinary rows from the end marker.
   `StatementSelection` and `LineExtentMode` name the lookup policies.
@@ -225,8 +225,7 @@ Callers and implementations must preserve these invariants:
   commit only complete sequences. Equal addresses and zero-length sequences
   are permitted.
 - The line table parser and decoder follow the DWARF standard and the rules in
-  `line_tables.md`. Their tests check expected values. Don't add tests that
-  compare zxdb's results with LLVM's: zxdb is reducing its dependency on LLVM.
+  `line_tables.md`. Use only expected values from those rules in tests.
 - `SourceFileIndexer` workers read only immutable section data. Before
   the binary's owning thread starts the workers, it selects each unit's
   line and string sections from `DwarfSections` and
@@ -235,8 +234,8 @@ Callers and implementations must preserve these invariants:
 - `DW_LNE_define_file` can add files that the line table header doesn't have.
   File lookups go through `LineTableCache`, which decodes the program when an
   index is past the header's entries.
-- zxdb doesn't use LLVM's line table parser. Line tables with more than one
-  operation per instruction (VLIW) aren't supported and fail to parse.
+- Line tables with more than one operation per instruction (VLIW) fail to
+  parse.
 - The line table parser and decoder read untrusted data. They must check each
   length by subtraction before they add it, and their memory use must stay
   in proportion to the input. Don't reserve memory from a count in the data.

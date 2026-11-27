@@ -31,7 +31,8 @@ ctest --test-dir build --output-on-failure
 ```
 
 CMake selects Clang by default because upstream host syslog uses Clang
-builtins. To choose an LLVM installation, pass
+builtins. zxdb requires LLVM 19 or newer for the LLVM MC disassembler and the
+C++ and Rust demangler. To choose an LLVM installation, pass
 `-DLLVM_DIR=/usr/lib/llvm-19/lib/cmake/llvm`. Use a fresh build directory when
 changing compilers.
 
@@ -168,8 +169,8 @@ whole-archive linking. Fuchsia-only launchers, FIDL runtimes, packaging, and
 `ffx` integration are outside this host build.
 
 Source adaptations include missing standard-header includes, canonical
-library include paths, LLVM API compatibility, and host library compatibility
-for range formatting and RapidJSON keys. Tests also exposed two runtime
-portability issues: filesystem timestamps now use the system clock epoch,
-and callback result storage retains stable addresses during synchronous
+library include paths, LLVM MC API compatibility, and host library
+compatibility for range formatting and RapidJSON keys. Tests also exposed two
+runtime portability issues: filesystem timestamps now use the system clock
+epoch, and callback result storage retains stable addresses during synchronous
 completion. A regression test covers the callback case. The build uses C++23.

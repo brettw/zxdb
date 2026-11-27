@@ -6,10 +6,8 @@
 
 #include <lib/syslog/cpp/macros.h>
 
-#include <algorithm>
 #include <limits>
 
-#include "src/developer/debug/shared/logging/logging.h"
 #include "src/developer/debug/zxdb/common/int128_t.h"
 #include "src/developer/debug/zxdb/common/ref_ptr_to.h"
 #include "src/developer/debug/zxdb/symbols/array_type.h"
@@ -492,9 +490,8 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeFunction(const DwarfDie& die, Dwar
 // - One or more DW_TAG_subrange_type children that hold the size of the array in a DW_AT_count
 //   attribute.
 //
-// The subrange child is weird because the subrange links to its own type.  LLVM generates a
-// synthetic type __ARRAY_SIZE_TYPE__ that the DW_TAG_subrange_count DIE references from DW_AT_type
-// attribute. We ignore this and only use the count.
+// Clang can emit a synthetic __ARRAY_SIZE_TYPE__ referenced by the subrange's DW_AT_type.
+// The decoder uses the subrange's bounds to compute the element count.
 //
 // One might expect 2-dimensional arrays to be expressed as an array of one dimension where the
 // contained type is an array of another. But both Clang and GCC generate one array entry with two
