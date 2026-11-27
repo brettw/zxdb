@@ -265,9 +265,7 @@ UnitContextSource DwarfSymbolFactory::GetSkeletonUnit() const {
 
 DwarfDieDecoder DwarfSymbolFactory::MakeDecoder(std::span<const DwarfAttr> attributes) const {
   // A .dwo unit uses the address table in the main binary.
-  if (binary_)
-    return DwarfDieDecoder(*binary_.get(), attributes, GetSkeletonUnit());
-  return DwarfDieDecoder(nullptr, attributes, GetSkeletonUnit().unit);
+  return DwarfDieDecoder(*binary_.get(), attributes, GetSkeletonUnit());
 }
 
 fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeSymbol(DwarfDie die) const {
@@ -438,7 +436,10 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeFunction(DwarfDie die, DwarfTag ta
   std::vector<LazySymbol> variables;
   std::vector<LazySymbol> template_params;
   std::vector<LazySymbol> call_sites;
-  for (DwarfDie child : DwarfAbstractChildIterator(die)) {
+  auto get_origin = [&binary = *binary_.get()](DwarfDie child) {
+    return GetAbstractOrigin(child, binary);
+  };
+  for (DwarfDie child : DwarfAbstractChildIterator(die, get_origin)) {
     switch (child.tag()) {
       case DwarfTag::kFormalParameter:
         parameters.push_back(MakeLazy(child));
@@ -628,24 +629,21 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeCollection(DwarfDie die) const {
   // class. It comes from the abstract origin or the specification, if the DIE has one.
   DwarfDie parent = decoder.GetContextParent();
 
-  std::optional<uint64_t> signature;
-  if (const DwarfDieDecoder::AttributeValue* value = decoder.GetValue(DwarfAttr::kSignature))
-    signature = value->form.AsReference();
+  if (const auto* signature = decoder.GetValue(DwarfAttr::kSignature);
+      signature && signature->form.AsReference()) {
+    DwarfDie type = signature->form.form == DwarfForm::kRefSig8
+                        ? decoder.GetReference(DwarfAttr::kSignature)
+                        : DwarfDie();
+    if (type && type != die)
+      return DecodeSymbol(type);
+    return fxl::MakeRefCounted<Symbol>();
+  }
 
   std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
   std::optional<uint64_t> byte_size = decoder.GetUnsignedConstant(DwarfAttr::kByteSize);
   std::optional<bool> is_declaration = decoder.GetBool(DwarfAttr::kDeclaration);
   std::optional<uint64_t> calling_convention =
       decoder.GetUnsignedConstant(DwarfAttr::kCallingConvention);
-
-  if (signature) {
-    if (binary_) {
-      if (DwarfDieRef sig_ref = binary_->GetDieRefForSignature(*signature)) {
-        return CreateSymbol(sig_ref);
-      }
-    }
-    return fxl::MakeRefCounted<Symbol>();
-  }
 
   auto result = fxl::MakeRefCounted<Collection>(die.tag());
   if (name)
@@ -720,7 +718,7 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeCompileUnit(DwarfDie die, DwarfTag
   if (language && *language >= 0 && *language < static_cast<int>(DwarfLang::kLast))
     lang_enum = static_cast<DwarfLang>(*language);
 
-  auto dwarf_unit = binary_->CreateUncachedUnit(die.llvm_unit());
+  auto dwarf_unit = binary_->CreateUncachedUnit(die);
   if (!dwarf_unit)
     return fxl::MakeRefCounted<Symbol>();
 
@@ -798,15 +796,13 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeEnum(DwarfDie die) const {
   if (!main_decoder.Decode(die))
     return fxl::MakeRefCounted<Symbol>();
 
-  std::optional<uint64_t> signature;
-  if (const DwarfDieDecoder::AttributeValue* value = main_decoder.GetValue(DwarfAttr::kSignature))
-    signature = value->form.AsReference();
-  if (signature) {
-    if (binary_) {
-      if (DwarfDieRef sig_ref = binary_->GetDieRefForSignature(*signature)) {
-        return CreateSymbol(sig_ref);
-      }
-    }
+  if (const auto* signature = main_decoder.GetValue(DwarfAttr::kSignature);
+      signature && signature->form.AsReference()) {
+    DwarfDie type = signature->form.form == DwarfForm::kRefSig8
+                        ? main_decoder.GetReference(DwarfAttr::kSignature)
+                        : DwarfDie();
+    if (type && type != die)
+      return DecodeSymbol(type);
     return fxl::MakeRefCounted<Symbol>();
   }
 
@@ -1231,12 +1227,11 @@ AddressRanges DwarfSymbolFactory::GetCodeRanges(const DwarfDieDecoder& decoder) 
       form != DwarfForm::kData8) {
     return {};
   }
-  auto offset = value->form.AsSectionOffset(value->unit->getVersion());
+  auto offset = value->form.AsSectionOffset(value->params.version);
   if (!offset)
     return {};
 
-  auto& unit = *value->unit;
-  auto context = GetUnitContext(unit, binary_.get(), GetSkeletonUnit());
+  auto context = decoder.GetAttributeUnitContext(*value);
   if (context.has_error())
     return {};
 
@@ -1277,7 +1272,7 @@ std::optional<AddressRanges> DwarfSymbolFactory::GetLowHighEncodedCodeRange(
   if (!high_pc)
     return std::nullopt;
   uint64_t max_address =
-      std::numeric_limits<uint64_t>::max() >> (64 - low->unit->getAddressByteSize() * 8);
+      std::numeric_limits<uint64_t>::max() >> (64 - low->params.address_size * 8);
   if (*low_addr == 0 || *low_addr > max_address)
     return AddressRanges();
   if (high_pc->is_constant && high_pc->value > max_address - *low_addr)

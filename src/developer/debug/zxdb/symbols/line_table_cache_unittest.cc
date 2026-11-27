@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
 #include "src/developer/debug/zxdb/symbols/line_program_test_util.h"
 #include "src/developer/debug/zxdb/symbols/line_table_test_support.h"
@@ -34,15 +35,15 @@ uint64_t AddDefineFileTable(LineTableTestSections& sections) {
   return sections.Add(builder);
 }
 
-// Decodes DW_AT_decl_file of the first child of the unit DIE with a decoder without a binary.
-std::optional<std::string> DecodeDeclFile(llvm::DWARFContext& context, llvm::DWARFUnit& unit,
+// Decodes DW_AT_decl_file of a child of the unit DIE.
+std::optional<std::string> DecodeDeclFile(const DwarfBinary& binary, llvm::DWARFUnit& unit,
                                           size_t child_index) {
   DwarfDie die = DwarfDie::FromUnitRoot(&unit, DwarfDie::Load::kAllDies).first_child();
   for (size_t i = 0; i < child_index; i++)
     die = die.sibling();
 
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kDeclFile};
-  DwarfDieDecoder decoder(&context, kAttrs);
+  DwarfDieDecoder decoder(binary, kAttrs);
   EXPECT_TRUE(decoder.Decode(die));
   return decoder.GetFile(DwarfAttr::kDeclFile);
 }
@@ -157,7 +158,8 @@ TEST(LineTableCache, UnitWithoutLineTable) {
                     .GetNumSequences());
 
   // DW_AT_decl_file has no file table to use.
-  EXPECT_EQ(std::nullopt, DecodeDeclFile(sections.mutable_context(), unit, 0));
+  DwarfBinaryImpl binary(sections.TakeContext());
+  EXPECT_EQ(std::nullopt, DecodeDeclFile(binary, unit, 0));
 }
 
 TEST(DwarfDieDecoder, GetFileDefinedByProgram) {
@@ -168,9 +170,10 @@ TEST(DwarfDieDecoder, GetFileDefinedByProgram) {
   sections.Finish(Endian::kLittle);
   llvm::DWARFUnit& unit = *sections.unit(0);
 
-  EXPECT_EQ("a.cc", DecodeDeclFile(sections.mutable_context(), unit, 0));
-  EXPECT_EQ("inc/defined.h", DecodeDeclFile(sections.mutable_context(), unit, 1));
-  EXPECT_EQ(std::nullopt, DecodeDeclFile(sections.mutable_context(), unit, 2));
+  DwarfBinaryImpl binary(sections.TakeContext());
+  EXPECT_EQ("a.cc", DecodeDeclFile(binary, unit, 0));
+  EXPECT_EQ("inc/defined.h", DecodeDeclFile(binary, unit, 1));
+  EXPECT_EQ(std::nullopt, DecodeDeclFile(binary, unit, 2));
 }
 
 TEST(DwarfDieDecoder, GetFileStrx) {
@@ -185,8 +188,10 @@ TEST(DwarfDieDecoder, GetFileStrx) {
   uint64_t offset = sections.Add(builder);
   sections.AddCompileUnit(5, offset, {0});
   sections.Finish(Endian::kLittle);
+  llvm::DWARFUnit& unit = *sections.unit(0);
 
-  EXPECT_EQ("src/indexed.cc", DecodeDeclFile(sections.mutable_context(), *sections.unit(0), 0));
+  DwarfBinaryImpl binary(sections.TakeContext());
+  EXPECT_EQ("src/indexed.cc", DecodeDeclFile(binary, unit, 0));
 }
 
 }  // namespace zxdb

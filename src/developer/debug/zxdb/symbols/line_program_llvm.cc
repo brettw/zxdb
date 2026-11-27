@@ -7,8 +7,9 @@
 #include <lib/syslog/cpp/macros.h>
 
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
+#include "src/developer/debug/zxdb/common/checked_math.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 
 namespace zxdb {
@@ -32,18 +33,14 @@ LineStringSections GetLineStringSections(const DwarfSections& sections, llvm::DW
   return result;
 }
 
-std::optional<uint64_t> GetUnitLineTableOffset(DwarfDie unit_die) {
+std::optional<uint64_t> GetUnitLineTableOffset(DwarfDie unit_die, const DwarfBinary* binary) {
   if (!unit_die)
     return std::nullopt;
-  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kStmtList};
   llvm::DWARFUnit* unit = unit_die.llvm_unit();
-  DwarfDieDecoder decoder(&unit->getContext(), kAttrs);
-  if (!decoder.Decode(unit_die))
+  auto context = GetUnitContext(*unit, binary);
+  if (!context || !context.value()->stmt_list())
     return std::nullopt;
-  std::optional<uint64_t> stmt_list = decoder.GetSectionOffset(DwarfAttr::kStmtList);
-  if (!stmt_list)
-    return std::nullopt;
-  return *stmt_list + unit->getLineTableOffset();
+  return CheckedAdd(*context.value()->stmt_list(), unit->getLineTableOffset());
 }
 
 ErrOr<LineProgram> ParseLineProgramForUnit(const DwarfSections& sections, llvm::DWARFUnit& unit) {

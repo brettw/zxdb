@@ -94,6 +94,10 @@ class DwarfBinary {
   virtual UnitContextResult GetUnitContext(llvm::DWARFUnit& unit,
                                            UnitContextSource skeleton = {}) const = 0;
 
+  // Returns the cached attribute data, or null for an invalid unit or abbreviation table.
+  // The result stays valid until ClearLLVMCache() or destruction.
+  virtual const UnitAttributeData* GetUnitAttributeData(DwarfDie die) const = 0;
+
   // Returns the extent of the mapped segments in memory.
   virtual uint64_t GetMappedLength() const = 0;
 
@@ -139,9 +143,15 @@ class DwarfBinary {
   // Looks up a DIE across units by its DIE reference.
   virtual DwarfDie GetDieAtOffset(DwarfDieRef die_ref) const = 0;
 
+  // Restricts the lookup to normal or split DWARF sections.
+  virtual DwarfDie GetDieAtOffset(DwarfDieRef die_ref, bool is_dwo) const = 0;
+
   // Looks up a DIE reference by its 64-bit DWARF type signature (DW_FORM_ref_sig8 /
   // DW_AT_signature).
   virtual DwarfDieRef GetDieRefForSignature(uint64_t signature) const = 0;
+
+  // Looks up a type signature, preferring the source DIE's normal or split section set.
+  virtual DwarfDie GetDieForSignature(uint64_t signature, bool is_dwo) const = 0;
 
   // Returns the .debug_names reader, or nullptr if there are no readable contributions.
   virtual const DebugNamesReader* GetDebugNames() const { return nullptr; }

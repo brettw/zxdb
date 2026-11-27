@@ -69,7 +69,7 @@ std::optional<std::pair<const char*, const char*>> GetFileNameKey(LineFileEntrie
 void AddLineTableJob(const DwarfSections& sections, UnitIndex unit_index, DwarfDie unit_die,
                      uint64_t first_code_address, std::vector<LineTableJob>* jobs,
                      const DwarfBinary* binary) {
-  std::optional<uint64_t> offset = GetUnitLineTableOffset(unit_die);
+  std::optional<uint64_t> offset = GetUnitLineTableOffset(unit_die, binary);
   if (!offset)
     return;
 

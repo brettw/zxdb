@@ -20,8 +20,8 @@
   parameters. It returns a `FormValue` or an error. `FormValue` stores the
   final form, its class, and its raw value. The form identifies the reference
   base, target string section, or index table. The caller resolves these values
-  with unit and section data. `DwarfDieDecoder::AttributeValue` also uses
-  `FormValue` to expose values extracted by LLVM.
+  with unit and section data. `DwarfDieDecoder` uses `ReadForm()` for
+  requested attributes and `SkipForm()` to advance past the others.
 - `SkipForm()` moves past one value and returns false if the form or its
   bytes are invalid. It needs the form code and the unit's form parameters.
 - `UnitContext::Parse()` reads the first DIE of a unit. The context gives the
@@ -97,6 +97,7 @@
   in the string offsets contribution. A location list index must fit in the
   offset array, and its target must follow that array in the same
   contribution. Package contribution bounds come from the caller.
+  `ResolveString()` leaves supplementary strings unresolved, as LLDB does.
 - A DWARF 5 range list index must fit in the offset array. The list must
   start after the array and end within the same contribution. A direct
   offset also uses these bounds when the unit identifies its contribution.

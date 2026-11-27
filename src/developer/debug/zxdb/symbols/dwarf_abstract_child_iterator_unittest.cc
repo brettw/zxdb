@@ -77,7 +77,7 @@ using TestIterator = DwarfAbstractChildIteratorBase<TestDie>;
 
 TEST(DwarfAbstractChildIterator, Null) {
   TestDie empty;
-  TestIterator iter(empty);
+  TestIterator iter(empty, GetAbstractOrigin);
 
   auto begin = iter.begin();
   EXPECT_EQ(iter.begin(), iter.end());
@@ -85,7 +85,7 @@ TEST(DwarfAbstractChildIterator, Null) {
 
 TEST(DwarfAbstractChildIterator, Empty) {
   TestDie empty(22);  // Give some arbitrary nonzero offset for not-null DIE.
-  TestIterator iter(empty);
+  TestIterator iter(empty, GetAbstractOrigin);
 
   EXPECT_EQ(iter.begin(), iter.end());
 
@@ -110,7 +110,7 @@ TEST(DwarfAbstractChildIterator, NoAbstract) {
   EXPECT_EQ(102u, root.children().back().offset());
 
   // Validate the unique offsets of each child.
-  for (const auto& child : TestIterator(root)) {
+  for (const auto& child : TestIterator(root, GetAbstractOrigin)) {
     EXPECT_EQ(expected_child_offset, child.offset());
     expected_child_offset++;
   }
@@ -165,7 +165,7 @@ TEST(DwarfAbstractChildIterator, Abstract) {
   // Iterate through the values.
   std::vector<uint64_t> expected{100, 301, 202, 303, 304, 205};  // See comment above.
   size_t i = 0;
-  for (const auto& child : TestIterator(concrete)) {
+  for (const auto& child : TestIterator(concrete, GetAbstractOrigin)) {
     ASSERT_LT(i, expected.size());
     EXPECT_EQ(expected[i], child.offset());
     ++i;
@@ -187,7 +187,7 @@ TEST(DwarfAbstractChildIterator, ConcreteNoChildren) {
   abstract1.abstract_origin() = abstract2;
   concrete.abstract_origin() = abstract1;
 
-  TestIterator iter(concrete);
+  TestIterator iter(concrete, GetAbstractOrigin);
   auto cur = iter.begin();
 
   // We should find both children on the double-abstract origin.
@@ -205,7 +205,7 @@ namespace {
 // Returns the offsets of the children that the iterator gives.
 std::vector<uint64_t> ChildOffsets(const TestDie& die) {
   std::vector<uint64_t> result;
-  for (const auto& child : TestIterator(die))
+  for (const auto& child : TestIterator(die, GetAbstractOrigin))
     result.push_back(child.offset());
   return result;
 }

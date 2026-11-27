@@ -5,6 +5,7 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_BINARY_IMPL_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_DWARF_BINARY_IMPL_H_
 
+#include <array>
 #include <atomic>
 #include <map>
 #include <optional>
@@ -44,6 +45,8 @@ class DwarfBinaryImpl final : public DwarfBinary {
   // Callers must call Load() to complete initialization (which can fail).
   DwarfBinaryImpl(const std::string& name, const std::string& binary_name,
                   const std::string& build_id);
+  // For byte fixtures with an in-memory LLVM DIE tree. The fixture owns the section buffers.
+  explicit DwarfBinaryImpl(std::unique_ptr<llvm::DWARFContext> context);
   ~DwarfBinaryImpl();
 
   fxl::WeakPtr<DwarfBinaryImpl> GetWeakPtr();
@@ -62,6 +65,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
   const DwarfSections& GetSections() const override;
   UnitContextResult GetUnitContext(llvm::DWARFUnit& unit,
                                    UnitContextSource skeleton = {}) const override;
+  const UnitAttributeData* GetUnitAttributeData(DwarfDie die) const override;
   uint64_t GetMappedLength() const override;
   const std::map<std::string, ElfTableSymbol>& GetELFSymbols() const override;
   const std::map<std::string, uint64_t> GetPLTSymbols() const override;
@@ -71,7 +75,9 @@ class DwarfBinaryImpl final : public DwarfBinary {
   fxl::RefPtr<DwarfUnit> UnitForRelativeAddress(uint64_t relative_address) override;
   std::optional<uint64_t> GetDebugAddrEntry(uint64_t addr_base, uint64_t index) const override;
   DwarfDie GetDieAtOffset(DwarfDieRef die_ref) const override;
+  DwarfDie GetDieAtOffset(DwarfDieRef die_ref, bool is_dwo) const override;
   DwarfDieRef GetDieRefForSignature(uint64_t signature) const override;
+  DwarfDie GetDieForSignature(uint64_t signature, bool is_dwo) const override;
   const DebugNamesReader* GetDebugNames() const override;
   std::shared_ptr<const LineFileTable> GetLineFileTable(llvm::DWARFUnit* unit,
                                                         uint64_t file_index) const override;
@@ -82,12 +88,11 @@ class DwarfBinaryImpl final : public DwarfBinary {
   LineTable DecodeLineTable(llvm::DWARFUnit* unit) const;
 
   // Restrict lookup to the selected file sections. These lookups do not create a unit wrapper.
-  DwarfDie GetDieAtOffset(DwarfDieRef die_ref, bool is_dwo) const;
   DwarfDie GetUnitDieForRef(DwarfDieRef die_ref, bool is_dwo) const;
 
   // Returns a new DwarfUnit wrapper without adding it to the wrapper cache.
   // Returns null if the LLVM unit is null, belongs to another binary, or has no matching header.
-  fxl::RefPtr<DwarfUnit> CreateUncachedUnit(llvm::DWARFUnit* llvm_unit);
+  fxl::RefPtr<DwarfUnit> CreateUncachedUnit(DwarfDie die);
 
  private:
   friend class UnitContextCacheTest;
@@ -98,13 +103,15 @@ class DwarfBinaryImpl final : public DwarfBinary {
   };
 
   std::optional<IndexedUnit> GetUnitHeader(UnitIndex index) const;
+  void InitUnitLists();
   const UnitList& GetUnitList(bool is_dwo, UnitSection section) const;
   llvm::DWARFUnit* FindLLVMUnit(bool is_dwo, UnitSection section, uint64_t unit_offset) const;
 
   llvm::DWARFUnit* FindLLVMUnitForRef(DwarfDieRef die_ref, bool is_dwo) const;
 
-  // Call every time before using signature_to_die_ to make sure it's lazily populated.
+  // Call before using signature_to_die_ to make sure it's lazily populated.
   void EnsureSignatureMap() const;
+  DwarfDieRef FindSignature(uint64_t signature, bool is_dwo) const;
 
   const std::string name_;
   const std::string binary_name_;
@@ -140,9 +147,9 @@ class DwarfBinaryImpl final : public DwarfBinary {
   mutable std::atomic_flag unit_context_cache_active_;
 #endif
 
-  // Maps 64-bit type unit signatures to their DIE references. Computed lazily by
-  // EnsureSignatureMap() by scanning all type units in the normal and DWO unit lists.
-  mutable std::optional<std::map<uint64_t, DwarfDieRef>> signature_to_die_;
+  // Separate maps for normal and DWO units preserve the section that owns the reference.
+  using SignatureMap = std::map<uint64_t, DwarfDieRef>;
+  mutable std::optional<std::array<SignatureMap, 2>> signature_to_die_;
 
   // File tables of the line tables, computed lazily.
   mutable LineTableCache line_tables_;

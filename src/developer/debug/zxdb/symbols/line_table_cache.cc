@@ -15,7 +15,7 @@ std::shared_ptr<const LineFileTable> LineTableCache::GetFileTable(const DwarfSec
                                                                   llvm::DWARFUnit& unit,
                                                                   uint64_t file_index,
                                                                   const DwarfBinary* binary) {
-  std::optional<uint64_t> offset = GetUnitLineTableOffset(DwarfDie::FromUnitRoot(&unit));
+  std::optional<uint64_t> offset = GetUnitLineTableOffset(DwarfDie::FromUnitRoot(&unit), binary);
   if (!offset)
     return nullptr;
 
@@ -43,7 +43,7 @@ std::shared_ptr<const LineFileTable> LineTableCache::GetFileTable(const DwarfSec
 
 LineTable LineTableCache::DecodeLineTable(const DwarfSections& sections, llvm::DWARFUnit& unit,
                                           uint64_t first_code_address, const DwarfBinary* binary) {
-  std::optional<uint64_t> offset = GetUnitLineTableOffset(DwarfDie::FromUnitRoot(&unit));
+  std::optional<uint64_t> offset = GetUnitLineTableOffset(DwarfDie::FromUnitRoot(&unit), binary);
   if (!offset)
     return LineTable();
 

@@ -478,7 +478,7 @@ void UnitIndexer::AddEntryToIndex(uint32_t index_me, IndexNode* root) {
   // Move to the abstract origin if present to start walking the scopes. The abstract origin (if
   // any) encodes the lexical scope (see has_abstract_origin() declaration above).
   if (indexable_[cur].has_abstract_origin()) {
-    DwarfDie origin = GetAbstractOrigin(unit_.GetDieAtIndex(cur));
+    DwarfDie origin = GetAbstractOrigin(unit_.GetDieAtIndex(cur), *unit_.GetBinary());
     auto origin_index = unit_.GetIndexForDie(origin);
     if (!origin_index) {
       // The slow path handles an absent origin or an origin in another unit.
@@ -564,7 +564,7 @@ void UnitIndexer::AddStandaloneEntryToIndex(uint32_t index_me, IndexNode* index_
 
   // When walking the dependency path, the abstract origin (if any) encodes the lexical scope
   // (see has_abstract_origin() declaration above).
-  if (DwarfDie ao = GetAbstractOrigin(die))
+  if (DwarfDie ao = GetAbstractOrigin(die, *unit_.GetBinary()))
     die = ao;
 
   // Stores the reverse path to the node we're inserting. This includes all scopes like namespaces

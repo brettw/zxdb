@@ -16,6 +16,20 @@ DwarfDie DwarfDie::FromSubroutineAddress(llvm::DWARFUnit& unit, uint64_t relativ
 
 DwarfDie DwarfDie::unit_root() const { return FromUnitRoot(die_.getDwarfUnit()); }
 
+DwarfDie DwarfDie::GetUnitRelativeDie(uint64_t offset) const {
+  if (!is_valid())
+    return {};
+
+  auto* unit = die_.getDwarfUnit();
+  // Like LLDB, reject references outside the DIE data. Check before adding the offset so
+  // malformed values cannot wrap into the unit.
+  uint64_t unit_offset = unit->getOffset();
+  uint64_t unit_end = unit->getNextUnitOffset();
+  if (unit_end <= unit_offset || offset < unit->getHeaderSize() || offset >= unit_end - unit_offset)
+    return {};
+  return FromOffset(unit, unit_offset + offset);
+}
+
 const char* DwarfDie::short_name() const { return die_.getShortName(); }
 
 const char* DwarfDie::linkage_name() const { return die_.getLinkageName(); }

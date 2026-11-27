@@ -8,7 +8,7 @@
 #include <optional>
 #include <vector>
 
-#include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 
 namespace zxdb {
 
@@ -19,7 +19,7 @@ namespace zxdb {
 // 🭶🭶🭶🭶🭶🭶🭶🭶🭶🭶🭶🭶🭶
 //
 //   DwarfDie die;  // Passed in from somewhere.
-//   for (const DwarfDie& child : DwarfAbstractChildIterator(die)) {
+//   for (const DwarfDie& child : DwarfAbstractChildIterator(die, get_origin)) {
 //     DoSomething(child);
 //   }
 //
@@ -108,7 +108,7 @@ namespace zxdb {
 //
 //   0x000005ce:       NULL
 
-// Tests supply a DIE type with the same tree operations and an overload of GetAbstractOrigin().
+// Tests supply a DIE type with the same tree operations and a lookup for abstract origins.
 //
 // The constructor computes all the children, so the DIE doesn't need to outlive this object.
 template <class Die>
@@ -116,8 +116,10 @@ class DwarfAbstractChildIteratorBase {
  public:
   using const_iterator = typename std::vector<Die>::const_iterator;
 
-  // Takes the die whose children to iterate over.
-  explicit DwarfAbstractChildIteratorBase(const Die& die) : children_(Collect(die, kMaxDepth)) {}
+  // Takes the DIE whose children to iterate over and the lookup for its abstract origin.
+  template <typename OriginLookup>
+  DwarfAbstractChildIteratorBase(const Die& die, const OriginLookup& get_origin)
+      : children_(Collect(die, kMaxDepth, get_origin)) {}
 
   const_iterator begin() const { return children_.begin(); }
   const_iterator end() const { return children_.end(); }
@@ -128,31 +130,34 @@ class DwarfAbstractChildIteratorBase {
 
   // Returns the children of the DIE, merged with the children of its abstract origin. See "ORDER"
   // above.
-  static std::vector<Die> Collect(const Die& die, int depth);
+  template <typename OriginLookup>
+  static std::vector<Die> Collect(const Die& die, int depth, const OriginLookup& get_origin);
 
   std::vector<Die> children_;
 };
 
 template <class Die>
-std::vector<Die> DwarfAbstractChildIteratorBase<Die>::Collect(const Die& die, int depth) {
+template <typename OriginLookup>
+std::vector<Die> DwarfAbstractChildIteratorBase<Die>::Collect(const Die& die, int depth,
+                                                              const OriginLookup& get_origin) {
   std::vector<Die> own;
   if (!die.is_valid())
     return own;
   for (const auto& child : die.children())
     own.push_back(child);
 
-  Die origin = GetAbstractOrigin(die);
+  Die origin = get_origin(die);
   if (!origin.is_valid() || origin == die || depth == 0)
     return own;  // The common case.
 
   // The abstract origin can have its own abstract origin, so its children are merged first.
-  std::vector<Die> base = Collect(origin, depth - 1);
+  std::vector<Die> base = Collect(origin, depth - 1, get_origin);
 
   // The offsets of the DIEs that the children of this DIE reference.
   std::vector<std::optional<uint64_t>> own_origins;
   own_origins.reserve(own.size());
   for (const Die& child : own) {
-    Die child_origin = GetAbstractOrigin(child);
+    Die child_origin = get_origin(child);
     own_origins.push_back(child_origin.is_valid() ? std::optional<uint64_t>(child_origin.offset())
                                                   : std::nullopt);
   }

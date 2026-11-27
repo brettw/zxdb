@@ -53,6 +53,11 @@ class DwarfDie {
     return unit.getDIEIndex(die_);
   }
   DwarfDie unit_root() const;
+  bool unit_is_dwo() const { return die_.getDwarfUnit()->isDWOUnit(); }
+
+  // Resolves a unit-relative offset. The offset must point to a DIE in this unit.
+  DwarfDie GetUnitRelativeDie(uint64_t offset) const;
+
   DwarfDieRef ref() const {
     if (!is_valid())
       return {};

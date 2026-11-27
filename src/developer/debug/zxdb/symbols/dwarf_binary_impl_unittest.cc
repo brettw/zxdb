@@ -10,15 +10,21 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <gtest/gtest.h>
 
+#include "llvm/ADT/StringMap.h"
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "src/developer/debug/zxdb/symbols/compile_unit.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_decoder.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
@@ -230,6 +236,63 @@ TEST(DwarfBinaryImpl, DieLookupInSelectedSections) {
     EXPECT_FALSE(binary.GetUnitDieForRef(unit->GetDieRef(), !is_dwo));
     EXPECT_FALSE(binary.GetUnitDieForRef({}, is_dwo));
   }
+}
+
+TEST(DwarfBinaryImpl, SplitTypeSignatureWithOverlappingOffsets) {
+  constexpr uint64_t kSignature = 0;
+  constexpr uint64_t kTypeOffset = 25;  // The type unit header and its root abbreviation code.
+  constexpr AbbrevTable::AttributeSpec kName[] = {
+      {static_cast<uint64_t>(DwarfAttr::kName), static_cast<uint64_t>(DwarfForm::kString)}};
+  constexpr AbbrevTable::AttributeSpec kType[] = {
+      {static_cast<uint64_t>(DwarfAttr::kType), static_cast<uint64_t>(DwarfForm::kRefSig8)}};
+  std::vector<uint8_t> abbrev;
+  DwarfSectionBuilder abbrev_builder(abbrev, Endian::kLittle);
+  abbrev_builder.AbbrevDeclaration(1, static_cast<uint64_t>(DwarfTag::kTypeUnit), true);
+  abbrev_builder.AbbrevDeclaration(2, static_cast<uint64_t>(DwarfTag::kStructureType), false,
+                                   kName);
+  abbrev_builder.AbbrevDeclaration(3, static_cast<uint64_t>(DwarfTag::kCompileUnit), true);
+  abbrev_builder.AbbrevDeclaration(4, static_cast<uint64_t>(DwarfTag::kVariable), false, kType);
+  abbrev_builder.EndAbbrevTable();
+
+  auto write_type_unit = [](DwarfSectionBuilder& builder, uint8_t unit_type, uint64_t signature,
+                            std::string_view name) {
+    auto unit = builder.BeginUnit(
+        {.unit_type = unit_type, .type_signature = signature, .type_offset = kTypeOffset});
+    builder.Uleb(1);
+    builder.Uleb(2);
+    builder.CString(name);
+    builder.Uleb(0);
+    builder.EndUnit(unit);
+  };
+  std::vector<uint8_t> info, info_dwo;
+  DwarfSectionBuilder normal(info, Endian::kLittle);
+  DwarfSectionBuilder split(info_dwo, Endian::kLittle);
+  write_type_unit(normal, kUnitTypeType, 1, "NormalType");
+  write_type_unit(split, kUnitTypeSplitType, kSignature, "SplitType");
+  auto split_compile = split.BeginUnit({.unit_type = kUnitTypeSplitCompile, .dwo_id = 1});
+  split.Uleb(3);
+  split.Uleb(4);
+  split.Fixed(kSignature, 8);
+  split.Uleb(0);
+  split.EndUnit(split_compile);
+
+  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
+  buffers["debug_info"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(info));
+  buffers["debug_info.dwo"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(info_dwo));
+  buffers["debug_abbrev"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(abbrev));
+  buffers["debug_abbrev.dwo"] = llvm::MemoryBuffer::getMemBufferCopy(AsStringView(abbrev));
+  DwarfBinaryImpl binary(llvm::DWARFContext::create(buffers, 8, true));
+
+  auto unit = binary.GetUnitAtIndex(UnitIndex(true, 1));
+  ASSERT_TRUE(unit);
+  constexpr DwarfAttr kAttrs[] = {DwarfAttr::kType, DwarfAttr::kName};
+  DwarfDieDecoder decoder(binary, kAttrs);
+  ASSERT_TRUE(decoder.Decode(unit->GetUnitDie().first_child()));
+  DwarfDie type = decoder.GetReference(DwarfAttr::kType);
+  ASSERT_TRUE(type);
+  EXPECT_EQ(kTypeOffset, type.offset());
+  ASSERT_TRUE(decoder.Decode(type));
+  EXPECT_STREQ("SplitType", decoder.GetCString(DwarfAttr::kName).value_or(nullptr));
 }
 
 TEST(DwarfBinaryImpl, Dwarf4TypeUnits) {

@@ -201,7 +201,8 @@ class LineTableTestSections {
   void Finish(Endian endian, uint8_t address_size = 8);
 
   const llvm::DWARFContext& context() const { return *context_; }
-  llvm::DWARFContext& mutable_context() { return *context_; }
+  // Transfers the context to the caller. These section buffers must outlive it.
+  std::unique_ptr<llvm::DWARFContext> TakeContext() { return std::move(context_); }
 
   // Returns the unit in the order AddCompileUnit() added it.
   llvm::DWARFUnit* unit(size_t index) { return context_->getUnitAtIndex(index); }

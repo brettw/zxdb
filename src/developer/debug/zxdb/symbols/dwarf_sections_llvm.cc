@@ -52,6 +52,60 @@ UnitContextSource GetLinkedSkeleton(llvm::DWARFUnit& unit, UnitContextSource ske
   return skeleton.unit ? skeleton : UnitContextSource{unit.getLinkedUnit()};
 }
 
+UnitSection GetUnitSection(const llvm::DWARFUnit& unit) {
+  return unit.isTypeUnit() && unit.getVersion() < 5 ? UnitSection::kTypes : UnitSection::kInfo;
+}
+
+std::span<const uint8_t> GetInfoSection(const DwarfSections& sections, bool is_dwo,
+                                        UnitSection kind) {
+  if (kind == UnitSection::kTypes)
+    return is_dwo ? sections.types_dwo : sections.types;
+  return is_dwo ? sections.info_dwo : sections.info;
+}
+
+struct UnitSections {
+  UnitHeader header;
+  std::span<const uint8_t> info;
+  std::span<const uint8_t> abbrev;
+  std::optional<UnitContext::PackageContributions> package;
+};
+
+ErrOr<UnitSections> GetUnitSections(const DwarfSections& sections, llvm::DWARFUnit& unit,
+                                    UnitSection kind) {
+  bool is_dwo = unit.isDWOUnit();
+  auto info = GetInfoSection(sections, is_dwo, kind);
+  auto header = ReadUnitHeader(info, unit.getOffset(), sections.endian, kind);
+  if (!header)
+    return header.err();
+
+  UnitSections result{.header = header.value(),
+                      .info = info,
+                      .abbrev = is_dwo ? sections.abbrev_dwo : sections.abbrev,
+                      .package = std::nullopt};
+  if (const auto* entry = GetPackageEntry(unit, result.header)) {
+    auto contribution =
+        [entry](llvm::DWARFSectionKind section) -> std::optional<UnitContext::Contribution> {
+      if (const auto* part = entry->getContribution(section))
+        return UnitContext::Contribution{part->getOffset(), part->getLength()};
+      return std::nullopt;
+    };
+    // The package index gives the bounds of this unit's abbreviation contribution.
+    auto abbrev = contribution(llvm::DW_SECT_ABBREV);
+    if (!abbrev || abbrev->offset > result.abbrev.size() ||
+        abbrev->size > result.abbrev.size() - abbrev->offset) {
+      return Err("Invalid DWARF package abbreviation contribution.");
+    }
+    result.header.abbrev_offset = abbrev->offset;
+    result.abbrev = result.abbrev.first(abbrev->offset + abbrev->size);
+    result.package = UnitContext::PackageContributions{
+        contribution(llvm::DW_SECT_STR_OFFSETS),
+        contribution(llvm::DW_SECT_LOCLISTS),
+        contribution(llvm::DW_SECT_RNGLISTS),
+    };
+  }
+  return result;
+}
+
 }  // namespace
 
 DwarfSections GetDwarfSections(const llvm::DWARFObject& object) {
@@ -141,45 +195,61 @@ UnitContextResult UnitContextCache::GetOrParse(const DwarfSections& sections, ll
 
 void UnitContextCache::Clear() {
   units_ = decltype(units_)();
+  attributes_ = decltype(attributes_)();
   abbrevs_.clear();
+}
+
+const UnitAttributeData* UnitContextCache::GetAttributeData(const DwarfSections& sections,
+                                                            llvm::DWARFUnit& unit) {
+  auto found = attributes_.find(&unit);
+  if (found == attributes_.end())
+    found = attributes_.emplace(&unit, ParseAttributeData(sections, unit)).first;
+  return found->second ? &found->second.value() : nullptr;
+}
+
+ErrOr<UnitAttributeData> UnitContextCache::ParseAttributeData(const DwarfSections& sections,
+                                                              llvm::DWARFUnit& unit) {
+  auto data = GetUnitSections(sections, unit, GetUnitSection(unit));
+  if (!data)
+    return data.err();
+  const auto& header = data.value().header;
+  const auto& abbrevs = GetAbbrevs(unit.isDWOUnit(), data.value().abbrev, header.abbrev_offset);
+  if (!abbrevs)
+    return abbrevs.err();
+  return UnitAttributeData{
+      .info = data.value().info.subspan(header.die_offset(),
+                                        header.next_unit_offset() - header.die_offset()),
+      .first_die_offset = header.die_offset(),
+      .params = header.form_params(),
+      .endian = sections.endian,
+      .abbrevs = &abbrevs.value(),
+  };
+}
+
+const ErrOr<AbbrevTable>& UnitContextCache::GetAbbrevs(bool is_dwo,
+                                                       std::span<const uint8_t> section,
+                                                       uint64_t offset) {
+  AbbrevKey key(is_dwo, offset, section.size());
+  auto found = abbrevs_.find(key);
+  if (found != abbrevs_.end())
+    return found->second;
+  return abbrevs_.emplace(key, AbbrevTable::Parse(section, offset)).first->second;
 }
 
 UnitContextResult UnitContextCache::Parse(const DwarfSections& sections, llvm::DWARFUnit& unit,
                                           UnitContextSource skeleton, UnitContextCache* cache) {
   bool is_dwo = unit.isDWOUnit();
-  UnitSection kind =
-      unit.isTypeUnit() && unit.getVersion() < 5 ? UnitSection::kTypes : UnitSection::kInfo;
-  auto info = is_dwo ? sections.info_dwo : sections.info;
-  if (kind == UnitSection::kTypes)
-    info = is_dwo ? sections.types_dwo : sections.types;
-  auto header = ReadUnitHeader(info, unit.getOffset(), sections.endian, kind);
-  if (header.has_error())
-    return header.err();
+  UnitSection kind = GetUnitSection(unit);
+  auto data = GetUnitSections(sections, unit, kind);
+  if (!data)
+    return data.err();
 
   DwarfSections unit_sections = sections;
+  if (is_dwo)
+    unit_sections.abbrev_dwo = data.value().abbrev;
   UnitContext::Options options;
   options.is_dwo = is_dwo;
-  if (const auto* entry = GetPackageEntry(unit, header.value())) {
-    auto contribution =
-        [entry](llvm::DWARFSectionKind section) -> std::optional<UnitContext::Contribution> {
-      if (const auto* part = entry->getContribution(section))
-        return UnitContext::Contribution{part->getOffset(), part->getLength()};
-      return std::nullopt;
-    };
-    // The package index gives the bounds of this unit's abbreviation contribution.
-    auto abbrev = contribution(llvm::DW_SECT_ABBREV);
-    if (!abbrev || abbrev->offset > sections.abbrev_dwo.size() ||
-        abbrev->size > sections.abbrev_dwo.size() - abbrev->offset) {
-      return Err("Invalid DWARF package abbreviation contribution.");
-    }
-    header.value().abbrev_offset = abbrev->offset;
-    unit_sections.abbrev_dwo = sections.abbrev_dwo.first(abbrev->offset + abbrev->size);
-    options.package = UnitContext::PackageContributions{
-        contribution(llvm::DW_SECT_STR_OFFSETS),
-        contribution(llvm::DW_SECT_LOCLISTS),
-        contribution(llvm::DW_SECT_RNGLISTS),
-    };
-  }
+  options.package = data.value().package;
 
   std::shared_ptr<const UnitContext> address_context;
   if (is_dwo) {
@@ -211,14 +281,11 @@ UnitContextResult UnitContextCache::Parse(const DwarfSections& sections, llvm::D
   if (cache) {
     lookup_abbrevs = [cache, is_dwo](std::span<const uint8_t> section,
                                      uint64_t offset) -> const ErrOr<AbbrevTable>& {
-      AbbrevKey key(is_dwo, offset, section.size());
-      auto found = cache->abbrevs_.find(key);
-      if (found != cache->abbrevs_.end())
-        return found->second;
-      return cache->abbrevs_.emplace(key, AbbrevTable::Parse(section, offset)).first->second;
+      return cache->GetAbbrevs(is_dwo, section, offset);
     };
   }
-  auto context = UnitContext::Parse(unit_sections, header.value(), kind, options, lookup_abbrevs);
+  auto context =
+      UnitContext::Parse(unit_sections, data.value().header, kind, options, lookup_abbrevs);
   if (context.has_error())
     return context.err();
   return std::make_shared<const UnitContext>(context.take_value());

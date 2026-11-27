@@ -206,6 +206,11 @@ DwarfBinaryImpl::DwarfBinaryImpl(const std::string& name, const std::string& bin
                                  const std::string& build_id)
     : name_(name), binary_name_(binary_name), build_id_(build_id), weak_factory_(this) {}
 
+DwarfBinaryImpl::DwarfBinaryImpl(std::unique_ptr<llvm::DWARFContext> context)
+    : context_(std::move(context)), sections_(GetDwarfSections(*context_)), weak_factory_(this) {
+  InitUnitLists();
+}
+
 DwarfBinaryImpl::~DwarfBinaryImpl() {}
 
 fxl::WeakPtr<DwarfBinaryImpl> DwarfBinaryImpl::GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
@@ -309,12 +314,15 @@ Err DwarfBinaryImpl::Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
   } else {
     debug_names_ = DebugNamesReader::Parse(sections_);
   }
+  InitUnitLists();
+  return Err();
+}
+
+void DwarfBinaryImpl::InitUnitLists() {
   info_units_ = UnitList::Parse(sections_.info, sections_.endian, UnitSection::kInfo);
   types_units_ = UnitList::Parse(sections_.types, sections_.endian, UnitSection::kTypes);
   info_dwo_units_ = UnitList::Parse(sections_.info_dwo, sections_.endian, UnitSection::kInfo);
   types_dwo_units_ = UnitList::Parse(sections_.types_dwo, sections_.endian, UnitSection::kTypes);
-
-  return Err();
 }
 
 llvm::object::ObjectFile* DwarfBinaryImpl::GetLLVMObjectFile() {
@@ -409,7 +417,8 @@ fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::UnitForRelativeAddress(uint64_t relative
   return GetUnitAtIndex(UnitIndex(false, *index));
 }
 
-fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::CreateUncachedUnit(llvm::DWARFUnit* llvm_unit) {
+fxl::RefPtr<DwarfUnit> DwarfBinaryImpl::CreateUncachedUnit(DwarfDie die) {
+  auto* llvm_unit = die.llvm_unit();
   if (!llvm_unit || &llvm_unit->getContext() != context_.get())
     return nullptr;
 
@@ -478,8 +487,8 @@ void DwarfBinaryImpl::EnsureSignatureMap() const {
   if (signature_to_die_.has_value())
     return;
 
-  auto& map = signature_to_die_.emplace();
-  auto add_units = [&map](const UnitList& units) {
+  auto& maps = signature_to_die_.emplace();
+  auto add_units = [](SignatureMap& map, const UnitList& units) {
     for (const UnitHeader& unit : units) {
       if (unit.type_signature) {
         map[*unit.type_signature] =
@@ -488,18 +497,29 @@ void DwarfBinaryImpl::EnsureSignatureMap() const {
     }
   };
 
-  add_units(info_units_);
-  add_units(types_units_);
-  add_units(info_dwo_units_);
-  add_units(types_dwo_units_);
+  add_units(maps[false], info_units_);
+  add_units(maps[false], types_units_);
+  add_units(maps[true], info_dwo_units_);
+  add_units(maps[true], types_dwo_units_);
+}
+
+DwarfDieRef DwarfBinaryImpl::FindSignature(uint64_t signature, bool is_dwo) const {
+  EnsureSignatureMap();
+  const auto& map = (*signature_to_die_)[is_dwo];
+  auto found = map.find(signature);
+  return found == map.end() ? DwarfDieRef() : found->second;
 }
 
 DwarfDieRef DwarfBinaryImpl::GetDieRefForSignature(uint64_t signature) const {
-  EnsureSignatureMap();
-  auto found = signature_to_die_->find(signature);
-  if (found == signature_to_die_->end())
-    return DwarfDieRef();
-  return found->second;
+  if (DwarfDieRef ref = FindSignature(signature, true))
+    return ref;
+  return FindSignature(signature, false);
+}
+
+DwarfDie DwarfBinaryImpl::GetDieForSignature(uint64_t signature, bool is_dwo) const {
+  if (DwarfDieRef ref = FindSignature(signature, is_dwo))
+    return GetDieAtOffset(ref, is_dwo);
+  return GetDieAtOffset(FindSignature(signature, !is_dwo), !is_dwo);
 }
 
 const DebugNamesReader* DwarfBinaryImpl::GetDebugNames() const {
@@ -515,6 +535,16 @@ UnitContextResult DwarfBinaryImpl::GetUnitContext(llvm::DWARFUnit& unit,
   auto access = CheckUnitContextCacheAccess(unit_context_cache_active_);
 #endif
   return unit_contexts_.GetOrParse(sections_, unit, skeleton);
+}
+
+const UnitAttributeData* DwarfBinaryImpl::GetUnitAttributeData(DwarfDie die) const {
+  auto* unit = die.llvm_unit();
+  if (!unit || &unit->getContext() != context_.get())
+    return nullptr;
+#ifndef NDEBUG
+  auto access = CheckUnitContextCacheAccess(unit_context_cache_active_);
+#endif
+  return unit_contexts_.GetAttributeData(sections_, *unit);
 }
 
 std::shared_ptr<const LineFileTable> DwarfBinaryImpl::GetLineFileTable(llvm::DWARFUnit* unit,

@@ -77,8 +77,9 @@ Public headers expose these symbol classes, factories, and evaluators:
   can release the unit's DIE array after indexing.
 - `DwarfDieDecoder::Decode()` takes a `DwarfDie`. `GetValue()` returns an
   `AttributeValue` with a zxdb `FormValue`, the `DwarfDie` that supplied it,
-  and that DIE's unit. The decoder converts the values that LLVM reads and
-  preserves their relocations.
+  and the form parameters and byte order of that DIE's unit. LLVM supplies
+  the DIE offset. The decoder uses the unit's abbreviation table and reads
+  the attributes within that unit's bounds.
 
 - Line tables: `zxdb::LineTable` (`line_table.h`) is concrete, immutable data
   made of `zxdb::LineRow` rows (`line_row.h`) and a `zxdb::LineFileTable`
@@ -136,9 +137,12 @@ Callers and implementations must preserve these invariants:
   put info units before types units for both normal and DWO sections. For DIE
   decoding, it finds the LLVM unit in the same section at the exact unit
   offset. A raw DIE lookup does not create a unit wrapper.
-- When resolving a DWARF type signature whose target `DwarfDieRef` is invalid
-  (`!sig_ref.is_valid()`), return an empty `fxl::RefPtr<Symbol>()` instead of
-  crashing with `FX_CHECK`.
+- When a type signature has no target DIE, `DwarfSymbolFactory` returns an
+  empty `Symbol`.
+- A unit-relative DIE reference must point into the unit's DIE data. A
+  section-relative reference uses the source's info section. Type signature
+  lookups prefer the source's normal or split section set. If that section set
+  has no matching signature, the lookup searches the other set in the binary.
 - `DwarfBinaryImpl` parses `.debug_names` at load time. The reader
   uses immutable section bytes, parsed abbreviations, and any offset
   relocations that LLVM supplies for the name index tables.
@@ -152,22 +156,22 @@ Callers and implementations must preserve these invariants:
   normal DIE resolution can still check the entry.
 - All file names from line tables come from `ResolveLineFileName()`, so names
   from line rows, `DW_AT_decl_file`, and the file index compare equal.
-- The line table, location list, range list, aranges, and name index parsers
-  read section bytes from `DwarfSections`.
+- The DIE attribute, line table, location list, range list, aranges, and
+  name index parsers read section bytes from `DwarfSections`.
   `dwarf_sections_llvm.cc` maps the LLVM sections to these views. The byte
   readers expect any required ELF relocations to be applied to the bytes.
   `UnitContext` reads root DIE metadata for string offsets, indexed addresses,
-  location lists, range lists, and compilation directories. LLVM supplies the
-  DIE tree and the line table offset.
+  location lists, range lists, compilation directories, and line table
+  offsets. LLVM supplies the DIE tree and package contribution offsets.
 - Each binary caches immutable unit contexts by LLVM unit identity. A split
   unit also uses its skeleton identity when it has one. The split unit gets
   the skeleton context from the skeleton binary's cache when possible. The
   skeleton binary keeps its section bytes alive for the split binary.
 - The binary shares parsed abbreviation tables by section kind, offset, and
-  contribution end. It keeps parse errors in both caches because the section
-  bytes are immutable. A foreign LLVM context can use the byte reader with
-  its own section views. Callers supply the binary explicitly to the line and
-  location readers.
+  contribution end. It caches each unit's DIE byte span and keeps parse errors
+  because the section bytes are immutable. A foreign LLVM context can use
+  the byte reader with its own section views. Callers supply the binary
+  explicitly to the DIE, line, and location readers.
 - Only the thread that owns the LLVM context uses the unit context and
   abbreviation caches. A DWO index worker owns its binary until it gives the
   binary to the module. Source file workers use section views prepared before
@@ -217,9 +221,9 @@ Using `zxdb/symbols` produces these disk, cache, and IPC side effects:
   `DwarfBinary::GetLineFileTable()` usually parses only the line table header.
   Both share the file tables in the binary's `LineTableCache`.
   `DwarfBinary::ClearLLVMCache()` clears the cache.
-- `DwarfBinary::ClearLLVMCache()` also clears the unit context and abbreviation
-  caches. A previously returned context stays valid while its section bytes
-  stay alive.
+- `DwarfBinary::ClearLLVMCache()` also clears the unit context, attribute
+  metadata, and abbreviation caches. A previously returned context stays valid
+  while its section bytes stay alive.
 - `Index::CreateIndex()` starts worker threads for the source file index when
   the binary has 256 KB or more of line tables: one, plus one for each 2 MB,
   up to six.

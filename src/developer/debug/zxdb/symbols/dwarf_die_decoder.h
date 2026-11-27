@@ -19,11 +19,6 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/lib/fxl/macros.h"
 
-namespace llvm {
-class DWARFUnit;
-class DWARFContext;
-}  // namespace llvm
-
 namespace zxdb {
 
 class DwarfBinary;
@@ -42,8 +37,8 @@ class DwarfBinary;
 //   std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
 //   DwarfDie type = decoder.GetReference(DwarfAttr::kType);
 //
-// The decoder doesn't allocate memory. It keeps the values in a fixed array, so a table can have
-// at most kMaxAttributes attributes.
+// The decoder keeps values in a fixed array, so a table can have at most kMaxAttributes
+// attributes. The binary caches unit metadata and abbreviation tables.
 //
 // INHERITED ATTRIBUTES
 //
@@ -77,12 +72,13 @@ class DwarfDieDecoder {
   // unit than the decoded DIE. Use it, for example, as the source of a DWARF expression, so the
   // expression uses the address table of the right unit.
   //
-  // The unit is the unit of that DIE. Use it to resolve the form's offsets and indices.
-  // The form can borrow bytes from the binary.
+  // The form can borrow bytes from the binary. Use the source DIE's unit to resolve offsets
+  // and indices.
   struct AttributeValue {
-    llvm::DWARFUnit* unit = nullptr;  // Null when the attribute isn't present.
     DwarfDie die;
     FormValue form{};
+    FormParams params;
+    Endian endian = Endian::kLittle;
   };
 
   // DW_AT_high_pc is special: If it is of class "address", it's an address, and if it's of class
@@ -96,15 +92,13 @@ class DwarfDieDecoder {
     uint64_t value = 0;
   };
 
-  // The context or binary, and the attribute table, must outlive this class. A static constexpr
-  // array is a good attribute table. Prefer the DwarfBinary version when possible.
+  // The binary and attribute table must outlive this class. A static constexpr array is a good
+  // attribute table.
   //
   // The address table unit, if given, gives the address table for the DW_FORM_addrx forms instead
   // of the unit of each value. For a .dwo file, this is the skeleton unit in the main binary,
   // because a .dwo unit has no address table of its own. It must also outlive this class.
-  DwarfDieDecoder(llvm::DWARFContext* context, std::span<const DwarfAttr> attributes,
-                  llvm::DWARFUnit* address_table_unit = nullptr);
-  DwarfDieDecoder(DwarfBinary& binary, std::span<const DwarfAttr> attributes,
+  DwarfDieDecoder(const DwarfBinary& binary, std::span<const DwarfAttr> attributes,
                   UnitContextSource address_table = {});
   ~DwarfDieDecoder();
 
@@ -132,6 +126,9 @@ class DwarfDieDecoder {
   // Returns the raw value, or null when the attribute isn't present. Use this for attributes that
   // can have more than one encoding.
   const AttributeValue* GetValue(DwarfAttr attribute) const;
+
+  // Returns the unit context for a decoded attribute, including the skeleton for split DWARF.
+  UnitContextResult GetAttributeUnitContext(const AttributeValue& value) const;
 
   // Returns the value of a flag. Constants are also accepted: zero is false.
   std::optional<bool> GetBool(DwarfAttr attribute) const;
@@ -204,7 +201,7 @@ class DwarfDieDecoder {
 
  private:
   // Returns the index of the attribute in attributes_, or attributes_.size() if it isn't there.
-  size_t FindIndex(DwarfAttr attribute) const;
+  size_t FindIndex(uint64_t attribute) const;
 
   // The DIEs that one DIE references through the links that Decode() follows.
   struct Links {
@@ -220,13 +217,12 @@ class DwarfDieDecoder {
   bool DecodeLinkedDies(DwarfDie first, const Links& first_links);
 
   // Decodes a cross-DIE reference. Return value will be !is_valid() on failure.
-  DwarfDie DecodeReference(llvm::DWARFUnit* unit, const FormValue& form) const;
+  DwarfDie DecodeReference(DwarfDie die, const FormValue& form) const;
 
   // Decodes a value of the address class. See GetAddress().
   std::optional<uint64_t> DecodeAddress(const AttributeValue& value) const;
 
-  llvm::DWARFContext* context_;
-  const DwarfBinary* binary_ = nullptr;
+  const DwarfBinary& binary_;
   UnitContextSource address_table_;
 
   std::span<const DwarfAttr> attributes_;
@@ -247,7 +243,7 @@ class DwarfDieDecoder {
 // Returns the DIE that the DW_AT_abstract_origin attribute of the given DIE references. This
 // doesn't follow the abstract origin of that DIE. Returns an invalid DIE if the DIE has no abstract
 // origin or the reference is invalid.
-DwarfDie GetAbstractOrigin(DwarfDie die);
+DwarfDie GetAbstractOrigin(DwarfDie die, const DwarfBinary& binary);
 
 }  // namespace zxdb
 

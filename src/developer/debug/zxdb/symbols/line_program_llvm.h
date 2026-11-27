@@ -23,7 +23,8 @@ LineStringSections GetLineStringSections(const DwarfSections& sections, llvm::DW
                                          const DwarfBinary* binary);
 
 // Includes the contribution offset for split DWARF. Offset 0 is valid; nullopt means no table.
-std::optional<uint64_t> GetUnitLineTableOffset(DwarfDie unit_die);
+std::optional<uint64_t> GetUnitLineTableOffset(DwarfDie unit_die,
+                                               const DwarfBinary* binary = nullptr);
 
 // Test helper for a standalone LLVM context. Reads the unit's line table offset.
 ErrOr<LineProgram> ParseLineProgramForUnit(const DwarfSections& sections, llvm::DWARFUnit& unit);

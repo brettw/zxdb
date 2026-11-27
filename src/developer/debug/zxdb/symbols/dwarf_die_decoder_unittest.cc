@@ -12,7 +12,9 @@
 #include "llvm/DebugInfo/DWARF/DWARFContext.h"
 #include "llvm/DebugInfo/DWARF/DWARFUnit.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_section_builder.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_binary_impl.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_form.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_op.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
@@ -21,6 +23,11 @@
 namespace zxdb {
 
 namespace {
+
+std::unique_ptr<llvm::MemoryBuffer> MakeBuffer(std::span<const uint8_t> data,
+                                               const char* name = "") {
+  return llvm::MemoryBuffer::getMemBufferCopy(llvm::StringRef(AsStringView(data)), name);
+}
 
 // Abbreviation codes of the test unit.
 enum Abbrev : uint8_t {
@@ -89,19 +96,19 @@ class DwarfDieDecoderTest : public testing::Test {
     buffers_["debug_info"] = MakeBuffer(info_, "debug_info");
     buffers_["debug_abbrev"] = MakeBuffer(abbrev_, "debug_abbrev");
     buffers_["debug_addr"] = MakeBuffer(addr_, "debug_addr");
-    context_ = llvm::DWARFContext::create(buffers_, 8, true);
+    binary_.emplace(llvm::DWARFContext::create(buffers_, 8, true));
   }
 
-  llvm::DWARFContext* context() { return context_.get(); }
+  DwarfBinaryImpl& binary() { return *binary_; }
 
   // Returns the DIE at the offset in the unit with the given index.
   DwarfDie GetDieInUnit(unsigned unit_index, uint64_t offset) {
-    return DwarfDie::FromOffset(context_->getUnitAtIndex(unit_index), offset);
+    return DwarfDie::FromOffset(binary().GetLLVMContext()->getUnitAtIndex(unit_index), offset);
   }
 
   // Reading the root also initializes the LLVM unit's address table base.
   DwarfDie GetUnitDie(unsigned unit_index) {
-    return DwarfDie::FromUnitRoot(context_->getUnitAtIndex(unit_index));
+    return DwarfDie::FromUnitRoot(binary().GetLLVMContext()->getUnitAtIndex(unit_index));
   }
 
   DwarfDie GetDie(uint64_t offset) { return GetDieInUnit(0, offset); }
@@ -133,14 +140,9 @@ class DwarfDieDecoderTest : public testing::Test {
   static constexpr unsigned kSkeletonUnit = 1;
   static constexpr unsigned kDwoUnit = 2;
   static constexpr unsigned kCorruptUnit = 3;
+  static constexpr unsigned kAfterCorruptUnit = 4;
 
  private:
-  static std::unique_ptr<llvm::MemoryBuffer> MakeBuffer(const std::vector<uint8_t>& data,
-                                                        const char* name) {
-    return llvm::MemoryBuffer::getMemBufferCopy(
-        llvm::StringRef(reinterpret_cast<const char*>(data.data()), data.size()), name);
-  }
-
   static void AppendString(std::vector<uint8_t>& out, const std::string& str) {
     out.insert(out.end(), str.begin(), str.end());
     out.push_back(0);
@@ -419,17 +421,23 @@ class DwarfDieDecoderTest : public testing::Test {
   }
 
   void WriteCorruptUnit() {
-    // This unit is last, so the block length is also past the end of the section. LLVM reads the
-    // DIE because it doesn't check block lengths.
+    // The block has one byte in this unit and overlaps the next unit's header. LLVM keeps the DIE
+    // because it doesn't bound the block payload.
     size_t corrupt = BeginUnit();
     AppendUleb(info_, kCompileUnitAbbrev);
     AppendString(info_, "corrupt");
     corrupt_offset_ = NextOffset();
     AppendUleb(info_, kCorruptAbbrev);
     AppendString(info_, "var");
-    info_.push_back(0xff);  // DW_AT_location length, past the end.
+    info_.push_back(2);  // DW_AT_location length.
     info_.push_back(DwarfOp::kReg0);
     EndUnit(corrupt);
+
+    size_t after = BeginUnit();
+    AppendUleb(info_, kCompileUnitAbbrev);
+    AppendString(info_, "after corrupt");
+    info_.push_back(0);  // End of the unit children.
+    EndUnit(after);
   }
 
   std::vector<uint8_t> abbrev_;
@@ -459,7 +467,7 @@ class DwarfDieDecoderTest : public testing::Test {
 
   // The context references these buffers, so they must outlive it.
   llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers_;
-  std::unique_ptr<llvm::DWARFContext> context_;
+  std::optional<DwarfBinaryImpl> binary_;
 };
 
 }  // namespace
@@ -496,27 +504,21 @@ TEST(DwarfDieDecoder, RefAddrInDwo) {
       3, [&info, target_offset]() { AppendInteger(info, target_offset, 4, Endian::kLittle); });
 
   llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
-  auto make_buffer = [](const std::vector<uint8_t>& data, const char* name) {
-    return llvm::MemoryBuffer::getMemBufferCopy(
-        llvm::StringRef(reinterpret_cast<const char*>(data.data()), data.size()), name);
-  };
-  buffers["debug_info.dwo"] = make_buffer(info, "debug_info.dwo");
-  buffers["debug_abbrev.dwo"] = make_buffer(abbrev, "debug_abbrev.dwo");
-  std::unique_ptr<llvm::DWARFContext> context = llvm::DWARFContext::create(buffers, 8, true);
+  buffers["debug_info.dwo"] = MakeBuffer(info, "debug_info.dwo");
+  buffers["debug_abbrev.dwo"] = MakeBuffer(abbrev, "debug_abbrev.dwo");
+  DwarfBinaryImpl binary(llvm::DWARFContext::create(buffers, 8, true));
 
-  const llvm::DWARFUnitVector& units = context->getDWOUnitsVector();
-  ASSERT_EQ(2u, units.size());
-  ASSERT_TRUE(units[1]->isDWOUnit());
-  DwarfDie source = DwarfDie::FromOffset(units[1].get(), source_offset);
+  ASSERT_EQ(2u, binary.GetDWOUnitCount());
+  DwarfDie source = binary.GetDieAtOffset(DwarfDieRef::Main(source_offset), true);
   ASSERT_TRUE(source);
 
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kType};
-  DwarfDieDecoder decoder(context.get(), kAttrs);
+  DwarfDieDecoder decoder(binary, kAttrs);
   ASSERT_TRUE(decoder.Decode(source));
   DwarfDie target = decoder.GetReference(DwarfAttr::kType);
   ASSERT_TRUE(target);
+  EXPECT_TRUE(target.unit_is_dwo());
   EXPECT_EQ(target_offset, target.offset());
-  EXPECT_EQ(DwarfDie::FromOffset(units[0].get(), target_offset), target);
 }
 
 TEST(DwarfDieDecoder, SupplementaryStrings) {
@@ -531,10 +533,6 @@ TEST(DwarfDieDecoder, SupplementaryStrings) {
   info_builder.Offset(offset, 4);
   info_builder.EndUnit(unit);
 
-  auto make_buffer = [](std::span<const uint8_t> data) {
-    return llvm::MemoryBuffer::getMemBufferCopy(
-        llvm::StringRef(reinterpret_cast<const char*>(data.data()), data.size()));
-  };
   for (DwarfForm form : {DwarfForm::kStrpSup, DwarfForm::kGnuStrpAlt}) {
     SCOPED_TRACE(DwarfFormToString(form));
     std::vector<uint8_t> abbrev;
@@ -546,24 +544,73 @@ TEST(DwarfDieDecoder, SupplementaryStrings) {
     abbrev_builder.EndAbbrevTable();
 
     llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
-    buffers["debug_abbrev"] = make_buffer(abbrev);
-    buffers["debug_info"] = make_buffer(info);
-    buffers["debug_str"] = make_buffer(strings.bytes());
-    auto context = llvm::DWARFContext::create(buffers, 8, true);
+    buffers["debug_abbrev"] = MakeBuffer(abbrev);
+    buffers["debug_info"] = MakeBuffer(info);
+    buffers["debug_str"] = MakeBuffer(strings.bytes());
+    DwarfBinaryImpl binary(llvm::DWARFContext::create(buffers, 8, true));
 
     static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName};
-    DwarfDieDecoder decoder(context.get(), kAttrs);
-    ASSERT_TRUE(decoder.Decode(DwarfDie::FromUnitRoot(context->getUnitAtIndex(0))));
+    DwarfDieDecoder decoder(binary, kAttrs);
+    ASSERT_TRUE(decoder.Decode(binary.GetUnitAtIndex(UnitIndex(false, 0))->GetUnitDie()));
     ASSERT_TRUE(decoder.Has(DwarfAttr::kName));
     EXPECT_EQ(std::nullopt, decoder.GetCString(DwarfAttr::kName));
   }
+}
+
+TEST(DwarfDieDecoder, IndirectConstantAndFullWidthAttribute) {
+  std::vector<uint8_t> info, abbrev;
+  DwarfSectionBuilder abbrev_builder(abbrev, Endian::kLittle);
+  constexpr uint64_t kName = static_cast<uint64_t>(DwarfAttr::kName);
+  constexpr uint64_t kString = static_cast<uint64_t>(DwarfForm::kString);
+  const AbbrevTable::AttributeSpec attrs[] = {
+      {(uint64_t{1} << 32) | kName, kString, std::nullopt},
+      {static_cast<uint64_t>(DwarfAttr::kConstValue), static_cast<uint64_t>(DwarfForm::kIndirect),
+       std::nullopt},
+      {kName, kString, std::nullopt},
+  };
+  abbrev_builder.AbbrevDeclaration(1, static_cast<uint64_t>(DwarfTag::kCompileUnit), false, attrs);
+  abbrev_builder.EndAbbrevTable();
+
+  DwarfSectionBuilder info_builder(info, Endian::kLittle);
+  auto unit = info_builder.BeginUnit({});
+  uint64_t root_offset = info.size();
+  info_builder.Uleb(1);
+  info_builder.CString("unknown attribute");
+  // The DWARF 5 errata put the SLEB128 in the DIE for an indirect implicit constant.
+  info_builder.Uleb(static_cast<uint64_t>(DwarfForm::kImplicitConst));
+  info_builder.Sleb(-4);
+  info_builder.CString("name");
+  info_builder.EndUnit(unit);
+
+  llvm::StringMap<std::unique_ptr<llvm::MemoryBuffer>> buffers;
+  buffers["debug_abbrev"] = MakeBuffer(abbrev);
+  buffers["debug_info"] = MakeBuffer(info);
+  DwarfBinaryImpl binary(llvm::DWARFContext::create(buffers, 8, true));
+
+  auto root = [&] { return binary.GetUnitDieForRef(DwarfDieRef::Main(root_offset), false); };
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName, DwarfAttr::kConstValue};
+  DwarfDieDecoder decoder(binary, kAttrs);
+  ASSERT_TRUE(decoder.Decode(root()));
+  EXPECT_EQ(-4, decoder.GetSignedConstant(DwarfAttr::kConstValue));
+  EXPECT_STREQ("name", decoder.GetCString(DwarfAttr::kName).value_or(""));
+
+  // Skipping the constant also consumes the SLEB128. The high attribute bits still matter.
+  static constexpr DwarfAttr kNameOnly[] = {DwarfAttr::kName};
+  DwarfDieDecoder name_decoder(binary, kNameOnly);
+  ASSERT_TRUE(name_decoder.Decode(root()));
+  EXPECT_STREQ("name", name_decoder.GetCString(DwarfAttr::kName).value_or(""));
+
+  // The decoder can reuse a newly acquired DIE after the binary drops its caches.
+  binary.ClearLLVMCache();
+  ASSERT_TRUE(decoder.Decode(root()));
+  EXPECT_EQ(-4, decoder.GetSignedConstant(DwarfAttr::kConstValue));
 }
 
 TEST_F(DwarfDieDecoderTest, AbstractOrigin) {
   static constexpr DwarfAttr kAttrs[] = {
       DwarfAttr::kName,  DwarfAttr::kDeclLine, DwarfAttr::kExternal,      DwarfAttr::kByteSize,
       DwarfAttr::kLowPc, DwarfAttr::kHighPc,   DwarfAttr::kAbstractOrigin};
-  DwarfDieDecoder decoder(context(), kAttrs);
+  DwarfDieDecoder decoder(binary(), kAttrs);
   ASSERT_TRUE(decoder.Decode(GetDie(concrete_offset())));
 
   // The concrete DIE gives these values.
@@ -603,7 +650,7 @@ TEST_F(DwarfDieDecoderTest, Specification) {
                                          DwarfAttr::kDeclaration,    DwarfAttr::kSibling,
                                          DwarfAttr::kExternal,       DwarfAttr::kLowPc,
                                          DwarfAttr::kAbstractOrigin, DwarfAttr::kSpecification};
-  DwarfDieDecoder decoder(context(), kAttrs);
+  DwarfDieDecoder decoder(binary(), kAttrs);
 
   // concrete instance -> (abstract origin) abstract instance -> (specification) declaration.
   ASSERT_TRUE(decoder.Decode(GetDie(spec_concrete_offset())));
@@ -649,7 +696,7 @@ TEST_F(DwarfDieDecoderTest, Specification) {
 TEST_F(DwarfDieDecoderTest, DontFollowSpecifications) {
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName, DwarfAttr::kDeclLine,
                                          DwarfAttr::kSpecification};
-  DwarfDieDecoder decoder(context(), kAttrs);
+  DwarfDieDecoder decoder(binary(), kAttrs);
   decoder.set_follow_specifications(false);
   ASSERT_TRUE(decoder.Decode(GetDie(spec_concrete_offset())));
 
@@ -663,7 +710,7 @@ TEST_F(DwarfDieDecoderTest, DontFollowSpecifications) {
 TEST_F(DwarfDieDecoderTest, AbstractOriginBeforeSpecification) {
   // A DIE with both links takes values from the abstract origin first.
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName, DwarfAttr::kDeclLine};
-  DwarfDieDecoder decoder(context(), kAttrs);
+  DwarfDieDecoder decoder(binary(), kAttrs);
   ASSERT_TRUE(decoder.Decode(GetDie(both_links_offset())));
   EXPECT_STREQ("origin_name", decoder.GetCString(DwarfAttr::kName).value_or(""));
   EXPECT_EQ(50u, decoder.GetUnsignedConstant(DwarfAttr::kDeclLine));
@@ -676,7 +723,7 @@ TEST_F(DwarfDieDecoderTest, AbstractOriginBeforeSpecification) {
 TEST_F(DwarfDieDecoderTest, CycleThroughBothLinks) {
   // cycle_a -> (specification) cycle_b -> (abstract origin) cycle_a.
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName, DwarfAttr::kDeclLine};
-  DwarfDieDecoder decoder(context(), kAttrs);
+  DwarfDieDecoder decoder(binary(), kAttrs);
   ASSERT_TRUE(decoder.Decode(GetDie(cycle_a_offset())));
   EXPECT_STREQ("cycle_a", decoder.GetCString(DwarfAttr::kName).value_or(""));
   EXPECT_EQ(70u, decoder.GetUnsignedConstant(DwarfAttr::kDeclLine));
@@ -686,7 +733,7 @@ TEST_F(DwarfDieDecoderTest, CycleThroughBothLinks) {
 TEST_F(DwarfDieDecoderTest, DontFollowAbstractOrigins) {
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName, DwarfAttr::kDeclLine,
                                          DwarfAttr::kAbstractOrigin};
-  DwarfDieDecoder decoder(context(), kAttrs);
+  DwarfDieDecoder decoder(binary(), kAttrs);
   decoder.set_follow_abstract_origins(false);
   ASSERT_TRUE(decoder.Decode(GetDie(concrete_offset())));
 
@@ -705,20 +752,20 @@ TEST_F(DwarfDieDecoderTest, DontFollowAbstractOrigins) {
 
 TEST_F(DwarfDieDecoderTest, GetAbstractOrigin) {
   // Only the first link in the chain is followed.
-  EXPECT_EQ(GetDie(origin_offset()), GetAbstractOrigin(GetDie(concrete_offset())));
-  EXPECT_EQ(GetDie(cycle_offset()), GetAbstractOrigin(GetDie(cycle_offset())));
+  EXPECT_EQ(GetDie(origin_offset()), GetAbstractOrigin(GetDie(concrete_offset()), binary()));
+  EXPECT_EQ(GetDie(cycle_offset()), GetAbstractOrigin(GetDie(cycle_offset()), binary()));
 
   // DIEs without an abstract origin.
-  EXPECT_FALSE(GetAbstractOrigin(GetDie(origin_offset())).is_valid());
-  EXPECT_FALSE(GetAbstractOrigin(GetDie(unit_offset())).is_valid());
-  EXPECT_FALSE(GetAbstractOrigin(DwarfDie()).is_valid());
+  EXPECT_FALSE(GetAbstractOrigin(GetDie(origin_offset()), binary()).is_valid());
+  EXPECT_FALSE(GetAbstractOrigin(GetDie(unit_offset()), binary()).is_valid());
+  EXPECT_FALSE(GetAbstractOrigin(DwarfDie(), binary()).is_valid());
 }
 
 TEST_F(DwarfDieDecoderTest, Forms) {
   static constexpr DwarfAttr kAttrs[] = {
       DwarfAttr::kDeclaration, DwarfAttr::kArtificial, DwarfAttr::kConstValue, DwarfAttr::kLocation,
       DwarfAttr::kAddrBase,    DwarfAttr::kType,       DwarfAttr::kCount,      DwarfAttr::kHighPc};
-  DwarfDieDecoder decoder(context(), kAttrs);
+  DwarfDieDecoder decoder(binary(), kAttrs);
   ASSERT_TRUE(decoder.Decode(GetDie(forms_offset())));
 
   // A DW_FORM_flag of 0 is false.
@@ -741,7 +788,7 @@ TEST_F(DwarfDieDecoderTest, Forms) {
   // The raw value has the unit and form.
   const DwarfDieDecoder::AttributeValue* value = decoder.GetValue(DwarfAttr::kLocation);
   ASSERT_TRUE(value);
-  EXPECT_EQ(context()->getUnitAtIndex(0), value->unit);
+  EXPECT_EQ(GetUnitDie(0), value->die.unit_root());
   EXPECT_EQ(DwarfForm::kExprloc, value->form.form);
 
   // A missing attribute has no value.
@@ -763,7 +810,7 @@ TEST_F(DwarfDieDecoderTest, Forms) {
 TEST_F(DwarfDieDecoderTest, GetInteger) {
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kConstValue, DwarfAttr::kCount,
                                          DwarfAttr::kDeclaration, DwarfAttr::kLocation};
-  DwarfDieDecoder decoder(context(), kAttrs);
+  DwarfDieDecoder decoder(binary(), kAttrs);
   ASSERT_TRUE(decoder.Decode(GetDie(forms_offset())));
 
   // DW_FORM_sdata and DW_FORM_implicit_const are signed in both cases.
@@ -786,7 +833,7 @@ TEST_F(DwarfDieDecoderTest, GetInteger) {
 TEST_F(DwarfDieDecoderTest, GetIntegerData) {
   // DW_AT_decl_line is DW_FORM_data1, and DW_AT_high_pc is DW_FORM_data4.
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kDeclLine, DwarfAttr::kHighPc};
-  DwarfDieDecoder decoder(context(), kAttrs);
+  DwarfDieDecoder decoder(binary(), kAttrs);
   ASSERT_TRUE(decoder.Decode(GetDie(concrete_offset())));
   EXPECT_EQ(20, decoder.GetInteger(DwarfAttr::kDeclLine, false));
   EXPECT_EQ(20, decoder.GetInteger(DwarfAttr::kDeclLine, true));
@@ -794,7 +841,7 @@ TEST_F(DwarfDieDecoderTest, GetIntegerData) {
 
   // The constant of a data form is its bytes.
   static constexpr DwarfAttr kLineAttrs[] = {DwarfAttr::kDeclLine};
-  DwarfDieDecoder line_decoder(context(), kLineAttrs);
+  DwarfDieDecoder line_decoder(binary(), kLineAttrs);
   ASSERT_TRUE(line_decoder.Decode(GetDie(concrete_offset())));
   EXPECT_EQ(std::vector<uint8_t>({20}),
             line_decoder.GetConstValue(DwarfAttr::kDeclLine).GetConstValue(1));
@@ -803,7 +850,7 @@ TEST_F(DwarfDieDecoderTest, GetIntegerData) {
 TEST_F(DwarfDieDecoderTest, ConstantAccessors) {
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kConstValue, DwarfAttr::kByteSize,
                                          DwarfAttr::kBitSize, DwarfAttr::kExternal};
-  DwarfDieDecoder decoder(context(), kAttrs);
+  DwarfDieDecoder decoder(binary(), kAttrs);
   ASSERT_TRUE(decoder.Decode(GetDie(constants_offset())));
 
   // A non-negative DW_FORM_sdata value is unsigned too.
@@ -827,7 +874,7 @@ TEST_F(DwarfDieDecoderTest, ConstantAccessors) {
 
   // A negative DW_FORM_sdata value isn't unsigned.
   static constexpr DwarfAttr kFormsAttrs[] = {DwarfAttr::kConstValue};
-  DwarfDieDecoder forms_decoder(context(), kFormsAttrs);
+  DwarfDieDecoder forms_decoder(binary(), kFormsAttrs);
   ASSERT_TRUE(forms_decoder.Decode(GetDie(forms_offset())));
   EXPECT_EQ(std::nullopt, forms_decoder.GetUnsignedConstant(DwarfAttr::kConstValue));
   EXPECT_EQ(-5, forms_decoder.GetSignedConstant(DwarfAttr::kConstValue));
@@ -840,12 +887,12 @@ TEST_F(DwarfDieDecoderTest, AddressTableUnit) {
   ASSERT_TRUE(die);
 
   // The unit of the DIE has no address table, like a .dwo unit.
-  DwarfDieDecoder own_table(context(), kAttrs);
+  DwarfDieDecoder own_table(binary(), kAttrs);
   ASSERT_TRUE(own_table.Decode(die));
   EXPECT_EQ(std::nullopt, own_table.GetAddress(DwarfAttr::kLowPc));
 
   // With the address table of the skeleton unit, the indices resolve.
-  DwarfDieDecoder decoder(context(), kAttrs, GetUnitDie(kSkeletonUnit).llvm_unit());
+  DwarfDieDecoder decoder(binary(), kAttrs, {GetUnitDie(kSkeletonUnit).llvm_unit()});
   ASSERT_TRUE(decoder.Decode(die));
   EXPECT_EQ(0x6000u, decoder.GetAddress(DwarfAttr::kLowPc));
 
@@ -868,22 +915,26 @@ TEST_F(DwarfDieDecoderTest, CorruptBlockLength) {
 
   // The block ends past the end of the unit, when the decoder reads it and when it skips it.
   static constexpr DwarfAttr kReadAttrs[] = {DwarfAttr::kName, DwarfAttr::kLocation};
-  DwarfDieDecoder read_decoder(context(), kReadAttrs);
+  DwarfDieDecoder read_decoder(binary(), kReadAttrs);
   EXPECT_FALSE(read_decoder.Decode(die));
 
   static constexpr DwarfAttr kSkipAttrs[] = {DwarfAttr::kName};
-  DwarfDieDecoder skip_decoder(context(), kSkipAttrs);
+  DwarfDieDecoder skip_decoder(binary(), kSkipAttrs);
   EXPECT_FALSE(skip_decoder.Decode(die));
 
   // The unit DIE before it is fine.
   EXPECT_TRUE(skip_decoder.Decode(GetUnitDie(kCorruptUnit)));
   EXPECT_STREQ("corrupt", skip_decoder.GetCString(DwarfAttr::kName).value_or(""));
+
+  // The block can't consume the first byte of the next valid unit.
+  EXPECT_TRUE(skip_decoder.Decode(GetUnitDie(kAfterCorruptUnit)));
+  EXPECT_STREQ("after corrupt", skip_decoder.GetCString(DwarfAttr::kName).value_or(""));
 }
 
 TEST_F(DwarfDieDecoderTest, WrongForm) {
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kDeclaration, DwarfAttr::kAddrBase,
                                          DwarfAttr::kLocation};
-  DwarfDieDecoder decoder(context(), kAttrs);
+  DwarfDieDecoder decoder(binary(), kAttrs);
   ASSERT_TRUE(decoder.Decode(GetDie(forms_offset())));
 
   // The attributes are present but can't be converted.
@@ -898,7 +949,7 @@ TEST_F(DwarfDieDecoderTest, WrongForm) {
 TEST_F(DwarfDieDecoderTest, MissingAttributes) {
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName, DwarfAttr::kType, DwarfAttr::kConstValue,
                                          DwarfAttr::kDeclFile};
-  DwarfDieDecoder decoder(context(), kAttrs);
+  DwarfDieDecoder decoder(binary(), kAttrs);
   ASSERT_TRUE(decoder.Decode(GetDie(namespace_offset())));
 
   EXPECT_FALSE(decoder.Has(DwarfAttr::kType));
@@ -911,7 +962,7 @@ TEST_F(DwarfDieDecoderTest, MissingAttributes) {
 TEST_F(DwarfDieDecoderTest, Reuse) {
   // Decoding a second DIE clears the values of the first.
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName, DwarfAttr::kType};
-  DwarfDieDecoder decoder(context(), kAttrs);
+  DwarfDieDecoder decoder(binary(), kAttrs);
 
   ASSERT_TRUE(decoder.Decode(GetDie(origin_offset())));
   EXPECT_TRUE(decoder.Has(DwarfAttr::kName));
@@ -925,7 +976,7 @@ TEST_F(DwarfDieDecoderTest, Reuse) {
 TEST_F(DwarfDieDecoderTest, AbstractOriginCycle) {
   // A DIE that is its own abstract origin stops after the maximum number of references.
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName, DwarfAttr::kAbstractOrigin};
-  DwarfDieDecoder decoder(context(), kAttrs);
+  DwarfDieDecoder decoder(binary(), kAttrs);
   ASSERT_TRUE(decoder.Decode(GetDie(cycle_offset())));
   EXPECT_STREQ("cycle", decoder.GetCString(DwarfAttr::kName).value_or(""));
   EXPECT_EQ(GetDie(cycle_offset()), decoder.GetReference(DwarfAttr::kAbstractOrigin));
@@ -935,14 +986,14 @@ TEST_F(DwarfDieDecoderTest, AbstractOriginCycle) {
 TEST_F(DwarfDieDecoderTest, DuplicateAttribute) {
   // The first of two duplicate attributes gives the value.
   static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName};
-  DwarfDieDecoder decoder(context(), kAttrs);
+  DwarfDieDecoder decoder(binary(), kAttrs);
   ASSERT_TRUE(decoder.Decode(GetDie(duplicate_offset())));
   EXPECT_STREQ("first", decoder.GetCString(DwarfAttr::kName).value_or(""));
 }
 
 TEST_F(DwarfDieDecoderTest, EmptyTable) {
   // A decoder with no attributes still checks the DIE and finds the abstract parent.
-  DwarfDieDecoder decoder(context(), {});
+  DwarfDieDecoder decoder(binary(), {});
   ASSERT_TRUE(decoder.Decode(GetDie(concrete_offset())));
   EXPECT_EQ(GetDie(namespace_offset()), decoder.GetContextParent());
 }
