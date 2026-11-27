@@ -4,9 +4,18 @@
 
 #include "src/lib/elflib/elflib.h"
 
+#include <fcntl.h>
+#include <lib/fit/defer.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <zircon/assert.h>
+#include <zlib.h>
+#include <zstd.h>
 
 #include <algorithm>
+#include <bit>
+#include <cerrno>
 #include <cstring>
 #include <iterator>
 #include <limits>
@@ -19,22 +28,21 @@ namespace {
 // NT_GNU_BUILD_ID identifier.
 constexpr uint64_t kNoteGnuBuildId = 3;
 
+constexpr uint8_t kNativeElfData =
+    std::endian::native == std::endian::little ? ELFDATA2LSB : ELFDATA2MSB;
+
 // Pull a null-terminated string out of an array of bytes at an offset. Returns
 // empty string if there is no null terminator.
-std::string GetNullTerminatedStringAt(const uint8_t* data, size_t data_length, size_t offset) {
-  size_t check = offset;
-
-  while (check < data_length && data[check]) {
-    check++;
-  }
-
-  if (check >= data_length) {
-    return std::string();
-  }
-
+std::string_view GetStringView(const uint8_t* data, size_t data_length, size_t offset) {
+  if (!data || offset >= data_length)
+    return {};
   const char* start = reinterpret_cast<const char*>(data) + offset;
+  const char* end = static_cast<const char*>(std::memchr(start, 0, data_length - offset));
+  return end ? std::string_view(start, end) : std::string_view();
+}
 
-  return std::string(start);
+std::string GetNullTerminatedStringAt(const uint8_t* data, size_t data_length, size_t offset) {
+  return std::string(GetStringView(data, data_length, offset));
 }
 
 // This method enables the user to deserialize from a raw pointer (void or char*
@@ -57,6 +65,36 @@ inline T safe_copy(const T* source) {
   T dest;
   memcpy(std::addressof(dest), static_cast<const void*>(source), sizeof(T));
   return dest;
+}
+
+template <typename Header>
+fit::result<const char*, std::vector<uint8_t>> DecompressSection(std::span<const uint8_t> raw) {
+  if (raw.size() < sizeof(Header))
+    return fit::error("truncated ELF compression header");
+  auto header = safe_copy(reinterpret_cast<const Header*>(raw.data()));
+  if (header.ch_type != ELFCOMPRESS_ZLIB && header.ch_type != ELFCOMPRESS_ZSTD)
+    return fit::error("unsupported ELF compression type");
+
+  std::vector<uint8_t> bytes;
+  if (header.ch_size > bytes.max_size())
+    return fit::error("ELF compression header size is too large");
+  bytes.resize(header.ch_size);
+
+  auto payload = raw.subspan(sizeof(Header));
+  size_t written;
+  if (header.ch_type == ELFCOMPRESS_ZLIB) {
+    uLongf size = bytes.size();
+    if (uncompress(bytes.data(), &size, payload.data(), payload.size()) != Z_OK)
+      return fit::error("invalid zlib stream");
+    written = size;
+  } else {
+    written = ZSTD_decompress(bytes.data(), bytes.size(), payload.data(), payload.size());
+    if (ZSTD_isError(written))
+      return fit::error(ZSTD_getErrorName(written));
+  }
+  if (written != bytes.size())
+    return fit::error("decompressed size differs from the section header size");
+  return fit::ok(std::move(bytes));
 }
 
 Elf64_Sym UpcastSym(const Elf32_Sym& sym) {
@@ -180,12 +218,7 @@ std::unique_ptr<ElfLib> ElfLib::Create(std::unique_ptr<MemoryAccessor>&& memory,
     return std::unique_ptr<ElfLib>();
   }
 
-  const uint32_t kOne = 1;
-
-  // Endianness of the file has to match the endianness of the host. To do the
-  // endianness check, we snip the first byte off of a 4-byte word. If it
-  // contains the LSB (a value of 1) we are on a little-endian machine.
-  if (ident[EI_DATA] == ELFDATA2MSB && *reinterpret_cast<const char*>(&kOne)) {
+  if (ident[EI_DATA] != kNativeElfData) {
     return std::unique_ptr<ElfLib>();
   }
 
@@ -201,7 +234,7 @@ std::unique_ptr<ElfLib> ElfLib::Create(std::unique_ptr<MemoryAccessor>&& memory,
     if (!header) {
       return std::unique_ptr<ElfLib>();
     }
-    out->header_ = *header;
+    out->header_ = safe_copy(header);
   } else if (ident[EI_CLASS] == ELFCLASS32) {
     auto header =
         reinterpret_cast<const Elf32_Ehdr*>(out->memory_->GetMemory(0, sizeof(Elf32_Ehdr)));
@@ -243,14 +276,15 @@ std::unique_ptr<ElfLib> ElfLib::Create(std::unique_ptr<MemoryAccessor>&& memory,
   // if we have no sections.
   auto section_header_size =
       ident[EI_CLASS] == ELFCLASS64 ? sizeof(Elf64_Shdr) : sizeof(Elf32_Shdr);
-  if (out->header_.e_shnum > 0 && out->header_.e_shentsize != section_header_size) {
+  if ((out->header_.e_shnum || out->header_.e_shoff) &&
+      out->header_.e_shentsize != section_header_size) {
     return std::unique_ptr<ElfLib>();
   }
 
   // We don't support non-standard program header sizes.
   auto program_header_size =
       ident[EI_CLASS] == ELFCLASS64 ? sizeof(Elf64_Phdr) : sizeof(Elf32_Phdr);
-  if (out->header_.e_phentsize != program_header_size) {
+  if (out->header_.e_phnum && out->header_.e_phentsize != program_header_size) {
     return std::unique_ptr<ElfLib>();
   }
 
@@ -276,15 +310,17 @@ std::unique_ptr<ElfLib> ElfLib::Create(FILE* fp, ElfLib::Ownership owned) {
         return nullptr;
       }
 
-      auto& ret = data_[std::make_pair(offset, size)];
+      const auto key = std::make_pair(offset, size);
+      auto& ret = data_[key];
       if (ret.size() == size) {
         return ret.data();
       }
 
       ret.resize(size);
 
-      fseek(file_, static_cast<long>(offset), SEEK_SET);
-      if (fread(ret.data(), 1, size, file_) != size) {
+      if (fseek(file_, static_cast<long>(offset), SEEK_SET) != 0 ||
+          fread(ret.data(), 1, size, file_) != size) {
+        data_.erase(key);
         return nullptr;
       }
 
@@ -305,31 +341,55 @@ std::unique_ptr<ElfLib> ElfLib::Create(FILE* fp, ElfLib::Ownership owned) {
                 AddressMode::kFile);
 }
 
+class ElfLib::DataAccessor : public MemoryAccessor {
+ public:
+  DataAccessor(const uint8_t* data, size_t size, bool mapped = false)
+      : data_(data), size_(size), mapped_(mapped) {}
+
+  ~DataAccessor() override {
+    if (mapped_)
+      munmap(const_cast<uint8_t*>(data_), size_);
+  }
+
+  const uint8_t* GetMemory(uint64_t offset, size_t size) override {
+    if (offset > size_ || size > size_ - offset)
+      return nullptr;
+    return data_ + offset;
+  }
+
+ private:
+  const uint8_t* data_;
+  size_t size_;
+  bool mapped_;
+};
+
 std::unique_ptr<ElfLib> ElfLib::Create(const uint8_t* mem, size_t size) {
-  class DataAccessor : public MemoryAccessor {
-   public:
-    DataAccessor(const uint8_t* mem, size_t size) : mem_(mem), size_(size) {}
-
-    const uint8_t* GetMemory(uint64_t offset, size_t size) override {
-      // This check and the one below are NOT redundant. This one prevents the other one from
-      // returning a false negative due to overflow.
-      if (offset > size_) {
-        return nullptr;
-      }
-
-      if (size_ - offset < size) {
-        return nullptr;
-      }
-
-      return mem_ + offset;
-    }
-
-   private:
-    const uint8_t* mem_;
-    size_t size_;
-  };
-
   return Create(std::make_unique<DataAccessor>(mem, size), 0, AddressMode::kFile);
+}
+
+fit::result<std::string, std::unique_ptr<ElfLib>> ElfLib::CreateMapped(const std::string& path) {
+  int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0)
+    return fit::error(std::string(std::strerror(errno)));
+  auto close_fd = fit::defer([fd] { close(fd); });
+
+  struct stat st;
+  if (fstat(fd, &st) < 0)
+    return fit::error(std::string(std::strerror(errno)));
+  if (!S_ISREG(st.st_mode) || st.st_size <= 0 || !std::in_range<size_t>(st.st_size))
+    return fit::error(std::string("expected a nonempty ELF file"));
+  size_t size = static_cast<size_t>(st.st_size);
+  void* mapping = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0);
+  if (mapping == MAP_FAILED)
+    return fit::error(std::string(std::strerror(errno)));
+  close_fd.call();
+
+  auto elf =
+      Create(std::make_unique<DataAccessor>(static_cast<const uint8_t*>(mapping), size, true), 0,
+             AddressMode::kFile);
+  if (!elf)
+    return fit::error(std::string("invalid or unsupported ELF file"));
+  return fit::ok(std::move(elf));
 }
 
 std::unique_ptr<ElfLib> ElfLib::Create(std::function<bool(uint64_t, std::vector<uint8_t>*)> fetch,
@@ -348,6 +408,7 @@ std::unique_ptr<ElfLib> ElfLib::Create(std::function<bool(uint64_t, std::vector<
       auto& vec = data_[offset].emplace_back(size, 0);
 
       if (!fetch_(offset, &vec)) {
+        data_[offset].pop_back();
         return nullptr;
       }
 
@@ -478,50 +539,60 @@ bool ElfLib::LoadProgramHeaders() {
 }
 
 bool ElfLib::LoadSectionHeaders() {
-  // Already loaded.
-  if (!sections_.empty()) {
+  if (!sections_.empty())
     return true;
+
+  // Processes may not map the section headers.
+  if (address_mode_ != AddressMode::kFile)
+    return false;
+  if (!header_.e_shoff)
+    return !header_.e_shnum;
+
+  size_t entry_size = header_.e_shentsize;
+  uint64_t count = header_.e_shnum;
+  if (!count) {
+    // ELF stores an extended count in section zero.
+    const auto* first = memory_->GetMemory(header_.e_shoff, entry_size);
+    if (!first)
+      return false;
+    count = Is64Bit() ? safe_copy(reinterpret_cast<const Elf64_Shdr*>(first)).sh_size
+                      : safe_copy(reinterpret_cast<const Elf32_Shdr*>(first)).sh_size;
   }
 
-  // Processes may not map the section headers at all, so we don't look for
-  // section headers unless we're in file mode.
-  if (address_mode_ == AddressMode::kFile && sections_.empty()) {
-    if (Is64Bit()) {
-      auto sections = reinterpret_cast<const Elf64_Shdr*>(
-          memory_->GetMemory(header_.e_shoff, sizeof(Elf64_Shdr) * header_.e_shnum));
-      if (!sections) {
-        return false;
-      }
+  if (!count || count > sections_.max_size() ||
+      count > (std::numeric_limits<uint64_t>::max() - header_.e_shoff) / entry_size)
+    return false;
+  size_t size = count * entry_size;
+  // Check the extent before a file or callback accessor allocates a buffer of the extended size.
+  if (!header_.e_shnum && !memory_->GetMemory(header_.e_shoff + (size - entry_size), entry_size))
+    return false;
+  const auto* bytes = memory_->GetMemory(header_.e_shoff, size);
+  if (!bytes)
+    return false;
 
-      std::copy(sections, sections + header_.e_shnum, std::back_inserter(sections_));
-    } else {
-      auto sections_start = reinterpret_cast<const Elf32_Shdr*>(
-          memory_->GetMemory(header_.e_shoff, sizeof(Elf32_Shdr) * header_.e_shnum));
-      if (!sections_start) {
-        return false;
-      }
-
-      auto sections = std::span{sections_start, header_.e_shnum};
-      for (const auto& section : sections) {
-        Elf64_Shdr section64;
-        section64.sh_name = section.sh_name;
-        section64.sh_type = section.sh_type;
-        section64.sh_flags = section.sh_flags;
-        section64.sh_addr = section.sh_addr;
-        section64.sh_offset = section.sh_offset;
-        section64.sh_size = section.sh_size;
-        section64.sh_link = section.sh_link;
-        section64.sh_info = section.sh_info;
-        section64.sh_addralign = section.sh_addralign;
-        section64.sh_entsize = section.sh_entsize;
-        sections_.push_back(section64);
-      }
+  if (Is64Bit()) {
+    sections_.resize(count);
+    std::memcpy(sections_.data(), bytes, size);
+  } else {
+    sections_.reserve(count);
+    const auto* headers = reinterpret_cast<const Elf32_Shdr*>(bytes);
+    for (size_t i = 0; i < count; ++i) {
+      auto section = safe_copy(headers + i);
+      sections_.push_back({
+          .sh_name = section.sh_name,
+          .sh_type = section.sh_type,
+          .sh_flags = section.sh_flags,
+          .sh_addr = section.sh_addr,
+          .sh_offset = section.sh_offset,
+          .sh_size = section.sh_size,
+          .sh_link = section.sh_link,
+          .sh_info = section.sh_info,
+          .sh_addralign = section.sh_addralign,
+          .sh_entsize = section.sh_entsize,
+      });
     }
-
-    return true;
   }
-
-  return false;
+  return true;
 }
 
 const std::vector<Elf64_Shdr>& ElfLib::GetSectionHeaders() {
@@ -678,7 +749,7 @@ ElfLib::MemoryRegion ElfLib::GetSectionData(size_t section) {
 }
 
 ElfLib::MemoryRegion ElfLib::GetSectionData(const Elf64_Shdr* header) {
-  if (!header) {
+  if (!header || !std::in_range<size_t>(header->sh_size)) {
     return {};
   }
 
@@ -698,42 +769,71 @@ ElfLib::MemoryRegion ElfLib::GetSectionData(const Elf64_Shdr* header) {
   return result;
 }
 
+std::string_view ElfLib::GetSectionName(size_t section) {
+  const auto* header = GetSectionHeader(section);
+  if (!header)
+    return {};
+  if (!section_name_table_) {
+    size_t name_index =
+        header_.e_shstrndx == SHN_XINDEX ? sections_[0].sh_link : header_.e_shstrndx;
+    section_name_table_ = GetSectionData(name_index);
+  }
+  return GetStringView(section_name_table_->ptr, section_name_table_->size, header->sh_name);
+}
+
 bool ElfLib::LoadSectionNames() {
-  if (section_names_.size() != 0) {
+  if (!section_names_.empty())
     return true;
+  const auto& headers = GetSectionHeaders();
+  for (size_t i = 0; i < headers.size(); ++i) {
+    auto name = GetSectionName(i);
+    if (!name.empty())
+      section_names_.insert_or_assign(std::string(name), i);
   }
+  return !section_names_.empty();
+}
 
-  auto section_name_data = GetSectionData(header_.e_shstrndx);
-
-  if (!section_name_data.ptr) {
-    return false;
-  }
-
-  size_t idx = 0;
-  // We know sections_ is populated from the GetSectionData above
-  for (const auto& section : sections_) {
-    auto name =
-        GetNullTerminatedStringAt(section_name_data.ptr, section_name_data.size, section.sh_name);
-    section_names_[std::move(name)] = idx;
-
-    idx++;
-  }
-
-  return true;
+std::optional<size_t> ElfLib::FindSection(std::string_view name) {
+  if (!LoadSectionNames())
+    return std::nullopt;
+  auto found = section_names_.find(name);
+  if (found == section_names_.end())
+    return std::nullopt;
+  return found->second;
 }
 
 ElfLib::MemoryRegion ElfLib::GetSectionData(std::string_view name) {
-  if (!LoadSectionNames()) {
-    return {};
+  auto index = FindSection(name);
+  return index ? GetSectionData(*index) : MemoryRegion();
+}
+
+fit::result<const char*, std::span<const uint8_t>> ElfLib::ReadSection(size_t section) {
+  const auto* header = GetSectionHeader(section);
+  if (!header)
+    return fit::error("invalid ELF section index");
+  if (header->sh_type == SHT_NULL || header->sh_type == SHT_NOBITS)
+    return fit::ok(std::span<const uint8_t>());
+
+  bool compressed = header->sh_flags & SHF_COMPRESSED;
+  if (compressed) {
+    auto cached = decompressed_sections_.find(section);
+    if (cached != decompressed_sections_.end())
+      return fit::ok(std::span<const uint8_t>(cached->second));
+  } else if (header->sh_size == 0) {
+    return fit::ok(std::span<const uint8_t>());
   }
-
-  const auto& iter = section_names_.find(name);
-
-  if (iter == section_names_.end()) {
-    return {};
-  }
-
-  return GetSectionData(iter->second);
+  auto raw = GetSectionData(header);
+  if (!raw.ptr)
+    return fit::error("ELF section data is out of bounds");
+  std::span<const uint8_t> bytes(raw.ptr, raw.size);
+  if (!compressed)
+    return fit::ok(bytes);
+  auto decompressed =
+      Is64Bit() ? DecompressSection<Elf64_Chdr>(bytes) : DecompressSection<Elf32_Chdr>(bytes);
+  if (decompressed.is_error())
+    return decompressed.take_error();
+  auto it = decompressed_sections_.emplace(section, std::move(decompressed).value()).first;
+  return fit::ok(std::span<const uint8_t>(it->second));
 }
 
 template <typename ElfDyn>
@@ -1244,7 +1344,7 @@ std::optional<std::vector<std::string>> ElfLib::GetSharedObjectDependencies() {
 }
 
 bool ElfLib::ProbeHasDebugInfo() {
-  if (!header_.e_shnum) {
+  if (!header_.e_shnum && !header_.e_shoff) {
     // No sections, no debug info.
     return false;
   }
@@ -1261,19 +1361,17 @@ bool ElfLib::ProbeHasDebugInfo() {
 }
 
 bool ElfLib::ProbeHasProgramBits() {
-  if (!header_.e_shnum) {
+  if (!header_.e_shnum && !header_.e_shoff) {
     // No sections, so either this is *just* the text, or it's a very broken
     // file.
     return true;
   }
 
-  for (size_t i = 0; i < header_.e_shnum; i++) {
-    if (auto section = GetSectionHeader(i)) {
-      if (section->sh_type == SHT_DYNAMIC) {
-        // If the program data is present, this section will be here. It
-        // becomes a NOBITS section in the split debug info.
-        return true;
-      }
+  for (const auto& section : GetSectionHeaders()) {
+    if (section.sh_type == SHT_DYNAMIC) {
+      // If the program data is present, this section will be here. It
+      // becomes a NOBITS section in the split debug info.
+      return true;
     }
   }
 

@@ -6,6 +6,7 @@
 #define SRC_LIB_ELFLIB_ELFLIB_H_
 
 #include <elf.h>
+#include <lib/fit/result.h>
 #include <stdio.h>
 
 // glibc 2.36 and earlier don't define the zstd compression type for ELF sections.
@@ -17,6 +18,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -71,6 +73,14 @@ class ElfLib {
   // MemoryRegion will be returned, otherwise is assumed to be correct and correspond to the ELF
   // file passed to |Create|.
   MemoryRegion GetSectionData(const Elf64_Shdr* header);
+
+  // Look up a section index by name or a name by index. Names borrow the section string table.
+  std::optional<size_t> FindSection(std::string_view name);
+  std::string_view GetSectionName(size_t section);
+
+  // Reads section contents, decompressing SHF_COMPRESSED sections as needed. The returned view
+  // remains valid for the lifetime of the ElfLib. SHT_NOBITS and SHT_NULL sections have no bytes.
+  fit::result<const char*, std::span<const uint8_t>> ReadSection(size_t section);
 
   // Get a list of all section headers.
   const std::vector<Elf64_Shdr>& GetSectionHeaders();
@@ -151,6 +161,9 @@ class ElfLib {
   // the file and retain a handle to it until the object is destroyed.
   static std::unique_ptr<ElfLib> Create(const std::string& path);
 
+  // Open a native-endian ELF file with a read-only mapping owned by ElfLib.
+  static fit::result<std::string, std::unique_ptr<ElfLib>> CreateMapped(const std::string& path);
+
   // Create a new ElfLib object for accessing an ELF file mapped into memory.
   // This is expected to be a file, not an address space, and will be addressed
   // accordingly.
@@ -203,6 +216,7 @@ class ElfLib {
 
   // See the definition of this class in elflib.cc for details.
   class PltEntryBuffer;
+  class DataAccessor;
 
   std::map<std::string, uint64_t> GetPLTOffsetsCommon(PltEntryBuffer& adapter);
 
@@ -270,7 +284,9 @@ class ElfLib {
   DynamicSection dynstr_;
   std::vector<Elf64_Shdr> sections_;
   std::vector<Elf64_Phdr> segments_;
+  std::optional<MemoryRegion> section_name_table_;
   std::map<std::string, size_t, std::less<>> section_names_;
+  std::map<size_t, std::vector<uint8_t>> decompressed_sections_;
   std::unique_ptr<ElfLib> debug_;
 
   std::vector<std::string> warnings_;

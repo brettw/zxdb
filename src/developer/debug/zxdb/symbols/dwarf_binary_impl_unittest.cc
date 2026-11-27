@@ -33,6 +33,7 @@
 #include "src/developer/debug/zxdb/symbols/test_symbol_module.h"
 #include "src/developer/debug/zxdb/symbols/variable.h"
 #include "src/lib/elflib/elflib.h"
+#include "src/lib/elflib/elflib_test_support.h"
 #include "src/lib/files/file.h"
 #include "src/lib/files/scoped_temp_dir.h"
 
@@ -85,57 +86,136 @@ bool SetDynamicSymbolSize(std::string& elf, std::string_view name, uint64_t size
   return false;
 }
 
-// Wraps DWARF sections in a little-endian ELF file for tests of the object loader.
-std::string MakeElf(
-    std::initializer_list<std::pair<std::string_view, std::span<const uint8_t>>> data) {
-  std::string names("\0.shstrtab\0", 11);
-  std::vector<Elf64_Shdr> sections(1);  // ELF section zero is null.
-  std::string elf(sizeof(Elf64_Ehdr), '\0');
-  for (const auto& [name, bytes] : data) {
-    sections.push_back({.sh_name = static_cast<Elf64_Word>(names.size()),
-                        .sh_type = SHT_PROGBITS,
-                        .sh_offset = elf.size(),
-                        .sh_size = bytes.size()});
-    names.append(name).push_back('\0');
-    elf.append(AsStringView(bytes));
-  }
-  const auto names_index = static_cast<Elf64_Half>(sections.size());
-  sections.push_back(
-      {.sh_name = 1, .sh_type = SHT_STRTAB, .sh_offset = elf.size(), .sh_size = names.size()});
-  elf.append(names);
-  elf.resize((elf.size() + 7) & ~size_t{7});
-  Elf64_Ehdr header = {
-      .e_ident = {ELFMAG0, ELFMAG1, ELFMAG2, ELFMAG3, ELFCLASS64, ELFDATA2LSB, EV_CURRENT},
-      .e_type = ET_REL,
-      .e_machine = EM_X86_64,
-      .e_version = EV_CURRENT,
-      .e_shoff = elf.size(),
-      .e_ehsize = sizeof(Elf64_Ehdr),
-      .e_shentsize = sizeof(Elf64_Shdr),
-      .e_shnum = static_cast<Elf64_Half>(sections.size()),
-      .e_shstrndx = names_index};
-  memcpy(elf.data(), &header, sizeof(header));
-  elf.append(reinterpret_cast<const char*>(sections.data()), sections.size() * sizeof(Elf64_Shdr));
-  return elf;
-}
+using elflib::test::MakeElf;
 
 TEST(DwarfBinaryImpl, RejectsRepeatedDwarfSections) {
   files::ScopedTempDir temp_dir;
-  for (std::string_view name : {".debug_types", ".debug_info.dwo", ".debug_line"}) {
+  for (const auto& [name, duplicate] : {std::pair{".debug_types", ".debug_types"},
+                                        {".debug_info.dwo", ".debug_info.dwo"},
+                                        {".debug_line", ".zdebug_line"}}) {
     SCOPED_TRACE(name);
     const uint8_t byte[] = {0};
-    auto elf = MakeElf({{name, byte}, {name, byte}});
+    auto elf = MakeElf({{name, byte}, {duplicate, byte}});
     std::string path;
     ASSERT_TRUE(temp_dir.NewTempFileWithData(elf, &path));
     DwarfBinaryImpl binary(path, "", "");
-    Err err = binary.Load(
-        {}, name.ends_with(".dwo") ? DwarfSymbolFactory::kDWO : DwarfSymbolFactory::kMainBinary);
+    Err err = binary.Load({}, DwarfSymbolFactory::kMainBinary);
     ASSERT_TRUE(err.has_error());
-    EXPECT_NE(std::string::npos,
-              err.msg().find("has more than one " + std::string(name) + " section"))
-        << err.msg();
-    EXPECT_NE(std::string::npos, err.msg().find("Link it first")) << err.msg();
+    EXPECT_EQ(
+        "The object \"" + path + "\" has more than one " + name +
+            " section. This usually means a relocatable (.o) file. Link it first. "
+            "zxdb reads linked executables, shared libraries, and their separate debug files.",
+        err.msg());
   }
+}
+
+TEST(DwarfBinaryImpl, RejectsDebugRelocations) {
+  // The relocation section header's sh_info gives the target section index. The section
+  // name and relocation records are irrelevant to this check.
+  const uint8_t byte[] = {0};
+  const uint8_t relocation[sizeof(Elf64_Rela)] = {};
+  files::ScopedTempDir temp_dir;
+  constexpr uint32_t kCrelSectionType = 0x40000014;
+  for (uint32_t type : std::array<uint32_t, 3>{SHT_REL, SHT_RELA, kCrelSectionType}) {
+    SCOPED_TRACE(type);
+    const auto elf = MakeElf({{".debug_info", byte}, {".relocations", relocation, type, 0, 0, 1}});
+    std::string path;
+    ASSERT_TRUE(temp_dir.NewTempFileWithData(elf, &path));
+    DwarfBinaryImpl binary(path, "", "");
+    Err err = binary.Load({}, DwarfSymbolFactory::kMainBinary);
+    ASSERT_TRUE(err.has_error());
+    EXPECT_EQ("The object \"" + path + "\" has relocations for .debug_info. Link it first.",
+              err.msg());
+  }
+}
+
+TEST(DwarfBinaryImpl, FirstCodeAddress) {
+  // ELF marks executable sections with SHF_EXECINSTR. A separate debug file can preserve
+  // this flag on a SHT_NOBITS section.
+  const uint8_t code[] = {0};
+  auto elf = MakeElf({{".text", code, SHT_PROGBITS, SHF_EXECINSTR, 0x1000},
+                      {".init", {}, SHT_NOBITS, SHF_EXECINSTR, 0x800},
+                      {".rodata", code, SHT_PROGBITS, SHF_ALLOC, 0x400}});
+  files::ScopedTempDir temp_dir;
+  std::string path;
+  ASSERT_TRUE(temp_dir.NewTempFileWithData(elf, &path));
+  DwarfBinaryImpl binary(path, "", "");
+  Err err = binary.Load({}, DwarfSymbolFactory::kMainBinary);
+  ASSERT_TRUE(err.ok()) << err.msg();
+  EXPECT_EQ(0x800u, binary.GetFirstCodeAddress());
+}
+
+TEST(DwarfBinaryImpl, SkipsSectionWithBadCompressionHeader) {
+  // A single byte is shorter than an Elf64_Chdr. The unrelated abbreviation section is readable.
+  const uint8_t truncated[] = {ELFCOMPRESS_ZLIB};
+  const uint8_t abbrev[] = {0};
+  const auto elf = MakeElf(
+      {{".debug_info", truncated, SHT_PROGBITS, SHF_COMPRESSED}, {".debug_abbrev", abbrev}});
+  files::ScopedTempDir temp_dir;
+  std::string path;
+  ASSERT_TRUE(temp_dir.NewTempFileWithData(elf, &path));
+
+  DwarfBinaryImpl binary(path, "", "");
+  Err err = binary.Load({}, DwarfSymbolFactory::kMainBinary);
+  ASSERT_TRUE(err.ok()) << err.msg();
+  EXPECT_TRUE(binary.GetSections().info.empty());
+  EXPECT_EQ(1u, binary.GetSections().abbrev.size());
+}
+
+TEST(DwarfBinaryImpl, ZstdCompressedSections) {
+  // readelf -x .debug_info shows the ELF zstd compression header. The units match the four
+  // fixture sources. readelf --debug-dump=info lists line_lookup_symbol_test.cc first.
+  DwarfBinaryImpl binary(TestSymbolModule::GetTestFileName(), "", "");
+  Err err = binary.Load({}, DwarfSymbolFactory::kMainBinary);
+  ASSERT_TRUE(err.ok()) << err.msg();
+  EXPECT_EQ(4u, binary.GetNormalUnitCount());
+  auto cu = binary.GetUnitAtIndex(UnitIndex(false, 0));
+  ASSERT_TRUE(cu);
+  EXPECT_EQ(0u, cu->GetDieRef().offset());
+  const char* name = cu->GetUnitDie().short_name();
+  ASSERT_TRUE(name);
+  EXPECT_TRUE(std::string_view(name).ends_with("/line_lookup_symbol_test.cc"));
+}
+
+TEST(DwarfBinaryImpl, SeparateDebugFile) {
+  const std::string dir = TestSymbolModule::GetTestDataDir() + "elf_sections/";
+  const std::string stripped_path = dir + "symbols.so";
+  DwarfBinaryImpl stripped(stripped_path, "", "");
+  Err err = stripped.Load({}, DwarfSymbolFactory::kMainBinary);
+  ASSERT_TRUE(err.ok()) << err.msg();
+  EXPECT_TRUE(stripped.GetSections().info.empty());
+
+  // readelf -x .debug_info shows zlib compression in symbols.debug. readelf -Ws on the
+  // stripped library gives DoLineLookupTest's address. Its DIE comes from the first CU.
+  TestSymbolModule setup(dir + "symbols.debug", stripped_path);
+  err = setup.Init("", false);
+  ASSERT_TRUE(err.ok()) << err.msg();
+  DwarfBinary& binary = *setup.symbols()->binary();
+  EXPECT_GT(stripped.GetMappedLength(), 0u);
+  EXPECT_EQ(stripped.GetMappedLength(), binary.GetMappedLength());
+  EXPECT_EQ(stripped.GetFirstCodeAddress(), binary.GetFirstCodeAddress());
+  auto cu = binary.GetUnitAtIndex(UnitIndex(false, 0));
+  ASSERT_TRUE(cu);
+  const auto* symbol = GetSymbol(binary.GetELFSymbols(), "_Z16DoLineLookupTesti");
+  ASSERT_TRUE(symbol);
+  auto function = cu->FunctionForRelativeAddress(symbol->value);
+  ASSERT_TRUE(function.is_valid());
+  EXPECT_EQ("DoLineLookupTest", function.Get()->GetAssignedName());
+}
+
+TEST(DwarfBinaryImpl, SplitDwarfSections) {
+  // readelf --debug-dump=info shows a split type unit at offset zero and a split compile unit.
+  auto path = TestSymbolModule::GetTestDataDir() + "line_table/clang_split.dwo";
+  DwarfBinaryImpl binary(path, "", "");
+  Err err = binary.Load({}, DwarfSymbolFactory::kDWO);
+  ASSERT_TRUE(err.ok()) << err.msg();
+  EXPECT_EQ(0u, binary.GetNormalUnitCount());
+  ASSERT_EQ(2u, binary.GetDWOUnitCount());
+  auto type = binary.GetUnitAtIndex(UnitIndex(true, 0));
+  ASSERT_TRUE(type);
+  EXPECT_EQ(0u, type->GetDieRef().offset());
+  EXPECT_EQ(DwarfTag::kTypeUnit, type->GetUnitDie().tag());
+  EXPECT_FALSE(binary.GetSections().line_dwo.empty());
 }
 
 TEST(DwarfBinaryImpl, DebugAddr) {

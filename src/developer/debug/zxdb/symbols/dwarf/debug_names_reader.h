@@ -53,12 +53,8 @@ class DebugNamesReader {
   using EntryVisitor = fit::function<void(std::string_view, const Entry&)>;
   using NameVisitor = fit::function<void(std::string_view)>;
 
-  // For a relocatable object, returns the relocated value at a section offset of the given
-  // width. Parse calls this only for CU, local TU, and string offset fields.
-  using RelocateOffset = fit::function<uint64_t(uint64_t, uint8_t)>;
-
   // Stops at the first bad contribution and keeps the earlier indexes and the error.
-  static DebugNamesReader Parse(const DwarfSections& sections, const RelocateOffset& relocate = {});
+  static DebugNamesReader Parse(const DwarfSections& sections);
 
   size_t index_count() const { return indexes_.size(); }
   const Err& error() const { return error_; }
@@ -94,14 +90,12 @@ class DebugNamesReader {
     std::span<const uint8_t> entries;
     std::span<const uint8_t> pool;
     std::map<uint64_t, Abbreviation> abbreviations;
-    // Sparse overrides in section offset order. Empty for linked objects.
-    std::vector<std::pair<uint64_t, uint64_t>> relocations;
   };
 
-  DebugNamesReader(std::span<const uint8_t> names, std::span<const uint8_t> strings, Endian endian)
-      : names_(names), strings_(strings), endian_(endian) {}
+  DebugNamesReader(std::span<const uint8_t> strings, Endian endian)
+      : strings_(strings), endian_(endian) {}
 
-  ErrOr<NameIndex> ReadIndex(DataReader& reader, const RelocateOffset& relocate) const;
+  ErrOr<NameIndex> ReadIndex(DataReader& reader) const;
   static Err ReadAbbreviations(DataReader& reader, NameIndex& index);
   std::optional<uint64_t> ReadTableOffset(const NameIndex& index, std::span<const uint8_t> table,
                                           uint64_t element) const;
@@ -112,7 +106,6 @@ class DebugNamesReader {
   void Lookup(std::optional<std::string_view> name, std::optional<uint32_t> hash,
               const EntryVisitor& visit) const;
 
-  std::span<const uint8_t> names_;
   std::span<const uint8_t> strings_;
   Endian endian_;
   std::vector<NameIndex> indexes_;

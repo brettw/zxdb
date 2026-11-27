@@ -23,16 +23,9 @@
 #include "src/developer/debug/zxdb/symbols/unit_context_cache.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
 
-namespace llvm {
-
-class DWARFContext;
-class MemoryBuffer;
-
-namespace object {
-class Binary;
-}  // namespace object
-
-}  // namespace llvm
+namespace elflib {
+class ElfLib;
+}  // namespace elflib
 
 namespace zxdb {
 
@@ -118,10 +111,8 @@ class DwarfBinaryImpl final : public DwarfBinary {
   const std::string binary_name_;
   const std::string build_id_;
 
-  std::unique_ptr<llvm::MemoryBuffer> binary_buffer_;  // Backing for binary_.
-  std::unique_ptr<llvm::object::Binary> binary_;
-  std::unique_ptr<llvm::DWARFContext> context_;  // binary_ must outlive this.
-  DwarfSections sections_;                       // Borrows bytes from the context or the fixture.
+  std::unique_ptr<elflib::ElfLib> object_;  // Owns the file-backed section bytes.
+  DwarfSections sections_;                  // Borrows bytes from object_ or the fixture.
   std::optional<DebugNamesReader> debug_names_;
   UnitList info_units_;
   UnitList types_units_;
@@ -129,7 +120,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
   UnitList types_dwo_units_;
 
   class DebugAranges;
-  std::unique_ptr<DebugAranges> debug_aranges_;  // Replaces context_->Aranges.
+  std::unique_ptr<DebugAranges> debug_aranges_;
 
   std::time_t modification_time_ = 0;  // Set when the file is loaded.
 
@@ -138,7 +129,7 @@ class DwarfBinaryImpl final : public DwarfBinary {
 
   fxl::RefPtr<DwarfSymbolFactory> symbol_factory_;
 
-  // The binary's owner accesses the wrappers and LLVM context.
+  // The binary's owner accesses the unit wrappers.
   mutable std::map<UnitIndex, fxl::RefPtr<DwarfUnit>> unit_map_;
 
   struct PackageUnit {

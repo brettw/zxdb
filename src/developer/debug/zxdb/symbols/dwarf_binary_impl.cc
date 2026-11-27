@@ -15,27 +15,21 @@
 #include <string_view>
 #include <unordered_set>
 
-#include <llvm/DebugInfo/DIContext.h>
-#include <llvm/DebugInfo/DWARF/DWARFContext.h>
-#include <llvm/DebugInfo/DWARF/DWARFDataExtractor.h>
-#include <llvm/DebugInfo/DWARF/DWARFObject.h>
-#include <llvm/Object/Binary.h>
-#include <llvm/Object/ObjectFile.h>
-#include <llvm/Support/Error.h>
-
 #include "src/developer/debug/shared/logging/logging.h"
 #include "src/developer/debug/zxdb/common/checked_math.h"
 #include "src/developer/debug/zxdb/common/file_util.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/aranges_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/range_list_reader.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_sections_llvm.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_unit_impl.h"
 #include "src/lib/elflib/elflib.h"
 
 namespace zxdb {
 
 namespace {
+
+// Some system ELF headers don't define the compact relocation section type.
+constexpr uint32_t kCompactRelocationSection = 0x40000014;
 
 #ifndef NDEBUG
 auto CheckUnitContextCacheAccess(std::atomic_flag& active) {
@@ -99,47 +93,94 @@ std::map<std::string, DwarfBinary::ElfTableSymbol> GetMergedElfSymbols(elflib::E
   return result;
 }
 
-// This function exists to filter out specific errors when decompressing
-// .debug_gdb_scripts sections from compressed debuginfo files which fail in
-// LLVM.
-void LLVMErrorHandler(llvm::Error error) {
-  llvm::handleAllErrors(std::move(error), [](llvm::ErrorInfoBase& info) {
-    if (info.message().find("gdb_scripts")) {
-      // Suppress errors for decompressing the "debug_gdb_scripts" section in rust binaries.
-      return;
-    }
-
-    // Otherwise just pass through to the console like the defaut error handler.
-    LOGS(Error) << info.message();
-  });
+// GNU compression changes the prefix but preserves the DWARF section kind.
+std::optional<std::string_view> DwarfSectionKind(std::string_view name) {
+  if (name.starts_with(".debug_"))
+    return name.substr(std::string_view(".debug_").size());
+  if (name.starts_with(".zdebug_"))
+    return name.substr(std::string_view(".zdebug_").size());
+  return std::nullopt;
 }
 
 // Reject repeated DWARF sections and find the lowest executable section address. Separate debug
 // files preserve section addresses and flags.
-ErrOr<uint64_t> InspectObjectSections(const llvm::object::ObjectFile& object) {
+ErrOr<uint64_t> InspectElfSections(elflib::ElfLib& elf, const std::string& path) {
   std::optional<uint64_t> first;
   std::unordered_set<std::string_view> dwarf_sections;
-  for (const llvm::object::SectionRef& section : object.sections()) {
-    // For ELF, a text section is one with SHF_EXECINSTR.
-    if (section.isText())
-      first = std::min(first.value_or(std::numeric_limits<uint64_t>::max()), section.getAddress());
+  const auto& headers = elf.GetSectionHeaders();
+  for (size_t i = 0; i < headers.size(); ++i) {
+    const auto& section = headers[i];
+    if (section.sh_flags & SHF_EXECINSTR)
+      first = std::min(first.value_or(std::numeric_limits<uint64_t>::max()), section.sh_addr);
 
-    auto name = section.getName();
-    if (!name) {
-      llvm::consumeError(name.takeError());
-      continue;
-    }
-    // GNU compression changes the prefix but preserves the DWARF section kind.
-    if ((name->consume_front(".debug_") || name->consume_front(".zdebug_")) &&
-        !dwarf_sections.insert(*name).second) {
+    auto kind = DwarfSectionKind(elf.GetSectionName(i));
+    if (kind && !dwarf_sections.insert(*kind).second) {
       return Err(
           "The object \"%s\" has more than one .debug_%s section. "
           "This usually means a relocatable (.o) file. Link it first. "
           "zxdb reads linked executables, shared libraries, and their separate debug files.",
-          object.getFileName().str().c_str(), name->str().c_str());
+          path.c_str(), std::string(*kind).c_str());
+    }
+  }
+
+  if (elf.GetEhdr()->e_type == ET_REL) {
+    // Split DWARF files can be ET_REL. Reject sections that would need debug relocations.
+    for (const auto& section : headers) {
+      if (section.sh_size && (section.sh_type == SHT_REL || section.sh_type == SHT_RELA ||
+                              section.sh_type == kCompactRelocationSection)) {
+        auto target = elf.GetSectionName(section.sh_info);
+        if (DwarfSectionKind(target)) {
+          return Err("The object \"%s\" has relocations for %s. Link it first.", path.c_str(),
+                     std::string(target).c_str());
+        }
+      }
     }
   }
   return first.value_or(0);
+}
+
+DwarfSections ReadDwarfSections(elflib::ElfLib& elf, const std::string& path) {
+  auto read = [&elf, &path](std::string_view name) -> std::span<const uint8_t> {
+    auto index = elf.FindSection(name);
+    if (!index)
+      return {};
+    auto section = elf.ReadSection(*index);
+    if (section.is_error()) {
+      LOGS(Error) << path << ": " << name << ": " << section.error_value();
+      return {};
+    }
+    return section.value();
+  };
+
+  // As in LLDB's ObjectFileELF, only sections with SHF_COMPRESSED are decompressed. Legacy GNU
+  // .zdebug_* names still participate in the duplicate check but provide no DWARF bytes.
+  return {
+      .info = read(".debug_info"),
+      .abbrev = read(".debug_abbrev"),
+      .str = read(".debug_str"),
+      .str_offsets = read(".debug_str_offsets"),
+      .line = read(".debug_line"),
+      .line_str = read(".debug_line_str"),
+      .addr = read(".debug_addr"),
+      .ranges = read(".debug_ranges"),
+      .rnglists = read(".debug_rnglists"),
+      .loc = read(".debug_loc"),
+      .loclists = read(".debug_loclists"),
+      .aranges = read(".debug_aranges"),
+      .names = read(".debug_names"),
+      .types = read(".debug_types"),
+      .info_dwo = read(".debug_info.dwo"),
+      .abbrev_dwo = read(".debug_abbrev.dwo"),
+      .str_dwo = read(".debug_str.dwo"),
+      .str_offsets_dwo = read(".debug_str_offsets.dwo"),
+      .line_dwo = read(".debug_line.dwo"),
+      .loc_dwo = read(".debug_loc.dwo"),
+      .loclists_dwo = read(".debug_loclists.dwo"),
+      .rnglists_dwo = read(".debug_rnglists.dwo"),
+      .types_dwo = read(".debug_types.dwo"),
+      .cu_index = read(".debug_cu_index"),
+      .tu_index = read(".debug_tu_index"),
+  };
 }
 
 }  // namespace
@@ -255,13 +296,7 @@ const DwarfSymbolFactory* DwarfBinaryImpl::GetSymbolFactory() const {
 }
 
 bool DwarfBinaryImpl::HasBinary() const {
-  if (!binary_name_.empty())
-    return true;
-
-  if (auto debug = elflib::ElfLib::Create(name_))
-    return debug->ProbeHasProgramBits();
-
-  return false;
+  return !binary_name_.empty() || (object_ && object_->ProbeHasProgramBits());
 }
 
 Err DwarfBinaryImpl::Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
@@ -269,57 +304,32 @@ Err DwarfBinaryImpl::Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
   symbol_factory_ = fxl::MakeRefCounted<DwarfSymbolFactory>(weak_factory_.GetWeakPtr(),
                                                             std::move(delegate), file_type);
 
-  if (auto debug = elflib::ElfLib::Create(name_)) {
-    if (debug->ProbeHasProgramBits()) {
-      // Found in ".debug" file.
-      plt_symbols_ = debug->GetPLTOffsets();
-      elf_symbols_ = GetMergedElfSymbols(*debug);
-      mapped_length_ = ComputeMappedLength(*debug);
-    } else if (auto elf = elflib::ElfLib::Create(binary_name_)) {
-      // Found in binary file.
-      plt_symbols_ = elf->GetPLTOffsets();
-      elf_symbols_ = GetMergedElfSymbols(*elf);
-      mapped_length_ = ComputeMappedLength(*elf);
-    }
-  }
+  auto object = elflib::ElfLib::CreateMapped(name_);
+  if (object.is_error())
+    return Err("Error loading symbols for \"" + name_ + "\": " + object.error_value());
+  auto elf = std::move(object).value();
+  auto first_code_address = InspectElfSections(*elf, name_);
+  if (first_code_address.has_error())
+    return first_code_address.err();
 
-  llvm::Expected<llvm::object::OwningBinary<llvm::object::Binary>> bin_or_err =
-      llvm::object::createBinary(name_);
-  if (!bin_or_err) {
-    auto err_str = llvm::toString(bin_or_err.takeError());
-    return Err("Error loading symbols for \"" + name_ + "\": " + err_str);
+  auto load_program_tables = [this](elflib::ElfLib& program) {
+    plt_symbols_ = program.GetPLTOffsets();
+    elf_symbols_ = GetMergedElfSymbols(program);
+    mapped_length_ = ComputeMappedLength(program);
+  };
+  if (elf->ProbeHasProgramBits() || binary_name_ == name_) {
+    load_program_tables(*elf);
+  } else if (!binary_name_.empty()) {
+    auto binary = elflib::ElfLib::CreateMapped(binary_name_);
+    if (binary.is_ok())
+      load_program_tables(*binary.value());
   }
 
   modification_time_ = GetFileModificationTime(name_);
-
-  auto binary_pair = bin_or_err->takeBinary();
-  binary_buffer_ = std::move(binary_pair.second);
-  binary_ = std::move(binary_pair.first);
-
-  const auto* object_file = llvm::dyn_cast<llvm::object::ObjectFile>(binary_.get());
-  if (!object_file)
-    return Err("Expected an object file for " + name_ + ".");
-  auto first_code_address = InspectObjectSections(*object_file);
-  if (first_code_address.has_error())
-    return first_code_address.err();
   first_code_address_ = first_code_address.value();
-
-  // Overwrite the default Error handler object, but leave everything else default.
-  context_ =
-      llvm::DWARFContext::create(*object_file, llvm::DWARFContext::ProcessDebugRelocations::Process,
-                                 nullptr, "", &LLVMErrorHandler);
-  sections_ = GetDwarfSections(context_->getDWARFObj());
-  if (object_file->isRelocatableObject() && !sections_.names.empty()) {
-    // In a relocatable object LLVM keeps the relocations separate from the section bytes.
-    // Resolve name index table relocations before publishing the reader.
-    const auto& object = context_->getDWARFObj();
-    llvm::DWARFDataExtractor data(object, object.getNamesSection(), object.isLittleEndian(), 0);
-    debug_names_ = DebugNamesReader::Parse(sections_, [&data](uint64_t offset, uint8_t width) {
-      return data.getRelocatedValue(width, &offset);
-    });
-  } else {
-    debug_names_ = DebugNamesReader::Parse(sections_);
-  }
+  object_ = std::move(elf);
+  sections_ = ReadDwarfSections(*object_, name_);
+  debug_names_ = DebugNamesReader::Parse(sections_);
   InitUnitLists();
   return Err();
 }

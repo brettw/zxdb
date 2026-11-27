@@ -5,6 +5,11 @@ executable with an integrated local debug agent. It includes the console,
 Debug Adapter Protocol (DAP) server, ELF/DWARF symbols, expression evaluation,
 symbol downloads, and minidump reading.
 
+zxdb reads DWARF from ELF executables, shared libraries, and separate debug
+files, including `.dwo` and `.dwp`. The loader accepts little-endian ELF32 and ELF64.
+It supports zlib and zstd compression with `SHF_COMPRESSED`. Link relocatable
+objects before loading their symbols.
+
 ## System packages
 
 On Debian 13, install all required packages with:
@@ -167,6 +172,4 @@ library include paths, LLVM API compatibility, and host library compatibility
 for range formatting and RapidJSON keys. Tests also exposed two runtime
 portability issues: filesystem timestamps now use the system clock epoch,
 and callback result storage retains stable addresses during synchronous
-completion. A regression test covers the callback case. LLVM 19's ScopedPrinter header needs
-the DWARF reader and its test helper compiled as C++20; the remaining build
-uses C++23.
+completion. A regression test covers the callback case. The build uses C++23.

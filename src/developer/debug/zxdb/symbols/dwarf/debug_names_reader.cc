@@ -108,7 +108,7 @@ std::optional<uint64_t> UnsignedValue(const FormValue& value) {
 std::optional<uint64_t> UnitIndex(const FormValue& value) {
   // LLVM 19's getAsUnsignedConstant accepts flags for unit indexes and excludes DW_FORM_sdata.
   if (value.form_class == FormValue::Class::kFlag)
-    return std::get<uint64_t>(value.value) != 0;
+    return std::get<uint64_t>(value.value);
   if (value.form_class == FormValue::Class::kConstant && value.form != DwarfForm::kSdata)
     return UnsignedValue(value);
   return std::nullopt;
@@ -116,12 +116,11 @@ std::optional<uint64_t> UnitIndex(const FormValue& value) {
 
 }  // namespace
 
-DebugNamesReader DebugNamesReader::Parse(const DwarfSections& sections,
-                                         const RelocateOffset& relocate) {
-  DebugNamesReader result(sections.names, sections.str, sections.endian);
+DebugNamesReader DebugNamesReader::Parse(const DwarfSections& sections) {
+  DebugNamesReader result(sections.str, sections.endian);
   DataReader reader(sections.names, sections.endian);
   while (reader.remaining() != 0) {
-    auto index = result.ReadIndex(reader, relocate);
+    auto index = result.ReadIndex(reader);
     if (index.has_error()) {
       // LLVM's DWARFDebugNames::extract keeps the earlier indexes on a contribution error.
       result.error_ = index.err();
@@ -132,8 +131,7 @@ DebugNamesReader DebugNamesReader::Parse(const DwarfSections& sections,
   return result;
 }
 
-ErrOr<DebugNamesReader::NameIndex> DebugNamesReader::ReadIndex(
-    DataReader& section, const RelocateOffset& relocate) const {
+ErrOr<DebugNamesReader::NameIndex> DebugNamesReader::ReadIndex(DataReader& section) const {
   uint64_t start = section.offset();
   auto error = [start](const char* reason) {
     return Err("DWARF name index at offset 0x%" PRIx64 ": %s", start, reason);
@@ -198,19 +196,6 @@ ErrOr<DebugNamesReader::NameIndex> DebugNamesReader::ReadIndex(
     return error(abbrev_error.msg().c_str());
   index.pool = reader.Bytes(reader.remaining());
 
-  if (relocate) {
-    // These are the table fields LLVM reads with getRelocatedValue(). Keep the overlay sparse
-    // and resolve it during Parse so later reads never call back into the object reader.
-    for (auto table : {index.cus, index.local_tus, index.strings}) {
-      for (size_t offset = 0; offset < table.size(); offset += offset_size) {
-        const uint8_t* field = table.data() + offset;
-        uint64_t section_offset = field - names_.data();
-        uint64_t value = relocate(section_offset, offset_size);
-        if (value != ReadFixed(field, offset_size, endian_))
-          index.relocations.emplace_back(section_offset, value);
-      }
-    }
-  }
   return index;
 }
 
@@ -256,16 +241,7 @@ std::optional<uint64_t> DebugNamesReader::ReadTableOffset(const NameIndex& index
   size_t width = index.forms.offset_size;
   if (element >= table.size() / width)
     return std::nullopt;
-  const uint8_t* field = table.data() + element * width;
-
-  if (!index.relocations.empty()) {
-    uint64_t offset = field - names_.data();
-    auto found = std::ranges::lower_bound(index.relocations, offset, {},
-                                          &std::pair<uint64_t, uint64_t>::first);
-    if (found != index.relocations.end() && found->first == offset)
-      return found->second;
-  }
-  return ReadFixed(field, width, endian_);
+  return ReadFixed(table.data() + element * width, width, endian_);
 }
 
 std::span<const uint8_t> DebugNamesReader::StringBytes(const NameIndex& index, uint64_t row) const {

@@ -1,5 +1,6 @@
 find_package(GTest CONFIG REQUIRED)
 add_executable(zxdb_tests
+  "${PROJECT_SOURCE_DIR}/src/lib/elflib/elflib_unittest.cc"
   client/minidump_memory_unittest.cc
   "${PROJECT_SOURCE_DIR}/third_party/crashpad/src/snapshot/test/test_module_snapshot.cc"
   ../ipc/automation_instruction_unittests.cc
@@ -271,7 +272,8 @@ add_executable(zxdb_tests
   symbols/variable_test_support.cc
   symbols/visit_scopes_unittest.cc
 )
-target_link_libraries(zxdb_tests PRIVATE zxdb_debug_adapter debug_shared_test_support GTest::gtest_main GTest::gmock)
+target_link_libraries(zxdb_tests PRIVATE zxdb_debug_adapter debug_shared_test_support
+  GTest::gtest_main GTest::gmock ZLIB::ZLIB)
 set_target_properties(zxdb_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")
 set(ZXDB_INDEX_BENCHMARK_BINARY "" CACHE FILEPATH "Optional binary for the symbol indexing benchmark")
 if(ZXDB_INDEX_BENCHMARK_BINARY)
@@ -293,6 +295,23 @@ set_target_properties(zxdb_symbol_test PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/test_data/zxdb"
   SUFFIX ".targetso")
 add_dependencies(zxdb_tests zxdb_symbol_test)
+
+# The stripped library supplies program bits; its separate debug file supplies zlib-compressed
+# DWARF. Decompress before recompressing so this also works with llvm-objcopy.
+set(symbol_elf_fixture_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/elf_sections")
+add_custom_command(
+  OUTPUT "${symbol_elf_fixture_dir}/symbols.so" "${symbol_elf_fixture_dir}/symbols.debug"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${symbol_elf_fixture_dir}"
+  COMMAND "${CMAKE_OBJCOPY}" --strip-unneeded
+    "$<TARGET_FILE:zxdb_symbol_test>" "${symbol_elf_fixture_dir}/symbols.so"
+  COMMAND "${CMAKE_OBJCOPY}" --only-keep-debug --decompress-debug-sections
+    "$<TARGET_FILE:zxdb_symbol_test>" "${symbol_elf_fixture_dir}/symbols.debug"
+  COMMAND "${CMAKE_OBJCOPY}" --compress-debug-sections=zlib "${symbol_elf_fixture_dir}/symbols.debug"
+  DEPENDS zxdb_symbol_test
+  VERBATIM)
+add_custom_target(zxdb_symbol_elf_fixtures
+  DEPENDS "${symbol_elf_fixture_dir}/symbols.so" "${symbol_elf_fixture_dir}/symbols.debug")
+add_dependencies(zxdb_tests zxdb_symbol_elf_fixtures)
 
 # Line table fixtures. The same small source builds with different compilers, DWARF versions, and
 # linkers. line_program_binary_unittest.cc decodes each one and checks the rows for the lines of the

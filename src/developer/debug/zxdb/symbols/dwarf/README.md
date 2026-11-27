@@ -65,8 +65,8 @@
 - A reader error is sticky. Later reads return zero or an empty view.
 - `DwarfSections` borrows its bytes. For a byte fixture, finish writing the
   buffers before constructing the binary. Keep them alive while the binary
-  or a reader uses them. A file fixture gets its bytes from the object loader.
-  The file loader uses LLVM to supply these views.
+  or a reader uses them. A file-backed binary keeps the `elflib` mapping and
+  any decompressed buffers alive for its readers.
 - DWARF offset zero and type signature zero are valid.
 - An unknown DWARF 5 unit type uses the compile unit header layout. The list
   uses the declared length to find the next header.
@@ -171,14 +171,14 @@
 - The reader decodes entry attributes with `ReadForm()`. A TU index takes
   precedence over a CU index. A single CU is implicit when the entry omits
   its CU index. Parent offsets are relative to the entry pool.
+  A unit index encoded as `DW_FORM_flag` uses the raw byte, as in LLVM 19.
   `DW_FORM_flag_present` means that the parent has no entry in the pool.
 - The parsed name indexes have no lazy state. Lookups can share the reader
-  across threads while the section bytes stay alive. The caller can supply
-  relocated CU, local TU, and string offsets at parse time.
+  across threads while the section bytes stay alive. CU, local TU, and string
+  offsets come directly from the section bytes.
 - A parsed context has no lazy state. It borrows the section bytes, including
   the skeleton's address and range sections when applicable. Readers can
-  share the context across threads while the section bytes stay alive. The
-  reader expects section bytes with ELF relocations already applied.
+  share the context across threads while the section bytes stay alive.
 - The caller can supply an abbreviation table from its cache. The context
   uses the table during parsing. After parsing, the context only depends on
   the section bytes. The binary can clear its caches while a caller holds

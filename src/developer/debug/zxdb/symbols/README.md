@@ -113,10 +113,11 @@ Public headers expose these symbol classes, factories, and evaluators:
 
 Callers and implementations must preserve these invariants:
 
-- zxdb loads linked executables, shared libraries, and their separate debug
-  files, including `.dwo` and `.dwp`. It does not support bare relocatable
-  object files (`.o` files or `ld -r` output). If an object has more than one
-  section of the same DWARF kind, loading fails with an error that names it.
+- zxdb loads ELF executables, shared libraries, and their separate debug
+  files, including `.dwo` and `.dwp`. Link bare relocatable objects before
+  loading their symbols. The loader rejects an `ET_REL` file with debug
+  relocations and any ELF file with repeated sections of the same DWARF kind.
+  The error identifies the section.
 - `Symbol` objects use `fxl::RefCountedThreadSafe<Symbol>` and do not globally
   cache or deduplicate instances by DIE offset. Never compare `Symbol*` pointers
   to test semantic symbol equality.
@@ -157,9 +158,8 @@ Callers and implementations must preserve these invariants:
   section-relative reference uses the source's info section. Type signature
   lookups prefer the source's normal or split section set. If that section set
   has no matching signature, the lookup searches the other set in the binary.
-- `DwarfBinaryImpl` parses `.debug_names` at load time. The reader
-  uses immutable section bytes, parsed abbreviations, and any offset
-  relocations that LLVM supplies for the name index tables.
+- `DwarfBinaryImpl` parses `.debug_names` at load time. The reader uses
+  immutable section bytes and parsed abbreviations.
 - `FindDebugNamesEntries()` checks that both the unit and DIE offsets
   are present and that their sum fits. Offset zero is valid. Local type units
   use `.debug_info` offsets. The reader returns foreign type signatures and
@@ -172,8 +172,12 @@ Callers and implementations must preserve these invariants:
   from line rows, `DW_AT_decl_file`, and the file index compare equal.
 - The DIE attribute, line table, location list, range list, aranges, and
   name and package index parsers read section bytes from `DwarfSections`.
-  `dwarf_sections_llvm.cc` maps the LLVM sections to these views. The byte
-  readers expect any required ELF relocations to be applied to the bytes.
+  `DwarfBinaryImpl` populates the views from little-endian ELF32 and ELF64.
+  The binary keeps the read-only file mapping and decompressed buffers alive
+  through `elflib`. The loader logs and skips unreadable sections.
+  It supports zlib and zstd with `SHF_COMPRESSED`, as
+  LLDB's `ObjectFileELF` does. Legacy GNU `.zdebug_*` names participate in
+  duplicate detection only.
   `UnitContext` reads root DIE metadata for string offsets, indexed addresses,
   location lists, range lists, compilation directories, and line table
   offsets. The binary resolves package contributions from the native CU and
@@ -191,9 +195,9 @@ Callers and implementations must preserve these invariants:
 - The binary shares parsed abbreviation tables by section kind, offset, and
   contribution end. The unit context and DIE table use the same abbreviations.
   Each DIE table holds the abbreviations it needs through cache eviction.
-- LLVM objects, unit wrappers, unit contexts, and line tables belong to the
-  binary's owning thread. Each DWO index worker owns its binary until it
-  passes the binary to the module.
+- Unit wrappers, unit contexts, and line tables belong to the binary's
+  owning thread. Each DWO index worker owns its binary until it passes the
+  binary to the module.
 - Raw DIE and signature lookups can run from other threads. They use immutable
   unit lists and package abbreviation bounds computed at load time. One lock
   protects DIE table builds, eviction, and the signature maps. A table build
@@ -212,6 +216,8 @@ Callers and implementations must preserve these invariants:
   portions of unrelated crossing ranges outside their overlap.
 - `IsStrippedSequenceStart()` is the only rule for removed code: a sequence
   that starts below `DwarfBinary::GetFirstCodeAddress()`. This matches LLDB.
+  The loader takes the lowest section address with `SHF_EXECINSTR`. The
+  flags and addresses are available in separate debug files.
   `LineTable` drops those sequences, and the file index ignores their files.
   Both use `LineSequenceValidator` to also reject decreasing addresses and
   commit only complete sequences. Equal addresses and zero-length sequences
@@ -280,8 +286,10 @@ alive until the binary and its readers are finished. These tests use the
 same DIE tables, abbreviation cache, unit contexts, and line parser as the
 debugger. Expected values come from the encoded bytes or the DWARF standard.
 
-File fixtures use `DwarfBinaryImpl::Load()`, which uses LLVM to open the
-object and supply its sections. The package and skeleton-link tests build
+File fixtures use `DwarfBinaryImpl::Load()`. They cover zlib and zstd
+compression, a separate debug file and stripped library, and a `.dwo` file.
+Small synthetic ELF files cover the first code address and recovery from
+malformed compression headers. The package and skeleton-link tests build
 their sections in memory.
 
 Run these commands to build and test `zxdb/symbols`:

@@ -380,6 +380,8 @@ TEST(DebugNamesReader, ImplicitConstantAndBadUnitIndexes) {
   WriteAbbrev(abbrevs, 2, DwarfTag::kClassType,
               {{kCompileUnit, DwarfForm::kUdata}, {kDieOffset, DwarfForm::kRef1}});
   WriteAbbrev(abbrevs, 3, DwarfTag::kClassType, {{kDieOffset, DwarfForm::kRef1}});
+  WriteAbbrev(abbrevs, 4, DwarfTag::kClassType,
+              {{kCompileUnit, DwarfForm::kFlag}, {kDieOffset, DwarfForm::kRef1}});
   abbrevs.Uleb(0);
 
   DwarfSectionBuilder pool(index.pool, index.endian);
@@ -394,6 +396,10 @@ TEST(DebugNamesReader, ImplicitConstantAndBadUnitIndexes) {
   pool.Uleb(2);
   pool.Uleb(0);
   pool.Fixed(0x17, 1);
+  // A malformed flag byte must not redirect this entry to CU index 1.
+  pool.Uleb(4);
+  pool.Fixed(2, 1);
+  pool.Fixed(0x18, 1);
   pool.Uleb(0);
 
   std::vector<uint8_t> section;
@@ -402,12 +408,13 @@ TEST(DebugNamesReader, ImplicitConstantAndBadUnitIndexes) {
       DebugNamesReader::Parse({.str = AsBytes(std::string_view("x\0", 2)), .names = section});
   ASSERT_FALSE(reader.error().has_error()) << reader.error().msg();
   auto entries = ByName(reader, "x");
-  ASSERT_EQ(4u, entries.size());
+  ASSERT_EQ(5u, entries.size());
   EXPECT_EQ(0x500u, entries[0].cu_offset);
   EXPECT_EQ(0x123u, entries[0].die_unit_offset);
   EXPECT_EQ(std::nullopt, entries[1].cu_offset);
   EXPECT_EQ(std::nullopt, entries[2].cu_offset);
   EXPECT_EQ(0x300u, entries[3].cu_offset);
+  EXPECT_EQ(std::nullopt, entries[4].cu_offset);
 }
 
 TEST(DebugNamesReader, TruncationAtEveryByte) {
@@ -559,22 +566,14 @@ TEST(DebugNamesReader, InvalidAbbreviations) {
   }
 }
 
-TEST(DebugNamesReader, OffsetRelocationsAndConcurrentReads) {
+TEST(DebugNamesReader, ConcurrentReads) {
   const auto strings = AsBytes(std::string_view("unused\0name\0", 12));
-  IndexBytes index = SingleName(0, 0, 0x14);
-  index.local_tus = {0};
+  // DWARF 5 section 6.1.1.4 makes the string offset relative to .debug_str.
+  IndexBytes index = SingleName(7, 0x140, 0x14);
   std::vector<uint8_t> section;
-  auto layout = index.AppendTo(section);
-  std::vector<uint64_t> visited_fields;
-  const auto reader = DebugNamesReader::Parse(
-      {.str = strings, .names = section}, [&](uint64_t offset, uint8_t width) {
-        EXPECT_EQ(4u, width);
-        visited_fields.push_back(offset);
-        return offset == layout.cus ? 0x140u : offset == layout.strings ? 7u : 0u;
-      });
+  index.AppendTo(section);
+  const auto reader = DebugNamesReader::Parse({.str = strings, .names = section});
   ASSERT_FALSE(reader.error().has_error()) << reader.error().msg();
-  const std::vector<uint64_t> expected_fields = {layout.cus, layout.local_tus, layout.strings};
-  EXPECT_EQ(expected_fields, visited_fields);
   auto check = [&] {
     EXPECT_TRUE(ByName(reader, "unused").empty());
     auto entries = ByName(reader, "name");
@@ -585,7 +584,6 @@ TEST(DebugNamesReader, OffsetRelocationsAndConcurrentReads) {
   std::thread worker(check);
   check();
   worker.join();
-  EXPECT_EQ(expected_fields, visited_fields);
 }
 
 }  // namespace
