@@ -26,7 +26,10 @@
 #include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_symbol_factory.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
+#include "src/developer/debug/zxdb/symbols/function_address_map.h"
 #include "src/developer/debug/zxdb/symbols/line_program.h"
+#include "src/developer/debug/zxdb/symbols/line_table.h"
 #include "src/developer/debug/zxdb/symbols/line_table_cache.h"
 #include "src/developer/debug/zxdb/symbols/unit_context_cache.h"
 #include "src/developer/debug/zxdb/symbols/unit_context_source.h"
@@ -40,15 +43,13 @@ class ElfLib;
 
 namespace zxdb {
 
-class DwarfUnit;
 class LineFileTable;
-class LineTable;
-class SymbolContext;
 
 // Represents one DWARF file or one set of in-memory sections. ModuleSymbols connects a
 // main binary to the separate .dwo files that its skeleton units reference.
 //
 // Call on the binary's owning thread except for the raw DIE and type signature lookups below.
+// The owner builds the unit context, line table, and function address map caches on demand.
 // Immutable section views and DIE snapshots can be read from other threads while the binary
 // stays alive.
 class DwarfBinary final {
@@ -116,15 +117,10 @@ class DwarfBinary final {
   // but this isn't guaranteed.
   uint32_t GetNormalUnitCount() const;
   uint32_t GetDWOUnitCount() const;
-  fxl::RefPtr<DwarfUnit> GetUnitAtIndex(UnitIndex i);
+  std::optional<DwarfUnit> GetUnitAtIndex(UnitIndex index);
 
-  // Returns the DwarfUnit covering the given absolute address location. Can be null if there's
-  // no unit that covers this area.
-  fxl::RefPtr<DwarfUnit> UnitForAddress(const SymbolContext& symbol_context,
-                                        TargetPointer absolute_address);
-
-  // Like UnitForAddress but takes an address relative to the load address of the binary.
-  fxl::RefPtr<DwarfUnit> UnitForRelativeAddress(uint64_t relative_address);
+  // Finds the normal unit covering a module-relative address, if any.
+  std::optional<DwarfUnit> UnitForRelativeAddress(uint64_t relative_address);
 
   // Returns the 64-bit value from the .debug_addr section.
   //
@@ -142,7 +138,7 @@ class DwarfBinary final {
   // It's theoretically possible for a .dwo file to have more than one unit. If that happens, it
   // would be possible to disambiguate them by name. Currently this does not happen so this just
   // returns the first DWO unit.
-  fxl::RefPtr<DwarfUnit> GetDwoUnit();
+  std::optional<DwarfUnit> GetDwoUnit();
 
   // Looks up a DIE across units by its DIE reference. Both overloads can run on any thread.
   DwarfDie GetDieAtOffset(DwarfDieRef die_ref) const;
@@ -176,20 +172,14 @@ class DwarfBinary final {
   // IsStrippedSequenceStart().
   uint64_t GetFirstCodeAddress() const { return first_code_address_; }
 
-  // Releases cached DIE tables, line tables, unit wrappers, unit contexts, abbreviation tables,
-  // and type signature maps. Later requests rebuild them on demand.
-  // Call on the context's owning thread. Existing DIE handles remain valid.
+  // Releases cached DIE tables, line and file tables, function address maps, unit contexts,
+  // abbreviation tables, and type signature maps. Later requests rebuild them on demand.
+  // Call on the binary's owning thread. Existing DIE handles keep their snapshots. Borrowed
+  // line table references expire.
   void ClearDwarfCaches();
 
-  // Decodes the whole line table of the unit. The file table is shared with GetLineFileTable().
-  LineTable DecodeLineTable(UnitIndex unit) const;
-
-  // Restrict lookup to the selected file sections. These lookups do not create a unit wrapper.
+  // Finds the root DIE of the unit containing the reference in the selected section set.
   DwarfDie GetUnitDieForRef(DwarfDieRef die_ref, bool is_dwo) const;
-
-  // Returns a new DwarfUnit wrapper without adding it to the wrapper cache.
-  // Returns null if the DIE does not belong to this binary.
-  fxl::RefPtr<DwarfUnit> CreateUncachedUnit(const DwarfDie& die);
 
  private:
   friend class UnitContextCache;
@@ -202,6 +192,7 @@ class DwarfBinary final {
   };
 
   std::optional<IndexedUnit> GetUnitHeader(UnitIndex index) const;
+  DwarfDieRef GetUnitRef(UnitIndex index, std::optional<uint64_t> offset = std::nullopt) const;
   void InitUnitLists();
   const UnitList& GetUnitList(bool is_dwo, UnitSection section) const;
 
@@ -211,6 +202,9 @@ class DwarfBinary final {
   DwarfDie GetDieAtIndex(UnitIndex index, uint64_t die_index, DwarfDie::Load load) const;
   DwarfDie GetDieAtOffset(UnitIndex index, uint64_t die_offset) const;
   void ClearDieCache(UnitIndex index) const;
+
+  const LineTable& GetLineTable(UnitIndex index) const;
+  LazySymbol FunctionForRelativeAddress(UnitIndex index, uint64_t relative_address) const;
 
   // Lazily initializes the signature maps.
   void EnsureSignatureMap() const;
@@ -237,9 +231,6 @@ class DwarfBinary final {
   std::map<std::string, uint64_t> plt_symbols_;
 
   fxl::RefPtr<DwarfSymbolFactory> symbol_factory_;
-
-  // The binary's owner accesses the unit wrappers.
-  mutable std::map<UnitIndex, fxl::RefPtr<DwarfUnit>> unit_map_;
 
   struct PackageUnit {
     UnitContextCache::AbbrevSection abbrev;
@@ -268,10 +259,17 @@ class DwarfBinary final {
   mutable UnitContextCache unit_contexts_;
 #ifndef NDEBUG
   mutable std::atomic_flag unit_context_cache_active_;
+  // These caches can request unit contexts while building an entry.
+  mutable std::atomic_flag unit_caches_active_;
 #endif
 
-  // File tables of the line tables, computed lazily.
-  mutable LineTableCache line_tables_;
+  // Slots follow the normal and DWO unit lists. The owner populates them on demand and resets
+  // them without resizing. Function maps store DIE offsets and survive DIE table eviction.
+  mutable std::array<std::vector<std::optional<FunctionAddressMap>>, 2> function_address_maps_;
+  mutable std::array<std::vector<std::optional<LineTable>>, 2> line_tables_;
+
+  // File tables are shared with DW_AT_decl_file lookups.
+  mutable LineTableCache line_file_tables_;
 
   uint64_t mapped_length_ = 0;
   uint64_t first_code_address_ = 0;  // Set when the file is loaded.

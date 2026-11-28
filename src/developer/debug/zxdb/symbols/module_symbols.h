@@ -8,12 +8,14 @@
 #include <stdint.h>
 
 #include <ctime>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "lib/fit/function.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_debug_names.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/identifier.h"
 #include "src/developer/debug/zxdb/symbols/index_node.h"
 #include "src/developer/debug/zxdb/symbols/location.h"
@@ -25,7 +27,6 @@
 
 namespace zxdb {
 
-class DwarfUnit;
 class FileLine;
 class Function;
 class FunctionNameIndex;
@@ -61,14 +62,12 @@ class ModuleSymbols : public fxl::RefCountedThreadSafe<ModuleSymbols> {
   // This scheme allows calling code to lookup based on what it's used for rather than encoding
   // debug-fission-specific logic at each site.
   //
-  // The pointers will be invalid if there is no unit found. They should both either be valid or
-  // null, but not a combination.
+  // A successful lookup supplies both units.
   struct FoundUnit {
-    // Returns true if the pointers are valid.
     operator bool() const { return main_binary_unit && details_unit; }
 
-    fxl::RefPtr<DwarfUnit> main_binary_unit;  // Use for line table and address table information.
-    fxl::RefPtr<DwarfUnit> details_unit;      // Use for detailed symbols (functions, types).
+    std::optional<DwarfUnit> main_binary_unit;  // Use for line table and address table information.
+    std::optional<DwarfUnit> details_unit;      // Use for detailed symbols (functions, types).
   };
 
   fxl::WeakPtr<ModuleSymbols> GetWeakPtr();

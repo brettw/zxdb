@@ -65,7 +65,7 @@ class DieTree {
   }
 
   DwarfBinary& binary() { return *binary_; }
-  fxl::RefPtr<DwarfUnit> unit() { return binary_->GetUnitAtIndex(UnitIndex(false, 0)); }
+  std::optional<DwarfUnit> unit() { return binary_->GetUnitAtIndex(UnitIndex(false, 0)); }
   DwarfDie root(DwarfDie::Load load = DwarfDie::Load::kAllDies) { return unit()->GetUnitDie(load); }
 
   size_t root_offset;

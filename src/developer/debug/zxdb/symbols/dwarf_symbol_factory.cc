@@ -249,9 +249,10 @@ fxl::RefPtr<CompileUnit> DwarfSymbolFactory::GetCompileUnitForDie(DwarfDieRef di
 UnitContextSource DwarfSymbolFactory::GetSkeletonUnit() const {
   if (file_type_ == kDWO && delegate_) {
     if (CompileUnit* skeleton = delegate_->GetSkeletonCompileUnit()) {
-      auto* unit = skeleton->dwarf_unit();
-      if (auto* binary = unit->GetBinary())
-        return {binary, unit->GetUnitIndex()};
+      if (const auto* unit = skeleton->dwarf_unit()) {
+        if (auto* binary = unit->GetBinary())
+          return {binary, unit->GetUnitIndex()};
+      }
     }
   }
   return {};
@@ -720,7 +721,7 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeCompileUnit(const DwarfDie& die, D
   if (language && *language >= 0 && *language < static_cast<int>(DwarfLang::kLast))
     lang_enum = static_cast<DwarfLang>(*language);
 
-  auto dwarf_unit = binary_->CreateUncachedUnit(die);
+  auto dwarf_unit = binary_->GetUnitAtIndex(die.unit_index());
   if (!dwarf_unit)
     return fxl::MakeRefCounted<Symbol>();
 

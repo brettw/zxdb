@@ -295,7 +295,6 @@ ModuleSymbols::FoundUnit ModuleSymbolsImpl::GetDwarfUnitForAddress(
   // The dwos_.empty() check is an optimization to avoid checking the skeleton units when we know
   // there are none.
   if (!result.main_binary_unit || dwos_.empty()) {
-    // The result should either be both null pointers, or both the valid non-DWO unit.
     return result;
   }
 
@@ -959,7 +958,7 @@ void ModuleSymbolsImpl::ResolveLineInputLocationForFile(const SymbolContext& sym
 
   std::vector<LineMatch> matches;
   for (UnitIndex index : *units) {
-    fxl::RefPtr<DwarfUnit> unit = binary_->GetUnitAtIndex(index);
+    auto unit = binary_->GetUnitAtIndex(index);
     const LineTable& line_table = unit->GetLineTable();
 
     // Complication 1 above: find all matches for this line in the unit.

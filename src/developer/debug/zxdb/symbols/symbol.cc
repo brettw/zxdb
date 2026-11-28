@@ -71,11 +71,12 @@ fxl::RefPtr<CompileUnit> Symbol::GetCompileUnit() const {
   }
 }
 
-fxl::RefPtr<DwarfUnit> Symbol::GetDwarfUnit() const {
-  fxl::RefPtr<CompileUnit> comp_unit = GetCompileUnit();
-  if (!comp_unit)
-    return fxl::RefPtr<DwarfUnit>();
-  return RefPtrTo(comp_unit->dwarf_unit());
+std::optional<DwarfUnit> Symbol::GetDwarfUnit() const {
+  if (auto comp_unit = GetCompileUnit()) {
+    if (const auto* unit = comp_unit->dwarf_unit())
+      return *unit;
+  }
+  return std::nullopt;
 }
 
 fxl::WeakPtr<ModuleSymbols> Symbol::GetModuleSymbols() const {

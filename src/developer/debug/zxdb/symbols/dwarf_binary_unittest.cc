@@ -243,14 +243,84 @@ TEST(DwarfBinary, UnitAddressFallbackUsesRootRnglist) {
   // MyFunction(int) is in the third CU, whose root DIE describes its code with DW_FORM_rnglistx.
   auto expected_unit = binary.GetUnitAtIndex(UnitIndex(false, 2));
   ASSERT_TRUE(expected_unit);
-  EXPECT_EQ(expected_unit, binary.UnitForRelativeAddress(0x1420));
-  EXPECT_EQ(expected_unit, binary.UnitForRelativeAddress(0x14cc));
+  for (uint64_t address : {0x1420, 0x14cc}) {
+    auto unit = binary.UnitForRelativeAddress(address);
+    ASSERT_TRUE(unit);
+    EXPECT_EQ(expected_unit->GetUnitIndex(), unit->GetUnitIndex());
+  }
   EXPECT_FALSE(binary.UnitForRelativeAddress(0x14cd));
 
   LazySymbol function = expected_unit->FunctionForRelativeAddress(0x1420);
   ASSERT_TRUE(function.is_valid());
   EXPECT_EQ("MyFunction", function.Get()->GetAssignedName());
   EXPECT_FALSE(expected_unit->FunctionForRelativeAddress(0x14cd).is_valid());
+}
+
+TEST(DwarfBinary, ClearDwarfCachesEvictsLineTablesAndFunctionMaps) {
+  TestSymbolModule setup(TestSymbolModule::kCheckedIn);
+  ASSERT_TRUE(setup.Init("", false).ok());
+  auto& binary = *setup.symbols()->binary();
+  const UnitIndex index(false, 2);
+  auto unit = binary.GetUnitAtIndex(index);
+  ASSERT_TRUE(unit);
+
+  // MyFunction(int) starts at 0x1420 in the third CU.
+  constexpr uint64_t kAddress = 0x1420;
+  auto function = unit->FunctionForRelativeAddress(kAddress);
+  ASSERT_TRUE(function);
+  EXPECT_EQ("MyFunction", function.Get()->GetAssignedName());
+  auto compile_unit = function.Get()->GetCompileUnit();
+  ASSERT_TRUE(compile_unit);
+  const auto* symbol_unit = compile_unit->dwarf_unit();
+  ASSERT_TRUE(symbol_unit);
+  EXPECT_EQ(index, symbol_unit->GetUnitIndex());
+
+  size_t sequence_count = unit->GetLineTable().GetNumSequences();
+  ASSERT_GT(sequence_count, 0u);
+  EXPECT_EQ(&unit->GetLineTable(), &symbol_unit->GetLineTable());
+  auto files = binary.GetLineFileTable(index, 1);
+  ASSERT_EQ(&unit->GetLineTable().files(), files.get());
+  std::weak_ptr<const LineFileTable> cached_files = files;
+  files.reset();
+
+  // The CompileUnit can use the same function map without reloading the full DIE table.
+  unit->ClearDieCache();
+  EXPECT_EQ(function.die_ref(), symbol_unit->FunctionForRelativeAddress(kAddress).die_ref());
+  EXPECT_FALSE(unit->GetUnitDie(DwarfDie::Load::kRootOnly).first_child());
+
+  binary.ClearDwarfCaches();
+  EXPECT_TRUE(cached_files.expired());
+  EXPECT_FALSE(unit->GetUnitDie(DwarfDie::Load::kRootOnly).first_child());
+
+  // Both lookups rebuild their entries for the surviving CompileUnit.
+  EXPECT_EQ(sequence_count, symbol_unit->GetLineTable().GetNumSequences());
+  EXPECT_EQ(&unit->GetLineTable(), &symbol_unit->GetLineTable());
+  EXPECT_EQ(function.die_ref(), symbol_unit->FunctionForRelativeAddress(kAddress).die_ref());
+  EXPECT_TRUE(unit->GetUnitDie(DwarfDie::Load::kRootOnly).first_child());
+}
+
+TEST(DwarfBinary, CompileUnitOutlivesBinary) {
+  fxl::RefPtr<CompileUnit> compile_unit;
+  {
+    TestSymbolModule setup(TestSymbolModule::kCheckedIn);
+    ASSERT_TRUE(setup.Init("", false).ok());
+    auto* binary = setup.symbols()->binary();
+    auto unit = binary->GetUnitAtIndex(UnitIndex(false, 0));
+    ASSERT_TRUE(unit);
+    compile_unit = binary->GetSymbolFactory()->GetCompileUnitForDie(unit->GetDieRef());
+    ASSERT_TRUE(compile_unit);
+    const auto* symbol_unit = compile_unit->dwarf_unit();
+    ASSERT_TRUE(symbol_unit);
+    EXPECT_EQ(binary, symbol_unit->GetBinary());
+    EXPECT_GT(symbol_unit->GetLineTable().GetNumSequences(), 0u);
+  }
+
+  const auto* unit = compile_unit->dwarf_unit();
+  EXPECT_FALSE(unit->GetBinary());
+  EXPECT_FALSE(unit->GetUnitDie());
+  EXPECT_FALSE(unit->GetOffset());
+  EXPECT_FALSE(unit->GetDieRef());
+  EXPECT_EQ(0u, unit->GetLineTable().GetNumSequences());
 }
 
 TEST(DwarfBinary, UnitAddressArangesMerge) {
@@ -281,15 +351,13 @@ TEST(DwarfBinary, UnitAddressArangesMerge) {
   TestSymbolModule setup(path, "");
   ASSERT_TRUE(setup.Init().ok());
   DwarfBinary& binary = *setup.symbols()->binary();
-  auto first = binary.GetUnitAtIndex(UnitIndex(false, 0));
-  auto second = binary.GetUnitAtIndex(UnitIndex(false, 1));
-  ASSERT_TRUE(first);
-  ASSERT_TRUE(second);
   EXPECT_FALSE(binary.UnitForRelativeAddress(0x1139));
-  EXPECT_EQ(first, binary.UnitForRelativeAddress(0x113a));
-  EXPECT_EQ(first, binary.UnitForRelativeAddress(0x1164));
-  EXPECT_EQ(second, binary.UnitForRelativeAddress(0x1165));
-  EXPECT_EQ(second, binary.UnitForRelativeAddress(0x1183));
+  for (const auto& [address, index] :
+       {std::pair{0x113a, 0}, {0x1164, 0}, {0x1165, 1}, {0x1183, 1}}) {
+    auto unit = binary.UnitForRelativeAddress(address);
+    ASSERT_TRUE(unit);
+    EXPECT_EQ(UnitIndex(false, index), unit->GetUnitIndex());
+  }
   EXPECT_FALSE(binary.UnitForRelativeAddress(0x1184));
 }
 
@@ -832,14 +900,14 @@ TEST_F(UnitContextCacheTest, LineTableCallersPopulateCache) {
   EXPECT_EQ(1u, UnitEntries(binary, index));
   EXPECT_EQ(1u, AbbrevEntries(binary));
 
-  // Start with empty caches so DecodeLineTable has to fetch the unit context itself.
+  // Start with empty caches so GetLineTable has to fetch the unit context itself.
   binary.ClearDwarfCaches();
   EXPECT_EQ(0u, UnitEntries(binary, index));
-  auto lines = binary.DecodeLineTable(index);
+  const auto& lines = unit->GetLineTable();
   ASSERT_GT(lines.GetNumSequences(), 0u);
   EXPECT_EQ(1u, UnitEntries(binary, index));
   EXPECT_EQ(1u, AbbrevEntries(binary));
-  EXPECT_EQ(lines.GetNumSequences(), binary.DecodeLineTable(index).GetNumSequences());
+  EXPECT_EQ(lines.GetNumSequences(), unit->GetLineTable().GetNumSequences());
   EXPECT_EQ(1u, UnitEntries(binary, index));
   EXPECT_EQ(1u, AbbrevEntries(binary));
 }
@@ -869,7 +937,7 @@ TEST_F(UnitContextCacheTest, RangedFunctionDecodePopulatesCache) {
   ASSERT_TRUE(function_ref);
 
   // Keep the complete line file table while testing a cold unit context and abbreviation cache.
-  ASSERT_GT(binary.DecodeLineTable(index).GetNumSequences(), 0u);
+  ASSERT_GT(unit->GetLineTable().GetNumSequences(), 0u);
   ClearUnitContexts(binary);
   ASSERT_EQ(0u, UnitEntries(binary, index));
   ASSERT_EQ(0u, AbbrevEntries(binary));

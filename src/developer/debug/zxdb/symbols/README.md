@@ -66,11 +66,11 @@ Public headers expose these symbol classes, factories, and evaluators:
 
 - `DwarfDie` holds an entry in an immutable `DieTable`. Use it to read
   the tag, walk the tree, or iterate over the attribute specifications.
-  The handle keeps its table alive through cache eviction. Keep the binary
-  alive while reading the encoded attributes. Use `DwarfDie::ref()` to
-  store the section and offset for later lookup. Resolve names and decode
-  attributes on the binary's owning thread because those operations can use
-  the unit context cache.
+  A DIE handle keeps its table alive through cache eviction and after
+  a root-only load is replaced by a full load. Keep the binary alive while
+  reading encoded attributes. Use `DwarfDie::ref()` to store the section and
+  offset for later lookup. Resolve names and decode attributes on the binary's
+  owning thread because those operations can use the unit context cache.
   Name lookup follows the specification, abstract origin, and type signature
   in that order. A Clang inline instance can reach its name through an
   abstract origin that points to a separate specification.
@@ -152,8 +152,10 @@ Callers and implementations must preserve these invariants:
 - `DwarfBinary` reads unit headers from `DwarfSections`. Its unit lists
   put info units before types units for both normal and DWO sections. DIE
   lookups use the ELF section and unit offset. Raw DIE lookups return handles
-  directly. The index requests a cached unit wrapper when it needs to walk
-  the scope of a declaration in another unit.
+  directly.
+- A `DwarfUnit` is a copyable unit index with a weak reference to its binary.
+  A `CompileUnit` symbol can keep it after module unload. Lookups on the unit
+  return empty results after the binary is destroyed.
 - When a type signature has no target DIE, `DwarfSymbolFactory` returns an
   empty `Symbol`.
 - A unit-relative DIE reference must point into the unit's DIE data. A
@@ -197,9 +199,9 @@ Callers and implementations must preserve these invariants:
 - The binary shares parsed abbreviation tables by section kind, offset, and
   contribution end. The unit context and DIE table use the same abbreviations.
   Each DIE table holds the abbreviations it needs through cache eviction.
-- Unit wrappers, unit contexts, and line tables belong to the binary's
-  owning thread. Each DWO index worker owns its binary until it passes the
-  binary to the module.
+- Use `DwarfUnit`, unit contexts, line and file tables, and function address
+  maps on the binary's owning thread. Each DWO index worker owns its binary
+  until it passes the binary to the module.
 - Raw DIE and signature lookups can run from other threads. They use immutable
   unit lists and package abbreviation bounds computed at load time. One lock
   protects DIE table builds, eviction, and the signature maps. A table build
@@ -254,16 +256,18 @@ Using `zxdb/symbols` produces these disk, cache, and IPC side effects:
   `Collection::GetSpecialType()` lazily computes and caches the formatted name,
   `Identifier`, or `SpecialType` on the `Symbol`.
 - The first function address lookup scans the unit's DIE table and decodes
-  concrete function ranges. It caches the map even when there are no
-  functions. The map stores DIE offsets and stays valid after DIE table
-  eviction.
-- `DwarfUnit::GetLineTable()` decodes and caches the unit's line table.
+  concrete function ranges. The binary caches one map per unit, including
+  empty maps. The map stores DIE offsets and survives DIE table eviction.
+- `DwarfUnit::GetLineTable()` uses the binary's cache of decoded line tables
+  keyed by unit index. The returned reference is valid until
+  `DwarfBinary::ClearDwarfCaches()` or destruction of the binary.
   `DwarfBinary::GetLineFileTable()` usually parses only the line table header.
   Both share the file tables in the binary's `LineTableCache`.
-- `DwarfBinary::ClearDwarfCaches()` clears cached unit wrappers, file
-  tables, unit contexts, DIE tables, abbreviations, and type signature maps.
-  Previously returned contexts and DIE handles keep their snapshots while
-  the section bytes stay alive.
+- `DwarfBinary::ClearDwarfCaches()` clears decoded line tables, file tables,
+  function address maps, unit contexts, DIE tables, abbreviations, and type
+  signature maps. Existing unit values can rebuild cache entries on demand.
+  Previously returned contexts and DIE handles keep their snapshots while the
+  section bytes stay alive.
 - `Index::CreateIndex()` starts worker threads for the source file index when
   the binary has 256 KB or more of line tables: one, plus one for each 2 MB,
   up to six.

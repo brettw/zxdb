@@ -97,7 +97,7 @@ fxl::RefPtr<Collection> MakeRustTuple(const std::string& name,
   auto coll = fxl::MakeRefCounted<Collection>(DwarfTag::kStructureType, name);
   auto unit =
       fxl::MakeRefCounted<CompileUnit>(DwarfTag::kCompileUnit, fxl::WeakPtr<ModuleSymbols>(),
-                                       nullptr, DwarfLang::kRust, "<no file>", std::nullopt);
+                                       std::nullopt, DwarfLang::kRust, "<no file>", std::nullopt);
   coll->set_parent(UncachedLazySymbol::MakeUnsafe(unit));
 
   uint32_t offset = 0;

@@ -21,8 +21,6 @@
 #include "src/developer/debug/zxdb/symbols/dwarf/aranges_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/range_list_reader.h"
-#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
-#include "src/developer/debug/zxdb/symbols/symbol_context.h"
 #include "src/lib/elflib/elflib.h"
 
 namespace zxdb {
@@ -33,9 +31,8 @@ namespace {
 constexpr uint32_t kCompactRelocationSection = 0x40000014;
 
 #ifndef NDEBUG
-auto CheckUnitContextCacheAccess(std::atomic_flag& active) {
-  FX_DCHECK(!active.test_and_set(std::memory_order_acquire))
-      << "Concurrent unit context cache access";
+auto CheckCacheAccess(std::atomic_flag& active) {
+  FX_DCHECK(!active.test_and_set(std::memory_order_acquire)) << "Concurrent DWARF cache access";
   return fit::defer([&active] { active.clear(std::memory_order_release); });
 }
 #endif
@@ -337,8 +334,12 @@ void DwarfBinary::InitUnitLists() {
   types_units_ = UnitList::Parse(sections_.types, sections_.endian, UnitSection::kTypes);
   info_dwo_units_ = UnitList::Parse(sections_.info_dwo, sections_.endian, UnitSection::kInfo);
   types_dwo_units_ = UnitList::Parse(sections_.types_dwo, sections_.endian, UnitSection::kTypes);
-  die_tables_[false].resize(GetNormalUnitCount());
-  die_tables_[true].resize(GetDWOUnitCount());
+  for (bool is_dwo : {false, true}) {
+    uint32_t count = is_dwo ? GetDWOUnitCount() : GetNormalUnitCount();
+    die_tables_[is_dwo].resize(count);
+    function_address_maps_[is_dwo].resize(count);
+    line_tables_[is_dwo].resize(count);
+  }
 
   if (sections_.cu_index.empty() && sections_.tu_index.empty())
     return;
@@ -430,47 +431,34 @@ std::optional<DwarfBinary::IndexedUnit> DwarfBinary::GetUnitHeader(UnitIndex ind
   return std::nullopt;
 }
 
-fxl::RefPtr<DwarfUnit> DwarfBinary::GetUnitAtIndex(UnitIndex i) {
-  auto entry = GetUnitHeader(i);
-  if (!entry)
-    return nullptr;
-
-  auto found = unit_map_.find(i);
-  if (found != unit_map_.end())
-    return found->second;
-
-  auto unit = fxl::MakeRefCounted<DwarfUnit>(this, i, entry->section, entry->header);
-  unit_map_.emplace(i, unit);
-  return unit;
+DwarfDieRef DwarfBinary::GetUnitRef(UnitIndex index, std::optional<uint64_t> offset) const {
+  auto unit = GetUnitHeader(index);
+  if (!unit)
+    return {};
+  uint64_t value = offset.value_or(unit->header.offset);
+  return unit->section == UnitSection::kInfo ? DwarfDieRef::Main(value) : DwarfDieRef::Type(value);
 }
 
-fxl::RefPtr<DwarfUnit> DwarfBinary::UnitForAddress(const SymbolContext& symbol_context,
-                                                   TargetPointer absolute_address) {
-  return UnitForRelativeAddress(symbol_context.AbsoluteToRelative(absolute_address));
+std::optional<DwarfUnit> DwarfBinary::GetUnitAtIndex(UnitIndex index) {
+  if (index.index >= (index.is_dwo ? GetDWOUnitCount() : GetNormalUnitCount()))
+    return std::nullopt;
+  return DwarfUnit(*this, index);
 }
 
-fxl::RefPtr<DwarfUnit> DwarfBinary::UnitForRelativeAddress(uint64_t relative_address) {
+std::optional<DwarfUnit> DwarfBinary::UnitForRelativeAddress(uint64_t relative_address) {
   if (!debug_aranges_) {
     debug_aranges_ = std::make_unique<DebugAranges>(*this);
   }
   auto offset = debug_aranges_->FindAddress(relative_address);
   if (!offset)
-    return nullptr;
+    return std::nullopt;
   auto index = info_units_.FindIndexForOffset(*offset);
   if (!index || info_units_[*index].is_type_unit())
-    return nullptr;
+    return std::nullopt;
   return GetUnitAtIndex(UnitIndex(false, *index));
 }
 
-fxl::RefPtr<DwarfUnit> DwarfBinary::GetDwoUnit() { return GetUnitAtIndex(UnitIndex(true, 0)); }
-
-fxl::RefPtr<DwarfUnit> DwarfBinary::CreateUncachedUnit(const DwarfDie& die) {
-  if (!die.belongs_to(*this))
-    return nullptr;
-  UnitIndex index = die.unit_index();
-  auto entry = GetUnitHeader(index);
-  return fxl::MakeRefCounted<DwarfUnit>(this, index, entry->section, entry->header);
-}
+std::optional<DwarfUnit> DwarfBinary::GetDwoUnit() { return GetUnitAtIndex(UnitIndex(true, 0)); }
 
 std::optional<uint64_t> DwarfBinary::GetDebugAddrEntry(uint64_t addr_base, uint64_t index) const {
   // DW_AT_addr_base gives the byte offset of the first entry after the header. The index counts
@@ -628,7 +616,7 @@ UnitContextResult DwarfBinary::GetUnitContext(UnitIndex index, UnitContextSource
 #ifndef NDEBUG
   // Same-binary skeleton lookups stay inside UnitContextCache. A different binary has its own
   // guard. Release the guard on return so a DWO index worker can hand the binary to the module.
-  auto access = CheckUnitContextCacheAccess(unit_context_cache_active_);
+  auto access = CheckCacheAccess(unit_context_cache_active_);
 #endif
   auto unit = GetUnitHeader(index);
   if (!unit)
@@ -675,21 +663,58 @@ std::optional<LineProgramSource> DwarfBinary::GetLineProgramSource(UnitIndex ind
 
 std::shared_ptr<const LineFileTable> DwarfBinary::GetLineFileTable(UnitIndex unit,
                                                                    uint64_t file_index) const {
+#ifndef NDEBUG
+  auto access = CheckCacheAccess(unit_caches_active_);
+#endif
   auto source = GetLineProgramSource(unit);
-  return source ? line_tables_.GetFileTable(*source, file_index) : nullptr;
+  return source ? line_file_tables_.GetFileTable(*source, file_index) : nullptr;
 }
 
-LineTable DwarfBinary::DecodeLineTable(UnitIndex unit) const {
-  auto source = GetLineProgramSource(unit);
-  return source ? line_tables_.DecodeLineTable(*source, first_code_address_) : LineTable();
+const LineTable& DwarfBinary::GetLineTable(UnitIndex index) const {
+#ifndef NDEBUG
+  auto access = CheckCacheAccess(unit_caches_active_);
+#endif
+  auto& table = line_tables_[index.is_dwo][index.index];
+  if (!table) {
+    auto source = GetLineProgramSource(index);
+    if (source)
+      table.emplace(line_file_tables_.DecodeLineTable(*source, first_code_address_));
+    else
+      table.emplace();
+  }
+  return *table;
+}
+
+LazySymbol DwarfBinary::FunctionForRelativeAddress(UnitIndex index,
+                                                   uint64_t relative_address) const {
+#ifndef NDEBUG
+  auto access = CheckCacheAccess(unit_caches_active_);
+#endif
+  if (!symbol_factory_)
+    return {};
+
+  auto& map = function_address_maps_[index.is_dwo][index.index];
+  if (!map) {
+    auto root = GetDieAtIndex(index, 0, DwarfDie::Load::kAllDies);
+    map.emplace(root, *this, symbol_factory_->GetSkeletonUnit());
+  }
+  if (auto offset = map->Lookup(relative_address))
+    return symbol_factory_->MakeLazy(GetUnitRef(index, *offset));
+  return {};
 }
 
 void DwarfBinary::ClearDwarfCaches() {
 #ifndef NDEBUG
-  auto access = CheckUnitContextCacheAccess(unit_context_cache_active_);
+  auto unit_access = CheckCacheAccess(unit_caches_active_);
+  auto context_access = CheckCacheAccess(unit_context_cache_active_);
 #endif
-  line_tables_.Clear();
-  unit_map_.clear();
+  for (bool is_dwo : {false, true}) {
+    for (auto& map : function_address_maps_[is_dwo])
+      map.reset();
+    for (auto& table : line_tables_[is_dwo])
+      table.reset();
+  }
+  line_file_tables_.Clear();
 
   // A cross-unit reference can reload a previously indexed unit. Release those tables too.
   std::lock_guard lock(die_cache_mutex_);

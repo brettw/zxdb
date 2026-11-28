@@ -46,7 +46,7 @@ TEST_F(RequestAsyncBacktraceTest, StoppedThreadWithAsyncExecutor) {
 
   std::vector<std::unique_ptr<Frame>> frames;
   auto cu = fxl::MakeRefCounted<CompileUnit>(DwarfTag::kCompileUnit, fxl::WeakPtr<ModuleSymbols>(),
-                                             fxl::RefPtr<DwarfUnit>(), DwarfLang::kRust, "test.rs",
+                                             std::nullopt, DwarfLang::kRust, "test.rs",
                                              std::optional<uint64_t>());
   auto func = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);
   func->set_assigned_name("executor");
@@ -231,7 +231,7 @@ TEST_F(RequestAsyncBacktraceTest, MultipleThreadsRequiresAllThreadsStopped) {
   Thread* thread2 = InjectThread(kProcessKoid, kThreadKoid2);
 
   auto cu = fxl::MakeRefCounted<CompileUnit>(DwarfTag::kCompileUnit, fxl::WeakPtr<ModuleSymbols>(),
-                                             fxl::RefPtr<DwarfUnit>(), DwarfLang::kRust, "test.rs",
+                                             std::nullopt, DwarfLang::kRust, "test.rs",
                                              std::optional<uint64_t>());
   auto func = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);
   func->set_assigned_name("executor");
@@ -309,7 +309,7 @@ TEST_F(RequestAsyncBacktraceTest, StoppedThreadWithCppDispatcher) {
 
   std::vector<std::unique_ptr<Frame>> frames;
   auto cu = fxl::MakeRefCounted<CompileUnit>(DwarfTag::kCompileUnit, fxl::WeakPtr<ModuleSymbols>(),
-                                             fxl::RefPtr<DwarfUnit>(), DwarfLang::kCpp, "driver.cc",
+                                             std::nullopt, DwarfLang::kCpp, "driver.cc",
                                              std::optional<uint64_t>());
   auto func = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);
   func->set_assigned_name("mock_cpp_dispatcher");
@@ -362,7 +362,7 @@ TEST_F(RequestAsyncBacktraceTest, StoppedCppThreadWithoutDriverFrames) {
 
   std::vector<std::unique_ptr<Frame>> frames;
   auto cu = fxl::MakeRefCounted<CompileUnit>(DwarfTag::kCompileUnit, fxl::WeakPtr<ModuleSymbols>(),
-                                             fxl::RefPtr<DwarfUnit>(), DwarfLang::kCpp, "main.cc",
+                                             std::nullopt, DwarfLang::kCpp, "main.cc",
                                              std::optional<uint64_t>());
 
   auto func_helper = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);

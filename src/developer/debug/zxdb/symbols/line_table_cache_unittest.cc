@@ -74,7 +74,7 @@ TEST(LineTableCache, HeaderOnlyUntilNeeded) {
   EXPECT_EQ(files, binary.GetLineFileTable(unit, 100));
 
   // A decoded line table shares the file table.
-  LineTable table = binary.DecodeLineTable(unit);
+  const LineTable& table = binary.GetUnitAtIndex(unit)->GetLineTable();
   EXPECT_EQ(files.get(), &table.files());
   ASSERT_EQ(1u, table.GetNumSequences());
   EXPECT_EQ("inc/defined.h", *table.GetFileNameForRow(table.rows_with_end_markers()[1]));
@@ -89,7 +89,7 @@ TEST(LineTableCache, DecodeFirst) {
   DwarfBinary binary(sections.sections());
   const UnitIndex unit(false, 0);
 
-  LineTable table = binary.DecodeLineTable(unit);
+  const LineTable& table = binary.GetUnitAtIndex(unit)->GetLineTable();
   EXPECT_EQ(3u, table.files().size());
   EXPECT_EQ(&table.files(), binary.GetLineFileTable(unit, 1).get());
 }
@@ -113,7 +113,7 @@ TEST(LineTableCache, SharesHeaderTableWithoutDefineFile) {
 
   std::shared_ptr<const LineFileTable> files = binary.GetLineFileTable(unit, 0);
   ASSERT_TRUE(files);
-  EXPECT_EQ(files.get(), &binary.DecodeLineTable(unit).files());
+  EXPECT_EQ(files.get(), &binary.GetUnitAtIndex(unit)->GetLineTable().files());
 
   // After Clear(), the table is resolved again.
   binary.ClearDwarfCaches();
@@ -131,7 +131,7 @@ TEST(LineTableCache, BadLineTable) {
 
   EXPECT_FALSE(binary.GetLineFileTable(unit, 0));
   EXPECT_FALSE(binary.GetLineFileTable(unit, 5));
-  EXPECT_EQ(0u, binary.DecodeLineTable(unit).GetNumSequences());
+  EXPECT_EQ(0u, binary.GetUnitAtIndex(unit)->GetLineTable().GetNumSequences());
 }
 
 TEST(LineTableCache, UnitWithoutLineTable) {
@@ -143,7 +143,7 @@ TEST(LineTableCache, UnitWithoutLineTable) {
   const UnitIndex unit(false, 0);
 
   EXPECT_FALSE(binary.GetLineFileTable(unit, 1));
-  EXPECT_EQ(0u, binary.DecodeLineTable(unit).GetNumSequences());
+  EXPECT_EQ(0u, binary.GetUnitAtIndex(unit)->GetLineTable().GetNumSequences());
 
   // DW_AT_decl_file has no file table to use.
   EXPECT_EQ(std::nullopt, DecodeDeclFile(binary, 0));

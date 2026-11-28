@@ -24,6 +24,7 @@
 #include "src/developer/debug/zxdb/console/verbs.h"
 #include "src/developer/debug/zxdb/format/async_output_buffer.h"
 #include "src/developer/debug/zxdb/format/output_buffer.h"
+#include "src/developer/debug/zxdb/symbols/arch.h"
 #include "src/lib/fxl/strings/string_printf.h"
 
 namespace zxdb {

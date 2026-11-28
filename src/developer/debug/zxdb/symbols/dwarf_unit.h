@@ -8,35 +8,23 @@
 #include <optional>
 #include <string>
 
-#include "src/developer/debug/zxdb/symbols/dwarf/unit_header.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_die_ref.h"
-#include "src/developer/debug/zxdb/symbols/function_address_map.h"
-#include "src/developer/debug/zxdb/symbols/line_table.h"
 #include "src/developer/debug/zxdb/symbols/unit_index.h"
-#include "src/lib/fxl/memory/ref_counted.h"
-#include "src/lib/fxl/memory/ref_ptr.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
 
 namespace zxdb {
 
 class DwarfBinary;
 class LazySymbol;
+class LineTable;
 
-// Represents a DWARF unit and provides access to its DIEs and line table.
-// CompileUnit is the decoded symbol for a compilation unit's root DIE.
-class DwarfUnit final : public fxl::RefCountedThreadSafe<DwarfUnit> {
+// An index into a DWARF binary. Copying a unit shares the binary's caches.
+// Use on the binary's owning thread. Lookups return empty results after the binary is destroyed.
+class DwarfUnit {
  public:
-  // Creates a weak pointer to this class. The units can get removed when modules or process are
-  // unloaded so if you need to keep a pointer, either keep a weak ptr or an owning refptr.
-  fxl::WeakPtr<DwarfUnit> GetWeakPtr() const { return weak_factory_.GetWeakPtr(); }
-
-  // Returns the binary this unit is a member of. May return null if the binary has been destroyed
-  // out from under the reference-counted unit pointer.
+  // Returns the binary this unit belongs to, or null after it has been destroyed.
   DwarfBinary* GetBinary() const;
-
-  // Returns the DWARF specification version of this unit (e.g. "5").
-  int GetDwarfVersion() const;
 
   // By default, load the full tree so callers can walk the children of the root.
   DwarfDie GetUnitDie(DwarfDie::Load load = DwarfDie::Load::kAllDies) const;
@@ -52,8 +40,8 @@ class DwarfUnit final : public fxl::RefCountedThreadSafe<DwarfUnit> {
   // Returns this unit's index within the normal or split unit list.
   UnitIndex GetUnitIndex() const { return index_; }
 
-  // Returns the offset of the beginning of this unit within its DWARF section.
-  uint64_t GetOffset() const;
+  // Returns the offset of the beginning of this unit within its DWARF section, if still loaded.
+  std::optional<uint64_t> GetOffset() const;
 
   // The compilation directory is what the compiler decides to write. In normal usage this will be
   // an absolute directory on the current computer. In the Fuchsia in-tree build this will be
@@ -61,7 +49,8 @@ class DwarfUnit final : public fxl::RefCountedThreadSafe<DwarfUnit> {
   std::string GetCompilationDir() const;
 
   // The line table maps addresses to line numbers. Returns an empty table if the unit has no line
-  // table or if the header can't be parsed.
+  // table or if the header can't be parsed. The reference is valid until ClearDwarfCaches() or
+  // destruction of the binary.
   const LineTable& GetLineTable() const;
 
   // Returns the number of DIEs in this unit.
@@ -82,31 +71,16 @@ class DwarfUnit final : public fxl::RefCountedThreadSafe<DwarfUnit> {
   std::optional<uint32_t> GetIndexForDie(const DwarfDie& die) const;
 
   // Returns a reference to the unit header or to an offset in the unit's section.
-  DwarfDieRef GetDieRef() const { return GetDieRef(GetOffset()); }
+  DwarfDieRef GetDieRef() const;
   DwarfDieRef GetDieRef(uint64_t offset) const;
 
  private:
-  FRIEND_REF_COUNTED_THREAD_SAFE(DwarfUnit);
-  FRIEND_MAKE_REF_COUNTED(DwarfUnit);
+  friend class DwarfBinary;
 
-  DwarfUnit(DwarfBinary* binary, UnitIndex index, UnitSection section, const UnitHeader& header);
-  ~DwarfUnit() = default;
+  DwarfUnit(DwarfBinary& binary, UnitIndex index);
 
-  // Backs GetWeakPtr().
-  mutable fxl::WeakPtrFactory<DwarfUnit> weak_factory_;
-
-  // The binary that owns us.
   fxl::WeakPtr<DwarfBinary> binary_;
-
-  const UnitIndex index_;
-  const UnitSection section_;
-  const UnitHeader header_;
-
-  // Built on the first address lookup. Entries store DIE offsets so the DIE table can be evicted.
-  mutable std::optional<FunctionAddressMap> function_address_map_;
-
-  // The line table. Computed lazily.
-  mutable std::optional<LineTable> line_table_;
+  UnitIndex index_;
 };
 
 }  // namespace zxdb

@@ -326,7 +326,7 @@ TEST(Index, CreateIndexEvictsUnitCaches) {
   DwarfBinary* binary = setup.symbols()->binary();
   ASSERT_GT(binary->GetNormalUnitCount(), 1u);
 
-  fxl::RefPtr<DwarfUnit> unit0 = binary->GetUnitAtIndex(UnitIndex(false, 0));
+  auto unit0 = binary->GetUnitAtIndex(UnitIndex(false, 0));
   ASSERT_TRUE(unit0);
 
   // Once the tree is loaded, a root-only lookup can see its children.
@@ -347,69 +347,6 @@ TEST(Index, CreateIndexEvictsUnitCaches) {
   // Subsequent on-demand queries on the unit should lazily re-extract the DIEs and line table.
   EXPECT_TRUE(unit0->GetUnitDie().first_child());
   EXPECT_GT(unit0->GetLineTable().files().size(), 0u);
-}
-
-// Verifies that DwarfBinary::ClearDwarfCaches drops cached DwarfUnit wrappers from unit_map_
-// without re-populating them while iterating, and that subsequent unit queries lazily re-create
-// the unit wrapper and re-parse its line table on demand.
-TEST(Index, ClearDwarfCachesEvictsUnitsAndLineTables) {
-  TestSymbolModule setup(TestSymbolModule::kCheckedIn);
-  ASSERT_TRUE(setup.Init("", false).ok());
-
-  DwarfBinary* binary = setup.symbols()->binary();
-  ASSERT_GT(binary->GetNormalUnitCount(), 1u);
-
-  // Obtain a weak pointer to unit 0 without keeping a local RefPtr so its lifetime is governed
-  // solely by DwarfBinary::unit_map_.
-  fxl::WeakPtr<DwarfUnit> weak_unit0 = binary->GetUnitAtIndex(UnitIndex(false, 0))->GetWeakPtr();
-  EXPECT_TRUE(weak_unit0);
-
-  // Populate unit 1's DIE table and line table before clearing the cache, then release the local
-  // RefPtr so only unit_map_ holds the wrapper.
-  fxl::WeakPtr<DwarfUnit> weak_unit1;
-  size_t initial_file_count = 0;
-  std::optional<std::string> initial_file;
-  {
-    fxl::RefPtr<DwarfUnit> unit1 = binary->GetUnitAtIndex(UnitIndex(false, 1));
-    ASSERT_TRUE(unit1);
-    weak_unit1 = unit1->GetWeakPtr();
-    ASSERT_TRUE(unit1->GetUnitDie());
-    const LineTable& line_table = unit1->GetLineTable();
-    initial_file_count = line_table.files().size();
-    ASSERT_GT(initial_file_count, 1u);
-    const std::string* name = line_table.files().GetFileName(1);
-    ASSERT_TRUE(name);
-    initial_file = *name;
-  }
-  EXPECT_TRUE(weak_unit1);
-
-  std::vector<DwarfDieRef> unit_refs;
-  for (uint32_t i = 0; i < binary->GetNormalUnitCount(); ++i) {
-    auto unit = binary->GetUnitAtIndex(UnitIndex(false, i));
-    ASSERT_TRUE(unit);
-    unit_refs.push_back(unit->GetDieRef());
-  }
-  binary->ClearDwarfCaches();
-
-  // Clearing the cache must evict unit_map_ entries and must not re-populate them while iterating.
-  EXPECT_FALSE(weak_unit0);
-  EXPECT_FALSE(weak_unit1);
-  for (DwarfDieRef ref : unit_refs) {
-    DwarfDie root = binary->GetUnitDieForRef(ref, false);
-    ASSERT_TRUE(root);
-    EXPECT_FALSE(root.first_child());
-  }
-
-  // Re-querying unit 1 after cache eviction must allocate a fresh DwarfUnit wrapper and re-parse
-  // the underlying line table on demand.
-  fxl::RefPtr<DwarfUnit> reloaded_unit1 = binary->GetUnitAtIndex(UnitIndex(false, 1));
-  ASSERT_TRUE(reloaded_unit1);
-  const LineTable& reloaded_line_table = reloaded_unit1->GetLineTable();
-  EXPECT_EQ(initial_file_count, reloaded_line_table.files().size());
-  const std::string* reloaded_name = reloaded_line_table.files().GetFileName(1);
-  ASSERT_TRUE(reloaded_name);
-  EXPECT_EQ(initial_file, *reloaded_name);
-  EXPECT_GT(reloaded_line_table.GetNumSequences(), 0u);
 }
 
 // Enable and substitute a path on your system to dump the index for a DWARF file.

@@ -159,13 +159,12 @@ class Symbol : public fxl::RefCountedThreadSafe<Symbol> {
   // returns a string, but it's not parseable.
   const Identifier& GetIdentifier() const;
 
-  // Returns the DwarfUnit or CompileUnit that this symbol is associated with. Returns null on
-  // failure. See the comment at the top of this class and above the DwarfUnit declaration for more.
-  //
   // This is the unit that contains the DIE of the symbol. For synthetic symbols, which have no DIE,
   // it's the first compile unit among the parents.
   fxl::RefPtr<CompileUnit> GetCompileUnit() const;
-  fxl::RefPtr<DwarfUnit> GetDwarfUnit() const;
+
+  // Returns the binary unit associated with GetCompileUnit(), if present.
+  std::optional<DwarfUnit> GetDwarfUnit() const;
 
   // Returns the module symbols associated with this symbol object. It can be null if the module
   // has been unloaded and there are still dangling references to symbols, and it can also be null

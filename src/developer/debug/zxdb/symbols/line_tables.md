@@ -28,7 +28,7 @@ use the main `.debug_line_str` section.
 | `LineTable` | `line_table.*` | Concrete sequences and rows, address lookup, `GetLineDetails()`. |
 | `LineTableCache` | `line_table_cache.*` | One file table for each line table of a binary, shared by `DW_AT_decl_file` lookups and decoded tables. |
 | `SourceFileIndexer`, `LineFilePathResolver`, `CollectLineTableJobs()` | `source_file_indexer.*` | Parallel file indexing with a path cache. |
-| `DwarfBinary::GetLineFileTable()`, `DwarfBinary::DecodeLineTable()` | `dwarf_binary.h` | Access to the binary's `LineTableCache`. |
+| `DwarfBinary::GetLineFileTable()`, `DwarfUnit::GetLineTable()` | `dwarf_binary.h`, `dwarf_unit.h` | Access to the binary's file and decoded line tables. |
 
 Key decisions:
 
@@ -571,7 +571,7 @@ the `llvm-dwarfdump` lit tests (`llvm/test/tools/llvm-dwarfdump/X86/debug_line*`
 | `ErrorForTruncatedExtendedOpcode`, `ErrorForTruncatedStandardOpcode` | `TruncatedOpcodes` |
 | `Parser*` (the `SectionParser` that walks all tables) | Not applicable. zxdb parses tables by unit offset. `MultipleTables` covers more than one table. |
 | `VerboseOutput`, `PrintPathsProperly` (dump output) | Not applicable. The file name tests cover path composition. |
-| `ClearLineValidTable` | Not applicable. `Index.ClearDwarfCachesEvictsUnitsAndLineTables` covers zxdb's cache. |
+| `ClearLineValidTable` | `DwarfBinary.ClearDwarfCachesEvictsLineTablesAndFunctionMaps` covers zxdb's cache. |
 | lit `debug-line-dw-lns-copy.s`, `debug-line-dw-lne-end-sequence.s` | `StandardOpcodes`, `ExtendedOpcodes` |
 | lit `debug_line_many_files_v5.s` | `ManyFilesDwarf5` |
 | lit `debug_line_dwarf64_large_table.s` | `LineProgramVersionTest` DWARF64, `clang_dwarf64` fixture |

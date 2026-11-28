@@ -85,7 +85,7 @@ TEST_F(AsyncBacktraceSubscriptionTest, SingleThreadLifecycle) {
 
   std::vector<std::unique_ptr<Frame>> frames;
   auto cu = fxl::MakeRefCounted<CompileUnit>(DwarfTag::kCompileUnit, fxl::WeakPtr<ModuleSymbols>(),
-                                             fxl::RefPtr<DwarfUnit>(), DwarfLang::kRust, "test.rs",
+                                             std::nullopt, DwarfLang::kRust, "test.rs",
                                              std::optional<uint64_t>());
   auto func = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);
   func->set_assigned_name("executor");
@@ -183,7 +183,7 @@ TEST_F(AsyncBacktraceSubscriptionTest, NestedAsyncTaskStructure) {
 
   std::vector<std::unique_ptr<Frame>> frames;
   auto cu = fxl::MakeRefCounted<CompileUnit>(DwarfTag::kCompileUnit, fxl::WeakPtr<ModuleSymbols>(),
-                                             fxl::RefPtr<DwarfUnit>(), DwarfLang::kRust, "test.rs",
+                                             std::nullopt, DwarfLang::kRust, "test.rs",
                                              std::optional<uint64_t>());
   auto func = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);
   func->set_assigned_name("executor");
@@ -248,7 +248,7 @@ TEST_F(AsyncBacktraceSubscriptionTest, ConcurrentBacktracesSameThread) {
   updates.clear();
 
   auto cu = fxl::MakeRefCounted<CompileUnit>(DwarfTag::kCompileUnit, fxl::WeakPtr<ModuleSymbols>(),
-                                             fxl::RefPtr<DwarfUnit>(), DwarfLang::kRust, "test.rs",
+                                             std::nullopt, DwarfLang::kRust, "test.rs",
                                              std::optional<uint64_t>());
   auto func = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);
   func->set_assigned_name("executor");
@@ -327,7 +327,7 @@ TEST_F(AsyncBacktraceSubscriptionTest, GateBacktraceOnProcessStop) {
   updates.clear();
 
   auto cu = fxl::MakeRefCounted<CompileUnit>(DwarfTag::kCompileUnit, fxl::WeakPtr<ModuleSymbols>(),
-                                             fxl::RefPtr<DwarfUnit>(), DwarfLang::kRust, "test.rs",
+                                             std::nullopt, DwarfLang::kRust, "test.rs",
                                              std::optional<uint64_t>());
   auto func = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);
   func->set_assigned_name("executor");
@@ -415,7 +415,7 @@ TEST_F(AsyncBacktraceSubscriptionTest, DestroyingRunningThreadTriggersCollection
   updates.clear();
 
   auto cu = fxl::MakeRefCounted<CompileUnit>(DwarfTag::kCompileUnit, fxl::WeakPtr<ModuleSymbols>(),
-                                             fxl::RefPtr<DwarfUnit>(), DwarfLang::kRust, "test.rs",
+                                             std::nullopt, DwarfLang::kRust, "test.rs",
                                              std::optional<uint64_t>());
   auto func = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);
   func->set_assigned_name("executor");
@@ -474,7 +474,7 @@ TEST_F(AsyncBacktraceSubscriptionTest, ResumingThreadCancelsPendingBacktracesFor
   updates.clear();
 
   auto cu = fxl::MakeRefCounted<CompileUnit>(DwarfTag::kCompileUnit, fxl::WeakPtr<ModuleSymbols>(),
-                                             fxl::RefPtr<DwarfUnit>(), DwarfLang::kRust, "test.rs",
+                                             std::nullopt, DwarfLang::kRust, "test.rs",
                                              std::optional<uint64_t>());
   auto func = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);
   func->set_assigned_name("executor");
@@ -551,7 +551,7 @@ TEST_F(AsyncBacktraceSubscriptionTest, CppDispatcherSingleThreadLifecycle) {
 
   std::vector<std::unique_ptr<Frame>> frames;
   auto cu = fxl::MakeRefCounted<CompileUnit>(DwarfTag::kCompileUnit, fxl::WeakPtr<ModuleSymbols>(),
-                                             fxl::RefPtr<DwarfUnit>(), DwarfLang::kCpp, "driver.cc",
+                                             std::nullopt, DwarfLang::kCpp, "driver.cc",
                                              std::optional<uint64_t>());
   auto func = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);
   func->set_assigned_name("mock_cpp_dispatcher");
@@ -612,7 +612,7 @@ TEST_F(AsyncBacktraceSubscriptionTest, CppNonDriverFramesAndImmediateDestruction
 
   std::vector<std::unique_ptr<Frame>> frames;
   auto cu = fxl::MakeRefCounted<CompileUnit>(DwarfTag::kCompileUnit, fxl::WeakPtr<ModuleSymbols>(),
-                                             fxl::RefPtr<DwarfUnit>(), DwarfLang::kCpp, "main.cc",
+                                             std::nullopt, DwarfLang::kCpp, "main.cc",
                                              std::optional<uint64_t>());
   auto func = fxl::MakeRefCounted<Function>(DwarfTag::kSubprogram);
   func->set_assigned_name("main");

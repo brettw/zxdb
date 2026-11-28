@@ -661,8 +661,8 @@ void Index::CreateIndex(DwarfBinary& binary, int32_t dwo_index, bool force_slow_
   size_t unit_count = binary.GetNormalUnitCount();
   for (size_t i = 0; i < unit_count; i++) {
     UnitIndex unit_index(false, i);
-    if (auto unit_ref_ptr = binary.GetUnitAtIndex(unit_index))
-      IndexCompileUnit(*unit_ref_ptr, dwo_index, force_slow_path);
+    if (auto unit = binary.GetUnitAtIndex(unit_index))
+      IndexCompileUnit(*unit, dwo_index, force_slow_path);
   }
 
   // Index any DWO units. .dwo files store their units in a separate DWARF section. Normally there
@@ -671,8 +671,8 @@ void Index::CreateIndex(DwarfBinary& binary, int32_t dwo_index, bool force_slow_
   size_t dwo_unit_count = binary.GetDWOUnitCount();
   for (size_t i = 0; i < dwo_unit_count; i++) {
     UnitIndex unit_index(true, i);
-    if (auto unit_ref_ptr = binary.GetUnitAtIndex(unit_index))
-      IndexCompileUnit(*unit_ref_ptr, dwo_index, force_slow_path);
+    if (auto unit = binary.GetUnitAtIndex(unit_index))
+      IndexCompileUnit(*unit, dwo_index, force_slow_path);
   }
 
   source_files.FinishInto(&files_);

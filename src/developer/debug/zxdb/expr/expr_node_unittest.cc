@@ -311,7 +311,7 @@ TEST_F(ExprNodeTest, RustMemberAccess) {
   auto context = fxl::MakeRefCounted<MockEvalContext>();
   auto unit =
       fxl::MakeRefCounted<CompileUnit>(DwarfTag::kCompileUnit, fxl::WeakPtr<ModuleSymbols>(),
-                                       nullptr, DwarfLang::kRust, "module.so", std::nullopt);
+                                       std::nullopt, DwarfLang::kRust, "module.so", std::nullopt);
 
   // Define a class.
   auto int32_type = MakeInt32Type();

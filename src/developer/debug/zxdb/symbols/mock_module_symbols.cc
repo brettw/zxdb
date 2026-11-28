@@ -106,7 +106,7 @@ std::vector<Location> MockModuleSymbols::ResolveInputLocation(const SymbolContex
 
 ModuleSymbols::FoundUnit MockModuleSymbols::GetDwarfUnitForAddress(
     const SymbolContext& symbol_context, uint64_t absolute_address) const {
-  return FoundUnit{nullptr, nullptr};
+  return {};
 }
 
 LineDetails MockModuleSymbols::LineDetailsForAddress(const SymbolContext& symbol_context,

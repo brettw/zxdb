@@ -22,8 +22,8 @@ std::string_view GetDieName(DwarfDieDecoder& decoder, const DwarfDie& die) {
 
 }  // namespace
 
-fxl::RefPtr<DwarfUnit> GetUnitWithNameEndingIn(DwarfBinary& binary, bool is_dwo,
-                                               std::string_view name) {
+std::optional<DwarfUnit> GetUnitWithNameEndingIn(DwarfBinary& binary, bool is_dwo,
+                                                 std::string_view name) {
   DwarfDieDecoder decoder(binary, kNameAttr);
   uint32_t count = is_dwo ? binary.GetDWOUnitCount() : binary.GetNormalUnitCount();
   for (uint32_t i = 0; i < count; ++i) {
@@ -31,7 +31,7 @@ fxl::RefPtr<DwarfUnit> GetUnitWithNameEndingIn(DwarfBinary& binary, bool is_dwo,
     if (unit && GetDieName(decoder, unit->GetUnitDie(DwarfDie::Load::kRootOnly)).ends_with(name))
       return unit;
   }
-  return nullptr;
+  return std::nullopt;
 }
 
 DwarfDie GetFirstDieOfTagAndName(const DwarfUnit& unit, DwarfTag tag, std::string_view name) {

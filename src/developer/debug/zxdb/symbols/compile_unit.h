@@ -16,12 +16,8 @@ namespace zxdb {
 class ModuleSymbols;
 
 // Represents a DWARF "unit" DIE, both regular ones and the "skeleton" ones (skeleton units are
-// in the main binary and refer to a .dwo file containing the unit info). This is the root of all
-// other Debug Information Entries (DIEs) in the unit, and is contained inside the DwarfUnit object.
-//
-// See the DwarfUnit object which contains the other unit-related stuff like line tables (see that
-// class for a longer discussion). Usually "unit" offsets are relative to the DwarfUnit and NOT this
-// class.
+// in the main binary and refer to a .dwo file containing the unit info). The symbol describes
+// the root DIE. Its DwarfUnit gives access to the binary's unit data and caches.
 class CompileUnit final : public Symbol {
  public:
   // Module. This can be null if the module was unloaded while somebody held onto this symbol. It
@@ -32,8 +28,8 @@ class CompileUnit final : public Symbol {
   // attributes as a regular compilation unit.
   bool is_skeleton() const { return tag() == DwarfTag::kSkeletonUnit; }
 
-  // See class comment above. Can be null for synthetic symbols and for testing.
-  DwarfUnit* dwarf_unit() const { return dwarf_unit_.get(); }
+  // Returns null for synthetic symbols.
+  const DwarfUnit* dwarf_unit() const { return dwarf_unit_ ? &*dwarf_unit_ : nullptr; }
 
   DwarfLang language() const { return language_; }
 
@@ -57,13 +53,13 @@ class CompileUnit final : public Symbol {
   FRIEND_MAKE_REF_COUNTED(CompileUnit);
 
   explicit CompileUnit(DwarfTag tag, fxl::WeakPtr<ModuleSymbols> module,
-                       fxl::RefPtr<DwarfUnit> dwarf_unit, DwarfLang lang, std::string name,
+                       std::optional<DwarfUnit> dwarf_unit, DwarfLang lang, std::string name,
                        const std::optional<uint64_t>& addr_base);
   ~CompileUnit() override;
 
   fxl::WeakPtr<ModuleSymbols> module_;
 
-  fxl::RefPtr<DwarfUnit> dwarf_unit_;
+  std::optional<DwarfUnit> dwarf_unit_;
 
   DwarfLang language_ = DwarfLang::kNone;
   std::string name_;

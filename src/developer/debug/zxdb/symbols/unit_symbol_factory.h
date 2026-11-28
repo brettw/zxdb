@@ -38,7 +38,7 @@ class UnitSymbolFactory {
     if (!weak_mod)
       return;
 
-    fxl::RefPtr<DwarfUnit> unit = symbol->GetDwarfUnit();
+    auto unit = symbol->GetDwarfUnit();
     if (!unit)
       return;
 
