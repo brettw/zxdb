@@ -278,7 +278,7 @@ TEST(DwarfBinary, ClearDwarfCachesEvictsLineTablesAndFunctionMaps) {
   size_t sequence_count = unit->GetLineTable().GetNumSequences();
   ASSERT_GT(sequence_count, 0u);
   EXPECT_EQ(&unit->GetLineTable(), &symbol_unit->GetLineTable());
-  auto files = binary.GetLineFileTable(index, 1);
+  auto files = binary.GetLineFileTable(unit->GetUnitDie(DwarfDie::Load::kRootOnly), 1);
   ASSERT_EQ(&unit->GetLineTable().files(), files.get());
   std::weak_ptr<const LineFileTable> cached_files = files;
   files.reset();
@@ -373,7 +373,6 @@ TEST(DwarfBinary, DieLookupInSelectedSections) {
     DwarfDie root = unit->GetUnitDie();
     ASSERT_TRUE(root);
 
-    EXPECT_EQ(root, binary.GetDieAtOffset(root.ref()));
     EXPECT_EQ(root, binary.GetDieAtOffset(root.ref(), is_dwo));
     EXPECT_FALSE(binary.GetDieAtOffset(root.ref(), !is_dwo));
     EXPECT_FALSE(binary.GetDieAtOffset({}, is_dwo));
@@ -437,6 +436,21 @@ TEST(DwarfBinary, SplitTypeSignatureWithOverlappingOffsets) {
   EXPECT_EQ(kTypeOffset, type.offset());
   ASSERT_TRUE(decoder.Decode(type));
   EXPECT_STREQ("SplitType", decoder.GetCString(DwarfAttr::kName).value_or(nullptr));
+
+  // The signature exists only in the split set, even though the offset exists in both sets.
+  EXPECT_EQ(type, binary.GetDieForSignature(kSignature, false));
+  DwarfDie normal_type = binary.GetDieAtOffset(type.ref(), false);
+  ASSERT_TRUE(normal_type);
+  ASSERT_TRUE(decoder.Decode(normal_type));
+  EXPECT_STREQ("NormalType", decoder.GetCString(DwarfAttr::kName).value_or(nullptr));
+  EXPECT_EQ(type, binary.GetDieAtOffset(type.ref(), true));
+
+  // The split unit's null entry falls inside the normal type's longer name.
+  DwarfDie split_null = type.die_at_index(2);
+  ASSERT_TRUE(split_null);
+  ASSERT_TRUE(binary.GetUnitDieForRef(split_null.ref(), false));
+  EXPECT_FALSE(binary.GetDieAtOffset(split_null.ref(), false));
+  EXPECT_EQ(split_null, binary.GetDieAtOffset(split_null.ref(), true));
 }
 
 namespace {
@@ -586,7 +600,9 @@ TEST_P(DwarfPackageTest, ResolvesLineTablesByContribution) {
   // Both fixture units reference relative offset zero and each encodes its own file.
   auto file_index = GetParam() == 5 ? 0 : 1;
   for (size_t i = 0; i < fixture.kNames.size(); ++i) {
-    auto files = binary.GetLineFileTable(UnitIndex(true, i), file_index);
+    auto unit = binary.GetUnitAtIndex(UnitIndex(true, i));
+    ASSERT_TRUE(unit);
+    auto files = binary.GetLineFileTable(unit->GetUnitDie(DwarfDie::Load::kRootOnly), file_index);
     ASSERT_TRUE(files);
     const auto* file = files->GetFileName(file_index);
     ASSERT_TRUE(file);
@@ -674,12 +690,12 @@ TEST(DwarfBinary, Dwarf4TypeUnits) {
   DwarfDie root = first_type->GetUnitDie();
   ASSERT_TRUE(root);
   EXPECT_EQ(DwarfDieRef::Type(root.offset()), root.ref());
-  EXPECT_EQ(root, binary.GetDieAtOffset(root.ref()));
+  EXPECT_EQ(root, binary.GetDieAtOffset(root.ref(), false));
 
   // TypeUnitOuter is at 0x0 + 0x25, and TypeUnitInner is at 0x5d + 0x25.
-  EXPECT_EQ(DwarfDieRef::Type(0x25), binary.GetDieRefForSignature(0xde3dca152f8e7c98));
-  EXPECT_EQ(DwarfDieRef::Type(0x82), binary.GetDieRefForSignature(0xc9382c36fccd19d7));
-  EXPECT_FALSE(binary.GetDieRefForSignature(0).is_valid());  // Absent from the fixture.
+  EXPECT_EQ(DwarfDieRef::Type(0x25), binary.GetDieForSignature(0xde3dca152f8e7c98, false).ref());
+  EXPECT_EQ(DwarfDieRef::Type(0x82), binary.GetDieForSignature(0xc9382c36fccd19d7, false).ref());
+  EXPECT_FALSE(binary.GetDieForSignature(0, false));  // Absent from the fixture.
 }
 
 TEST(DwarfBinary, Dwarf5TypeUnits) {
@@ -712,9 +728,9 @@ TEST(DwarfBinary, Dwarf5TypeUnits) {
   EXPECT_EQ(2u, type_count);
 
   // TypeUnitOuter is at 0x0 + 0x26, and TypeUnitInner is at 0x5e + 0x26.
-  EXPECT_EQ(DwarfDieRef::Main(0x26), binary.GetDieRefForSignature(0xde3dca152f8e7c98));
-  EXPECT_EQ(DwarfDieRef::Main(0x84), binary.GetDieRefForSignature(0xc9382c36fccd19d7));
-  EXPECT_FALSE(binary.GetDieRefForSignature(0).is_valid());  // Absent from the fixture.
+  EXPECT_EQ(DwarfDieRef::Main(0x26), binary.GetDieForSignature(0xde3dca152f8e7c98, false).ref());
+  EXPECT_EQ(DwarfDieRef::Main(0x84), binary.GetDieForSignature(0xc9382c36fccd19d7, false).ref());
+  EXPECT_FALSE(binary.GetDieForSignature(0, false));  // Absent from the fixture.
 }
 
 // The checked-in test binary has a ".symtab" and a ".dynsym" section. The symbols of both are in
@@ -829,7 +845,7 @@ TEST_F(UnitContextCacheTest, ReusesContextAcrossAttributesAndClears) {
 
   constexpr DwarfAttr kAttrs[] = {DwarfAttr::kLowPc};
   DwarfDieDecoder decoder(binary, kAttrs);
-  ASSERT_TRUE(decoder.Decode(binary.GetDieAtOffset(DwarfDieRef::Main(0x2b))));
+  ASSERT_TRUE(decoder.Decode(binary.GetDieAtOffset(DwarfDieRef::Main(0x2b), false)));
   EXPECT_EQ(0x1000u, decoder.GetAddress(DwarfAttr::kLowPc));
   ASSERT_EQ(1u, UnitEntries(binary, index));
 
@@ -890,13 +906,16 @@ TEST_F(UnitContextCacheTest, LineTableCallersPopulateCache) {
 
   EXPECT_EQ(0u, UnitEntries(binary, index));
   EXPECT_EQ(0u, AbbrevEntries(binary));
-  auto files = binary.GetLineFileTable(index, 0);
+  auto root = unit->GetUnitDie(DwarfDie::Load::kRootOnly);
+  ASSERT_TRUE(root);
+  EXPECT_EQ(0u, UnitEntries(binary, index));
+  auto files = binary.GetLineFileTable(root, 0);
   ASSERT_TRUE(files);
   ASSERT_TRUE(files->GetFileName(0));
   EXPECT_TRUE(files->GetFileName(0)->ends_with("/line_lookup_symbol_test.cc"));
   EXPECT_EQ(1u, UnitEntries(binary, index));
   EXPECT_EQ(1u, AbbrevEntries(binary));
-  EXPECT_EQ(files, binary.GetLineFileTable(index, 0));
+  EXPECT_EQ(files, binary.GetLineFileTable(root, 0));
   EXPECT_EQ(1u, UnitEntries(binary, index));
   EXPECT_EQ(1u, AbbrevEntries(binary));
 
@@ -1020,7 +1039,7 @@ TEST_F(UnitContextCacheTest, SplitUnitUsesSkeletonCache) {
 
   DwarfBinary split_binary(dir + "main.dwo", "", "");
   ASSERT_TRUE(split_binary.Load({}, DwarfSymbolFactory::kDWO).ok());
-  auto split_unit = split_binary.GetDwoUnit();
+  auto split_unit = split_binary.GetUnitAtIndex(UnitIndex(true, 0));
   ASSERT_TRUE(split_unit);
   auto split = split_unit->GetUnitIndex();
 

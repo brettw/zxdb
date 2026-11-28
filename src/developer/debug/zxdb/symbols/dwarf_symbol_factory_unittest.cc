@@ -1085,7 +1085,7 @@ TEST(DwarfSymbolFactory, InlinedParameterOrder) {
 
     // Find whether the fixture has the case this test is for: the concrete instance has fewer
     // parameter entries than the function.
-    DwarfDie die = binary.GetDieAtOffset(inlined->GetLazySymbol().die_ref());
+    DwarfDie die = binary.GetDieAtOffset(inlined->GetLazySymbol().die_ref(), false);
     ASSERT_TRUE(die);
     size_t concrete_parameters = 0;
     for (DwarfDie child : die.children()) {

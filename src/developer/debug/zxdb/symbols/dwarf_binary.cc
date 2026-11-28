@@ -282,9 +282,9 @@ DwarfBinary::~DwarfBinary() = default;
 
 fxl::WeakPtr<DwarfBinary> DwarfBinary::GetWeakPtr() { return weak_factory_.GetWeakPtr(); }
 
-std::string DwarfBinary::GetName() const { return name_; }
+const std::string& DwarfBinary::GetName() const { return name_; }
 
-std::string DwarfBinary::GetBuildID() const { return build_id_; }
+const std::string& DwarfBinary::GetBuildID() const { return build_id_; }
 
 std::time_t DwarfBinary::GetModificationTime() const { return modification_time_; }
 
@@ -402,7 +402,7 @@ const std::map<std::string, DwarfBinary::ElfTableSymbol>& DwarfBinary::GetELFSym
   return elf_symbols_;
 }
 
-const std::map<std::string, uint64_t> DwarfBinary::GetPLTSymbols() const { return plt_symbols_; }
+const std::map<std::string, uint64_t>& DwarfBinary::GetPLTSymbols() const { return plt_symbols_; }
 
 uint32_t DwarfBinary::GetNormalUnitCount() const {
   return info_units_.size() + types_units_.size();
@@ -457,8 +457,6 @@ std::optional<DwarfUnit> DwarfBinary::UnitForRelativeAddress(uint64_t relative_a
     return std::nullopt;
   return GetUnitAtIndex(UnitIndex(false, *index));
 }
-
-std::optional<DwarfUnit> DwarfBinary::GetDwoUnit() { return GetUnitAtIndex(UnitIndex(true, 0)); }
 
 std::optional<uint64_t> DwarfBinary::GetDebugAddrEntry(uint64_t addr_base, uint64_t index) const {
   // DW_AT_addr_base gives the byte offset of the first entry after the header. The index counts
@@ -550,12 +548,6 @@ void DwarfBinary::ClearDieCache(UnitIndex index) const {
   die_tables_[index.is_dwo][index.index].reset();
 }
 
-DwarfDie DwarfBinary::GetDieAtOffset(DwarfDieRef die_ref) const {
-  if (auto unit = FindUnitForRef(die_ref, false))
-    return GetDieAtOffset(*unit, die_ref.offset());
-  return GetDieAtOffset(die_ref, true);
-}
-
 DwarfDie DwarfBinary::GetDieAtOffset(DwarfDieRef die_ref, bool is_dwo) const {
   if (auto unit = FindUnitForRef(die_ref, is_dwo))
     return GetDieAtOffset(*unit, die_ref.offset());
@@ -594,12 +586,6 @@ DwarfDieRef DwarfBinary::FindSignature(uint64_t signature, bool is_dwo) const {
   const auto& map = (*signature_to_die_)[is_dwo];
   auto found = map.find(signature);
   return found == map.end() ? DwarfDieRef() : found->second;
-}
-
-DwarfDieRef DwarfBinary::GetDieRefForSignature(uint64_t signature) const {
-  if (DwarfDieRef ref = FindSignature(signature, true))
-    return ref;
-  return FindSignature(signature, false);
 }
 
 DwarfDie DwarfBinary::GetDieForSignature(uint64_t signature, bool is_dwo) const {

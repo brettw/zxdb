@@ -319,7 +319,9 @@ ModuleSymbols::FoundUnit ModuleSymbolsImpl::GetDwarfUnitForAddress(
     // Invalid DWO reference.
     return result;
   }
-  result.details_unit = dwos_[found_skeleton_index->second]->binary()->GetDwoUnit();
+  // Use the first split unit as the skeleton's companion.
+  result.details_unit =
+      dwos_[found_skeleton_index->second]->binary()->GetUnitAtIndex(UnitIndex(true, 0));
   return result;
 }
 
@@ -356,7 +358,8 @@ std::vector<fxl::RefPtr<Function>> ModuleSymbolsImpl::GetMainFunctions() const {
       if (entry.tag != DwarfTag::kSubprogram) {
         continue;
       }
-      DwarfDie die = binary_->GetDieAtOffset(entry.die_ref);
+      // Skip split DIEs here because the main binary's symbol factory reads only normal sections.
+      DwarfDie die = binary_->GetDieAtOffset(entry.die_ref, false);
       if (!die || !decoder.Decode(die) ||
           !decoder.GetBool(DwarfAttr::kMainSubprogram).value_or(false)) {
         continue;

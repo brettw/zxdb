@@ -48,7 +48,7 @@ class LineFileTable;
 // Represents one DWARF file or one set of in-memory sections. ModuleSymbols connects a
 // main binary to the separate .dwo files that its skeleton units reference.
 //
-// Call on the binary's owning thread except for the raw DIE and type signature lookups below.
+// Call on the binary's owning thread except where noted.
 // The owner builds the unit context, line table, and function address map caches on demand.
 // Immutable section views and DIE snapshots can be read from other threads while the binary
 // stays alive.
@@ -67,36 +67,40 @@ class DwarfBinary final {
     uint64_t size = 0;
   };
 
-  // Callers must call Load() to complete initialization (which can fail).
+  // Call Load() to complete initialization, which can fail.
   DwarfBinary(const std::string& name, const std::string& binary_name, const std::string& build_id);
+
   // For byte fixtures. The section buffers must outlive the binary and its readers.
   explicit DwarfBinary(DwarfSections sections);
+
   ~DwarfBinary();
 
-  fxl::WeakPtr<DwarfBinary> GetWeakPtr();
-
+  // Loads ELF and DWARF data from the file.
   Err Load(fxl::WeakPtr<DwarfSymbolFactory::Delegate> delegate,
            DwarfSymbolFactory::FileType file_type);
 
-  // Getters for basic binary information.
-  std::string GetName() const;
-  std::string GetBuildID() const;
+  // Returns the symbol file path.
+  const std::string& GetName() const;
+  const std::string& GetBuildID() const;
+
+  // Returns the symbol file's modification time.
   std::time_t GetModificationTime() const;
 
+  // Returns the factory created by Load().
   const DwarfSymbolFactory* GetSymbolFactory() const;
 
-  // Return whether this module has been given the opportunity to include symbols from the binary
-  // itself, such as PLT entries.
+  // Returns whether a program binary was supplied or the symbol file contains program bits.
+  // This permits loading symbols from the program itself, such as PLT entries.
   bool HasBinary() const;
 
-  // Returns views of this binary's DWARF sections. The views stay valid while this DwarfBinary
-  // exists. A view is empty when its section is absent.
+  // Returns views of this binary's DWARF sections. The views stay valid while
+  // this DwarfBinary exists. A view is empty when its section is absent.
   const DwarfSections& GetSections() const;
 
-  // Returns cached metadata for a unit of this binary. Call on its owning thread.
+  // Returns cached metadata for a unit of this binary.
   UnitContextResult GetUnitContext(UnitIndex index, UnitContextSource skeleton = {}) const;
 
-  // Use the native unit index only after checking that the DIE belongs to this binary.
+  // Returns cached metadata for the DIE's unit. A DIE from another binary yields an error.
   UnitContextResult GetUnitContext(const DwarfDie& die, UnitContextSource skeleton = {}) const {
     return die.belongs_to(*this) ? GetUnitContext(die.unit_index(), skeleton)
                                  : UnitContextResult(Err("Unknown DWARF unit."));
@@ -108,15 +112,19 @@ class DwarfBinary final {
   // Returns the extent of the mapped segments in memory.
   uint64_t GetMappedLength() const;
 
-  // Returns symbols from the ELF File.
+  // Returns symbols from the ELF file.
   const std::map<std::string, ElfTableSymbol>& GetELFSymbols() const;
-  const std::map<std::string, uint64_t> GetPLTSymbols() const;
 
-  // Allows access to compile units in this binary. There are two categories, the "normal" units in
-  // .debug_info and the DWO units in .debug_info.dwo. Normally there are only one or the other,
-  // but this isn't guaranteed.
+  // Returns PLT entries from the ELF file.
+  const std::map<std::string, uint64_t>& GetPLTSymbols() const;
+
+  // Normal units are in .debug_info and .debug_types. DWO units are in .debug_info.dwo and
+  // .debug_types.dwo. A binary usually contains only one kind, but can contain both.
   uint32_t GetNormalUnitCount() const;
   uint32_t GetDWOUnitCount() const;
+
+  // Returns the unit at the given index, with info units before types units
+  // within each section set.
   std::optional<DwarfUnit> GetUnitAtIndex(UnitIndex index);
 
   // Finds the normal unit covering a module-relative address, if any.
@@ -131,55 +139,37 @@ class DwarfBinary final {
   // table (of address-sized entries) rather than a byte index.
   std::optional<uint64_t> GetDebugAddrEntry(uint64_t addr_base, uint64_t index) const;
 
-  // Returns the main unit in a .dwo file. When using DWARF "debug fission" the main binary will
-  // have "skeleton units" that reference .dwo files containing the real unit information. These
-  // files will normally have exactly one unit in them. This getter returns that unit.
-  //
-  // It's theoretically possible for a .dwo file to have more than one unit. If that happens, it
-  // would be possible to disambiguate them by name. Currently this does not happen so this just
-  // returns the first DWO unit.
-  std::optional<DwarfUnit> GetDwoUnit();
-
-  // Looks up a DIE across units by its DIE reference. Both overloads can run on any thread.
-  DwarfDie GetDieAtOffset(DwarfDieRef die_ref) const;
-
-  // Restricts the lookup to normal or split DWARF sections.
+  // Any thread. Looks up the DIE in the selected normal or split section set.
   DwarfDie GetDieAtOffset(DwarfDieRef die_ref, bool is_dwo) const;
 
-  // Looks up a DIE reference by its 64-bit DWARF type signature (DW_FORM_ref_sig8 /
-  // DW_AT_signature). Can run on any thread.
-  DwarfDieRef GetDieRefForSignature(uint64_t signature) const;
+  // Any thread. Returns the root DIE of the unit containing the offset in the selected section
+  // set. The offset can identify the unit header or a DIE.
+  DwarfDie GetUnitDieForRef(DwarfDieRef die_ref, bool is_dwo) const;
 
-  // Looks up a type signature, preferring the source DIE's normal or split section set. Can run
-  // on any thread.
+  // Any thread. Looks up a type signature in the source DIE's section set. Searches the other
+  // set only if the source set has no matching signature.
   DwarfDie GetDieForSignature(uint64_t signature, bool is_dwo) const;
 
   // Returns the .debug_names reader, or nullptr if there are no readable contributions.
   const DebugNamesReader* GetDebugNames() const;
 
-  // Returns the resolved file name table of the line table of the given unit of this binary, or
-  // null if the unit has no line table. The table has the given file index if the line table has
-  // it. Usually this parses only the line table header. See LineTableCache.
-  std::shared_ptr<const LineFileTable> GetLineFileTable(UnitIndex unit, uint64_t file_index) const;
-
+  // Returns the line file table for the DIE's unit, or nullptr if the DIE
+  // belongs to another binary or the unit has no line table. Usually this parses only the header.
+  // The result includes file_index if it appears in the header or the program defines it.
   std::shared_ptr<const LineFileTable> GetLineFileTable(const DwarfDie& die,
                                                         uint64_t file_index) const {
     return die.belongs_to(*this) ? GetLineFileTable(die.unit_index(), file_index) : nullptr;
   }
 
-  // Returns the lowest address of a code section of the binary, or 0 if it has none. Line table
-  // sequences that start below it are for code that the linker removed. See
+  // Returns the lowest address of a code section of the binary, or 0 if it has none.
+  // Line table sequences that start below it are for code that the linker removed. See
   // IsStrippedSequenceStart().
   uint64_t GetFirstCodeAddress() const { return first_code_address_; }
 
-  // Releases cached DIE tables, line and file tables, function address maps, unit contexts,
-  // abbreviation tables, and type signature maps. Later requests rebuild them on demand.
-  // Call on the binary's owning thread. Existing DIE handles keep their snapshots. Borrowed
-  // line table references expire.
+  // Releases cached DIE tables, line and file tables, function address maps,
+  // unit contexts, abbreviation tables, and type signature maps. Later requests rebuild them on
+  // demand. Existing DIE handles keep their snapshots. Borrowed line table references expire.
   void ClearDwarfCaches();
-
-  // Finds the root DIE of the unit containing the reference in the selected section set.
-  DwarfDie GetUnitDieForRef(DwarfDieRef die_ref, bool is_dwo) const;
 
  private:
   friend class UnitContextCache;
@@ -190,6 +180,8 @@ class DwarfBinary final {
     const UnitHeader& header;
     UnitSection section;
   };
+
+  fxl::WeakPtr<DwarfBinary> GetWeakPtr();
 
   std::optional<IndexedUnit> GetUnitHeader(UnitIndex index) const;
   DwarfDieRef GetUnitRef(UnitIndex index, std::optional<uint64_t> offset = std::nullopt) const;
@@ -203,6 +195,7 @@ class DwarfBinary final {
   DwarfDie GetDieAtOffset(UnitIndex index, uint64_t die_offset) const;
   void ClearDieCache(UnitIndex index) const;
 
+  std::shared_ptr<const LineFileTable> GetLineFileTable(UnitIndex unit, uint64_t file_index) const;
   const LineTable& GetLineTable(UnitIndex index) const;
   LazySymbol FunctionForRelativeAddress(UnitIndex index, uint64_t relative_address) const;
 

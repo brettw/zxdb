@@ -306,15 +306,15 @@ TEST(Index, UnitDieLookup) {
   EXPECT_EQ(1u, unit->GetIndexForDie(child));
   DwarfDieRef ref = unit->GetDieRef(child.offset());
   EXPECT_EQ(child, unit->GetDieAtOffset(ref));
-  EXPECT_EQ(child, binary->GetDieAtOffset(ref));
+  EXPECT_EQ(child, binary->GetDieAtOffset(ref, false));
   EXPECT_FALSE(other->GetDieAtOffset(ref));
   EXPECT_EQ(std::nullopt, other->GetIndexForDie(child));
 
   EXPECT_EQ(std::nullopt, unit->GetIndexForDie({}));
   EXPECT_FALSE(unit->GetDieAtOffset({}));
-  EXPECT_FALSE(binary->GetDieAtOffset({}));
+  EXPECT_FALSE(binary->GetDieAtOffset({}, false));
   EXPECT_FALSE(unit->GetDieAtOffset(DwarfDieRef::Main(0)));  // Unit header.
-  EXPECT_FALSE(binary->GetDieAtOffset(DwarfDieRef::Main(0)));
+  EXPECT_FALSE(binary->GetDieAtOffset(DwarfDieRef::Main(0), false));
 }
 
 // Verifies that Index::CreateIndex evicts each compilation unit's decoded DIE table immediately

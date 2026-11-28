@@ -78,8 +78,8 @@ Public headers expose these symbol classes, factories, and evaluators:
   `kRootOnly` when you need only the root. A root-only handle keeps its
   original view after a full load. Later root lookups reuse a full table
   when it is cached. `GetDieAtIndex()` and `GetDieAtOffset()` return handles
-  in that unit. To find a DIE across units, pass its `DwarfDieRef` to
-  `DwarfBinary::GetDieAtOffset()`.
+  in that unit. To find a DIE across units, pass its `DwarfDieRef` and section
+  set to `DwarfBinary::GetDieAtOffset()`.
 - `DwarfUnit::GetDies()` walks one full DIE table snapshot in section
   order, including null entries. `DwarfDie::unit_dies()` walks the snapshot
   that a handle already owns. Each iterator reuses its entry handle as it
@@ -261,7 +261,8 @@ Using `zxdb/symbols` produces these disk, cache, and IPC side effects:
 - `DwarfUnit::GetLineTable()` uses the binary's cache of decoded line tables
   keyed by unit index. The returned reference is valid until
   `DwarfBinary::ClearDwarfCaches()` or destruction of the binary.
-  `DwarfBinary::GetLineFileTable()` usually parses only the line table header.
+  `DwarfBinary::GetLineFileTable()` takes a DIE from the unit and usually
+  parses only the line table header.
   Both share the file tables in the binary's `LineTableCache`.
 - `DwarfBinary::ClearDwarfCaches()` clears decoded line tables, file tables,
   function address maps, unit contexts, DIE tables, abbreviations, and type

@@ -259,16 +259,16 @@ TEST(DwarfDie, NameLookupPrecedence) {
   writer.EndUnit(unit);
 
   DwarfBinary binary(DwarfSections{.info = info, .abbrev = abbrev});
-  auto die = binary.GetDieAtOffset(DwarfDieRef::Main(target));
+  auto die = binary.GetDieAtOffset(DwarfDieRef::Main(target), false);
   ASSERT_TRUE(die);
   EXPECT_STREQ("spec", die.short_name());
   EXPECT_STREQ("concrete_linkage", die.linkage_name());
 
-  auto inherited = binary.GetDieAtOffset(DwarfDieRef::Main(no_direct_linkage));
+  auto inherited = binary.GetDieAtOffset(DwarfDieRef::Main(no_direct_linkage), false);
   ASSERT_TRUE(inherited);
   EXPECT_STREQ("legacy_spec", inherited.linkage_name());
 
-  auto converging = binary.GetDieAtOffset(DwarfDieRef::Main(converging_paths));
+  auto converging = binary.GetDieAtOffset(DwarfDieRef::Main(converging_paths), false);
   ASSERT_TRUE(converging);
   EXPECT_STREQ("origin", converging.short_name());
   EXPECT_STREQ("legacy_origin", converging.linkage_name());
@@ -336,17 +336,18 @@ TEST(DwarfDie, NameFromTypeSignature) {
   writer.EndUnit(type_unit);
 
   DwarfBinary binary(DwarfSections{.info = info, .abbrev = abbrev});
-  auto declaration = binary.GetDieAtOffset(DwarfDieRef::Main(declaration_offset));
+  auto declaration = binary.GetDieAtOffset(DwarfDieRef::Main(declaration_offset), false);
   ASSERT_TRUE(declaration);
   EXPECT_STREQ("SignatureType", declaration.short_name());
   EXPECT_STREQ("signature_linkage", declaration.linkage_name());
 
-  auto origin_and_signature = binary.GetDieAtOffset(DwarfDieRef::Main(origin_and_signature_offset));
+  auto origin_and_signature =
+      binary.GetDieAtOffset(DwarfDieRef::Main(origin_and_signature_offset), false);
   ASSERT_TRUE(origin_and_signature);
   EXPECT_STREQ("OriginType", origin_and_signature.short_name());
   EXPECT_STREQ("origin_linkage", origin_and_signature.linkage_name());
 
-  auto all_links = binary.GetDieAtOffset(DwarfDieRef::Main(all_links_offset));
+  auto all_links = binary.GetDieAtOffset(DwarfDieRef::Main(all_links_offset), false);
   ASSERT_TRUE(all_links);
   EXPECT_STREQ("SpecificationType", all_links.short_name());
   EXPECT_STREQ("specification_linkage", all_links.linkage_name());
@@ -379,13 +380,13 @@ TEST(DwarfDie, CacheEvictionPreservesSnapshots) {
   std::latch holding_table(1);
   std::latch evicted(1);
   std::thread reader([&] {
-    DwarfDie die = tree.binary().GetDieAtOffset(DwarfDieRef::Main(tree.function_offset));
+    DwarfDie die = tree.binary().GetDieAtOffset(DwarfDieRef::Main(tree.function_offset), false);
     holding_table.count_down();
     evicted.wait();
     ASSERT_TRUE(die);
     EXPECT_EQ(DwarfTag::kSubprogram, die.tag());
     EXPECT_EQ(root_ref, die.parent().ref());
-    EXPECT_EQ(die, tree.binary().GetDieAtOffset(die.ref()));
+    EXPECT_EQ(die, tree.binary().GetDieAtOffset(die.ref(), die.unit_is_dwo()));
   });
   holding_table.wait();
 
