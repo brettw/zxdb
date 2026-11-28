@@ -127,6 +127,10 @@ class DwarfBinary final {
   // within each section set.
   std::optional<DwarfUnit> GetUnitAtIndex(UnitIndex index);
 
+  // Finds the unique split compile unit for a skeleton. Without an ID, the DWO must have
+  // exactly one split compile unit.
+  ErrOr<UnitIndex> FindSplitCompileUnit(std::optional<uint64_t> dwo_id) const;
+
   // Finds the normal unit covering a module-relative address, if any.
   std::optional<DwarfUnit> UnitForRelativeAddress(uint64_t relative_address);
 

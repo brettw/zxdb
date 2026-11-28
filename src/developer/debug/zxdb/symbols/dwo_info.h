@@ -9,6 +9,7 @@
 
 #include "src/developer/debug/zxdb/common/err.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_symbol_factory.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/skeleton_unit.h"
 #include "src/lib/fxl/memory/weak_ptr.h"
 
@@ -31,6 +32,7 @@ class DwoInfo final : public DwarfSymbolFactory::Delegate {
   Err Load(const std::string& name, const std::string& binary_name);
 
   DwarfBinary* binary() { return binary_.get(); }
+  DwarfUnit GetCompileUnit() const;
   const SkeletonUnit& skeleton() const { return skeleton_; }
   const SymbolFactory* symbol_factory();
 
@@ -41,6 +43,7 @@ class DwoInfo final : public DwarfSymbolFactory::Delegate {
 
  private:
   std::unique_ptr<DwarfBinary> binary_;  // Guaranteed non-null after Load() succeeds.
+  UnitIndex compile_unit_index_;
   SkeletonUnit skeleton_;  // Refers to the skeleton in the main binary corresponding to this DWO.
   fxl::WeakPtr<ModuleSymbols> module_symbols_;
 

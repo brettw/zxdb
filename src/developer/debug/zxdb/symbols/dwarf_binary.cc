@@ -445,6 +445,37 @@ std::optional<DwarfUnit> DwarfBinary::GetUnitAtIndex(UnitIndex index) {
   return DwarfUnit(*this, index);
 }
 
+ErrOr<UnitIndex> DwarfBinary::FindSplitCompileUnit(std::optional<uint64_t> dwo_id) const {
+  std::optional<UnitIndex> match;
+  for (uint32_t i = 0; i < info_dwo_units_.size(); ++i) {
+    UnitIndex index(true, i);
+    const UnitHeader& header = info_dwo_units_[i];
+    auto id = header.dwo_id;
+    if (header.version == 4) {
+      // GNU split DWARF stores the unit tag and DWO ID in the root DIE.
+      auto root = GetDieAtIndex(index, 0, DwarfDie::Load::kRootOnly);
+      if (!root || root.tag() != DwarfTag::kCompileUnit)
+        continue;
+      auto context = GetUnitContext(index);
+      if (!context)
+        continue;
+      id = context.value()->dwo_id();
+    } else if (header.unit_type != kUnitTypeSplitCompile) {
+      continue;
+    }
+
+    // Preserve lookup for skeletons without an ID when there is only one candidate.
+    if (dwo_id && dwo_id != id)
+      continue;
+    if (match)
+      return Err("Multiple split compile units match the skeleton.");
+    match = index;
+  }
+  if (!match)
+    return Err("No split compile unit matches the skeleton.");
+  return *match;
+}
+
 std::optional<DwarfUnit> DwarfBinary::UnitForRelativeAddress(uint64_t relative_address) {
   if (!debug_aranges_) {
     debug_aranges_ = std::make_unique<DebugAranges>(*this);

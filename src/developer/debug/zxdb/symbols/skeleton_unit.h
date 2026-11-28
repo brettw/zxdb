@@ -5,6 +5,10 @@
 #ifndef SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_SKELETON_UNIT_H_
 #define SRC_DEVELOPER_DEBUG_ZXDB_SYMBOLS_SKELETON_UNIT_H_
 
+#include <cstdint>
+#include <optional>
+#include <string>
+
 namespace zxdb {
 
 // Holds the relevant info for the a DW_TAG_skeleton_unit for the index.
@@ -17,6 +21,7 @@ struct SkeletonUnit {
   // reconstruct the symbol if we need it (normally it's not needed).
   uint64_t skeleton_die_offset = 0;
 
+  std::optional<uint64_t> dwo_id;
   std::string dwo_name;
   std::string comp_dir;
 

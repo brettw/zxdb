@@ -21,14 +21,19 @@ DwoInfo::DwoInfo(SkeletonUnit skeleton, fxl::WeakPtr<ModuleSymbols> module_symbo
 DwoInfo::~DwoInfo() = default;
 
 Err DwoInfo::Load(const std::string& name, const std::string& binary_name) {
-  binary_ = std::make_unique<DwarfBinary>(name, binary_name, std::string());
-  if (Err err = binary_->Load(weak_factory_.GetWeakPtr(), DwarfSymbolFactory::kDWO);
-      err.has_error()) {
-    binary_.reset();
+  auto binary = std::make_unique<DwarfBinary>(name, binary_name, std::string());
+  if (Err err = binary->Load(weak_factory_.GetWeakPtr(), DwarfSymbolFactory::kDWO); err.has_error())
     return err;
-  }
+  // Like LLDB, reject a stale .dwo so address lookup uses the skeleton alone.
+  auto match = binary->FindSplitCompileUnit(skeleton_.dwo_id);
+  if (!match)
+    return match.err();
+  compile_unit_index_ = match.value();
+  binary_ = std::move(binary);
   return Err();
 }
+
+DwarfUnit DwoInfo::GetCompileUnit() const { return *binary_->GetUnitAtIndex(compile_unit_index_); }
 
 const SymbolFactory* DwoInfo::symbol_factory() { return binary_->GetSymbolFactory(); }
 

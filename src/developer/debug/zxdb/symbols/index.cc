@@ -767,8 +767,12 @@ void Index::IndexSkeletonCompileUnit(const DwarfUnit& unit, DwarfDie unit_die) {
   if ((!dwo_name && !gnu_dwo_name) || !addr_base)
     return;  // Need a name for the .dwo file to work, plus an address.
 
+  auto context = unit.GetBinary()->GetUnitContext(unit_die);
+  if (!context)
+    return;
   SkeletonUnit& skeleton = dwo_refs_.emplace_back();
   skeleton.skeleton_die_offset = unit_die.offset();
+  skeleton.dwo_id = context.value()->dwo_id();
   skeleton.dwo_name = dwo_name ? *dwo_name : *gnu_dwo_name;
 
   skeleton.comp_dir = comp_dir ? *comp_dir : "";

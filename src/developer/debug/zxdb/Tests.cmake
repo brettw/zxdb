@@ -446,22 +446,26 @@ foreach(name specification data_forms function_address)
 endforeach()
 add_custom_target(zxdb_assembly_fixtures DEPENDS ${assembly_fixture_outputs})
 add_dependencies(zxdb_tests zxdb_assembly_fixtures)
-# A .dwo file with a type unit that references the .debug_line.dwo table. Only the .dwo goes into the
-# fixture directory: the object file has relocations that the comparison test doesn't apply.
+# A linked skeleton and a .dwo with a type unit before its compile unit.
 set(line_table_split_dir "${PROJECT_BINARY_DIR}/test_data/zxdb/line_table_split")
+file(MAKE_DIRECTORY "${line_table_split_dir}")
 set(line_table_split_source
   "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/line_table/line_table_split.cc")
 add_custom_command(
-  OUTPUT "${line_table_fixture_dir}/clang_split.dwo"
-  COMMAND "${CMAKE_COMMAND}" -E make_directory "${line_table_split_dir}" "${line_table_fixture_dir}"
-  COMMAND "${CMAKE_CXX_COMPILER}" -c -g -gdwarf-5 -gsplit-dwarf -fdebug-types-section
-    "-fdebug-prefix-map=${PROJECT_SOURCE_DIR}=../.." -o "${line_table_split_dir}/clang_split.o"
-    "${line_table_split_source}"
-  COMMAND "${CMAKE_COMMAND}" -E copy "${line_table_split_dir}/clang_split.dwo"
-    "${line_table_fixture_dir}/clang_split.dwo"
+  OUTPUT "${line_table_fixture_dir}/clang_split.dwo" "${line_table_split_dir}/clang_split.so"
+    "${line_table_split_dir}/clang_split.dwo"
+  BYPRODUCTS "${line_table_split_dir}/clang_split.o"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${line_table_fixture_dir}"
+  COMMAND "${CMAKE_CXX_COMPILER}" -c -g -gdwarf-5 -gsplit-dwarf -fdebug-types-section -fPIC
+    -fdebug-compilation-dir=. "-fdebug-prefix-map=${PROJECT_SOURCE_DIR}=../.."
+    -o clang_split.o "${line_table_split_source}"
+  COMMAND "${CMAKE_CXX_COMPILER}" -shared -nostdlib -o clang_split.so clang_split.o
+  COMMAND "${CMAKE_COMMAND}" -E copy clang_split.dwo "${line_table_fixture_dir}/clang_split.dwo"
   DEPENDS "${line_table_split_source}"
+  WORKING_DIRECTORY "${line_table_split_dir}"
   VERBATIM)
-list(APPEND line_table_fixture_outputs "${line_table_fixture_dir}/clang_split.dwo")
+list(APPEND line_table_fixture_outputs "${line_table_fixture_dir}/clang_split.dwo"
+  "${line_table_split_dir}/clang_split.so")
 add_custom_target(zxdb_line_table_fixtures DEPENDS ${line_table_fixture_outputs})
 add_dependencies(zxdb_tests zxdb_line_table_fixtures)
 

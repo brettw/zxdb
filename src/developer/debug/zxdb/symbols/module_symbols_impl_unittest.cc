@@ -8,11 +8,15 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <filesystem>
+
 #include <gtest/gtest.h>
 
 #include "src/developer/debug/shared/string_util.h"
 #include "src/developer/debug/zxdb/symbols/compile_unit.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_binary.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_unit.h"
 #include "src/developer/debug/zxdb/symbols/elf_symbol.h"
 #include "src/developer/debug/zxdb/symbols/function.h"
 #include "src/developer/debug/zxdb/symbols/input_location.h"
@@ -22,6 +26,7 @@
 #include "src/developer/debug/zxdb/symbols/test_symbol_module.h"
 #include "src/developer/debug/zxdb/symbols/type.h"
 #include "src/developer/debug/zxdb/symbols/variable.h"
+#include "src/lib/files/scoped_temp_dir.h"
 
 namespace zxdb {
 
@@ -694,6 +699,41 @@ TEST(ModuleSymbols, IndexFission) {
   ASSERT_EQ(1u, result.size());
 
   EXPECT_EQ(symbol_context.RelativeToAbsolute(kFissionCallOtherRelativeAddr), result[0].address());
+}
+
+TEST(ModuleSymbols, SplitCompileUnitForAddress) {
+  const std::string dir = TestSymbolModule::GetTestDataDir() + "line_table_split/";
+  TestSymbolModule setup(dir + "clang_split.so", "");
+  ASSERT_TRUE(setup.Init(dir, true).ok());
+
+  // line_table_split.cc defines LineTableSplitSum(LineTableSplitPoint). Its ELF symbol gives
+  // the linked address, and the split compile unit after the type unit supplies the function DIE.
+  const auto& symbols = setup.symbols()->binary()->GetELFSymbols();
+  auto symbol = symbols.find("_Z17LineTableSplitSum19LineTableSplitPoint");
+  ASSERT_NE(symbol, symbols.end());
+  auto found = setup.symbols()->GetDwarfUnitForAddress(SymbolContext::ForRelativeAddresses(),
+                                                       symbol->second.value);
+  ASSERT_TRUE(found);
+  auto function = found.details_unit->FunctionForRelativeAddress(symbol->second.value);
+  ASSERT_TRUE(function.is_valid());
+  EXPECT_EQ("LineTableSplitSum", function.Get()->GetAssignedName());
+}
+
+TEST(ModuleSymbols, MismatchedDwoForAddress) {
+  const std::string dir = TestSymbolModule::GetTestDataDir();
+  files::ScopedTempDir temp;
+  // Supply a valid DWO from another compilation under the name in clang_split's skeleton.
+  ASSERT_TRUE(
+      std::filesystem::copy_file(dir + "fission/main.dwo", temp.path() + "/clang_split.dwo"));
+  TestSymbolModule setup(dir + "line_table_split/clang_split.so", "");
+  ASSERT_TRUE(setup.Init(temp.path(), true).ok());
+  const auto& symbols = setup.symbols()->binary()->GetELFSymbols();
+  auto symbol = symbols.find("_Z17LineTableSplitSum19LineTableSplitPoint");
+  ASSERT_NE(symbol, symbols.end());
+  auto found = setup.symbols()->GetDwarfUnitForAddress(SymbolContext::ForRelativeAddresses(),
+                                                       symbol->second.value);
+  ASSERT_TRUE(found);
+  EXPECT_EQ(DwarfTag::kSkeletonUnit, found.details_unit->GetUnitDie().tag());
 }
 
 // Tests that address-to-symbol lookup works for stuff in .dwo files.

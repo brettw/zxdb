@@ -215,6 +215,34 @@ TEST(DwarfBinary, SplitDwarfSections) {
   EXPECT_EQ(0u, type->GetDieRef().offset());
   EXPECT_EQ(DwarfTag::kTypeUnit, type->GetUnitDie().tag());
   EXPECT_FALSE(binary.GetSections().line_dwo.empty());
+
+  auto only_compile_unit = binary.FindSplitCompileUnit(std::nullopt);
+  ASSERT_TRUE(only_compile_unit);
+  EXPECT_EQ(UnitIndex(true, 1), only_compile_unit.value());
+}
+
+TEST(DwarfBinary, MatchesGnuSplitCompileUnitId) {
+  std::vector<uint8_t> abbrev, info;
+  DwarfSectionBuilder table(abbrev, Endian::kLittle);
+  const AbbrevTable::AttributeSpec attrs[] = {
+      {static_cast<uint64_t>(DwarfAttr::kGnuDwoId), static_cast<uint64_t>(DwarfForm::kData8)}};
+  table.AbbrevDeclaration(1, static_cast<uint64_t>(DwarfTag::kCompileUnit), false, attrs);
+  table.EndAbbrevTable();
+
+  // Only the second root has ID zero. The other two roots have the same GNU DWO ID.
+  DwarfSectionBuilder units(info, Endian::kLittle);
+  for (uint64_t id : {1, 0, 1}) {
+    auto unit = units.BeginUnit({.version = 4});
+    units.Uleb(1);
+    units.Fixed(id, 8);
+    units.EndUnit(unit);
+  }
+  DwarfBinary binary(DwarfSections{.info_dwo = info, .abbrev_dwo = abbrev});
+  auto match = binary.FindSplitCompileUnit(0);
+  ASSERT_TRUE(match);
+  EXPECT_EQ(UnitIndex(true, 1), match.value());
+  EXPECT_TRUE(binary.FindSplitCompileUnit(1).has_error());
+  EXPECT_TRUE(binary.FindSplitCompileUnit(std::nullopt).has_error());
 }
 
 TEST(DwarfBinary, DebugAddr) {

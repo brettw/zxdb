@@ -319,9 +319,7 @@ ModuleSymbols::FoundUnit ModuleSymbolsImpl::GetDwarfUnitForAddress(
     // Invalid DWO reference.
     return result;
   }
-  // Use the first split unit as the skeleton's companion.
-  result.details_unit =
-      dwos_[found_skeleton_index->second]->binary()->GetUnitAtIndex(UnitIndex(true, 0));
+  result.details_unit = dwos_[found_skeleton_index->second]->GetCompileUnit();
   return result;
 }
 

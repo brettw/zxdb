@@ -201,7 +201,12 @@ Callers and implementations must preserve these invariants:
   Each DIE table holds the abbreviations it needs through cache eviction.
 - Use `DwarfUnit`, unit contexts, line and file tables, and function address
   maps on the binary's owning thread. Each DWO index worker owns its binary
-  until it passes the binary to the module.
+  until it passes the binary to the module. The worker selects the split
+  compile unit by the skeleton's DWO ID. A skeleton without an ID can use
+  the sole split compile unit. If the match is missing or ambiguous,
+  `DwoInfo::Load()` fails and `ModuleIndexer` logs "Can't load DWO binary ...".
+  This rejects a stale `.dwo`, as LLDB does. The DWO is neither loaded nor
+  indexed, and address lookup uses the skeleton alone.
 - Raw DIE and signature lookups can run from other threads. They use immutable
   unit lists and package abbreviation bounds computed at load time. One lock
   protects DIE table builds, eviction, and the signature maps. A table build
