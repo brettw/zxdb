@@ -260,6 +260,26 @@ TEST(UnitContext, LegacySectionOffsets) {
   EXPECT_EQ(0x1234u, std::get<uint64_t>(context.value().ranges()->value));
 }
 
+TEST(UnitContext, GnuSkeletonNeedsNameAndId) {
+  UnitBytes unit;
+  unit.options.version = 4;
+  const auto id = Attr(DwarfAttr::kGnuDwoId, DwarfForm::kData8);
+  const auto name = Attr(DwarfAttr::kGnuDwoName, DwarfForm::kString);
+  unit.WriteUnit({id}, [](auto& die) { die.Fixed(0, 8); });
+  EXPECT_FALSE(unit.Parse().value().is_skeleton());
+  unit.WriteUnit({name}, [](auto& die) { die.CString("unit.dwo"); });
+  EXPECT_FALSE(unit.Parse().value().is_skeleton());
+
+  // Zero is a valid ID. Clang can put both attributes on both sides of the split.
+  unit.WriteUnit({name, id}, [](auto& die) {
+    die.CString("unit.dwo");
+    die.Fixed(0, 8);
+  });
+  EXPECT_TRUE(unit.Parse().value().is_skeleton());
+  unit.is_dwo = true;
+  EXPECT_FALSE(unit.Parse().value().is_skeleton());
+}
+
 TEST(UnitContext, Dwarf4SplitUnit) {
   UnitBytes skeleton;
   skeleton.options.version = 4;

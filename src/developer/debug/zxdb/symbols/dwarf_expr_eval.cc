@@ -564,9 +564,9 @@ DwarfExprEval::Completion DwarfExprEval::EvalOneOp() {
     case DwarfOp::kGnuParameterRef:
       return ReportError("Unimplemented DW_OP_GNU_parameter_ref opcode.");
     case DwarfOp::kGnuAddrIndex:
-      return ReportError("Unimplemented DW_OP_GNU_addr_index opcode.");
+      return OpAddrBase(ResultType::kPointer, "DW_OP_GNU_addr_index");
     case DwarfOp::kGnuConstIndex:
-      return ReportError("Unimplemented DW_OP_GNU_const_index opcode.");
+      return OpAddrBase(ResultType::kValue, "DW_OP_GNU_const_index");
     case DwarfOp::kGnuVariableValue:
       return ReportError("Unimplemented DW_OP_GNU_variable_value opcode.");
 

@@ -13,6 +13,7 @@
 #include "src/developer/debug/zxdb/symbols/dwarf/data_reader.h"
 #include "src/developer/debug/zxdb/symbols/dwarf/dwarf_sections.h"
 #include "src/developer/debug/zxdb/symbols/dwarf_attr.h"
+#include "src/developer/debug/zxdb/symbols/dwarf_tag.h"
 
 namespace zxdb {
 
@@ -143,7 +144,7 @@ ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitH
       DwarfAttr::kRnglistsBase,   DwarfAttr::kGnuRangesBase, DwarfAttr::kLoclistsBase,
       DwarfAttr::kCompDir,        DwarfAttr::kLowPc,         DwarfAttr::kEntryPc,
       DwarfAttr::kRanges,         DwarfAttr::kStmtList,      DwarfAttr::kHighPc,
-      DwarfAttr::kGnuDwoId,
+      DwarfAttr::kGnuDwoId,       DwarfAttr::kGnuDwoName,    DwarfAttr::kDwoName,
   };
   std::array<std::optional<FormValue>, kAttributes.size()> values;
   auto find = [&](DwarfAttr attr) -> std::optional<FormValue>& {
@@ -226,8 +227,22 @@ ErrOr<UnitContext> UnitContext::Parse(const DwarfSections& sections, const UnitH
                                              result.str_offsets_base_);
   if (result.string_offsets_)
     result.str_offsets_base_ = result.string_offsets_->base;
-  if (const auto& dir = find(DwarfAttr::kCompDir))
-    result.compilation_dir_ = result.ResolveString(*dir);
+  auto string = [&](DwarfAttr attr) {
+    const auto& value = find(attr);
+    return value ? result.ResolveString(*value) : std::nullopt;
+  };
+  result.compilation_dir_ = string(DwarfAttr::kCompDir);
+  // Clang also writes the GNU name and ID on the companion compile unit in .debug_info.dwo.
+  if (!options.is_dwo) {
+    result.dwo_name_ = string(DwarfAttr::kGnuDwoName);
+    if (!result.dwo_name_)
+      result.dwo_name_ = string(DwarfAttr::kDwoName);
+    result.is_skeleton_ = header.unit_type == kUnitTypeSkeleton ||
+                          declaration->tag == static_cast<uint64_t>(DwarfTag::kSkeletonUnit) ||
+                          (header.unit_type == kUnitTypeCompile &&
+                           declaration->tag == static_cast<uint64_t>(DwarfTag::kCompileUnit) &&
+                           result.dwo_id_ && result.dwo_name_);
+  }
   if (const auto& low_pc = find(DwarfAttr::kLowPc))
     result.low_pc_ = result.ResolveAddress(*low_pc);
   result.high_pc_ = find(DwarfAttr::kHighPc);

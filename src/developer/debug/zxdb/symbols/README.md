@@ -87,6 +87,10 @@ Public headers expose these symbol classes, factories, and evaluators:
   or through cache eviction.
 - `DwarfUnit::FunctionForRelativeAddress()` uses the unit's
   `FunctionAddressMap` to find a function or inline instance.
+- For split DWARF, the index records the companion file from the skeleton.
+  It indexes the skeleton's line table and the companion's symbol DIEs.
+  Address and source line lookups use the companion's function map when
+  the companion is available.
 - The index scans each unit in table order. It uses parent indices to track
   scope and stores `DwarfDieRef` values so it can release the table after
   indexing.

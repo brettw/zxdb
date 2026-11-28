@@ -734,8 +734,16 @@ void Index::IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, bool forc
   if (!unit_die.is_valid())
     return;
 
-  if (unit_die.tag() == DwarfTag::kSkeletonUnit) {
-    IndexSkeletonCompileUnit(unit, unit_die);
+  auto context = unit.GetBinary()->GetUnitContext(unit_die);
+  if (context && context.value()->is_skeleton()) {
+    // The companion supplies the symbols, even when the skeleton has children.
+    const auto& skeleton = *context.value();
+    if (auto name = skeleton.dwo_name()) {
+      dwo_refs_.push_back({.skeleton_die_offset = unit_die.offset(),
+                           .dwo_id = skeleton.dwo_id(),
+                           .dwo_name = std::string(*name),
+                           .comp_dir = std::string(skeleton.compilation_dir().value_or(""))});
+    }
   } else {
     // Normal compilation unit.
     UnitIndexer indexer(unit, dwo_index);
@@ -748,38 +756,6 @@ void Index::IndexCompileUnit(const DwarfUnit& unit, int32_t dwo_index, bool forc
   // Evict the unit's DIE table immediately after indexing so transient parse structures do not
   // accumulate across all compilation units during indexing.
   unit.ClearDieCache();
-}
-
-// Skeleton units are units in the main binary that reference a .dwo file containing the symbols
-// for just that compilation unit. The skeleton unit has the addr_base which defines how addresses
-// are relocated from the link-independent .dwo file, as well as the line table.
-void Index::IndexSkeletonCompileUnit(const DwarfUnit& unit, DwarfDie unit_die) {
-  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kDwoName, DwarfAttr::kGnuDwoName,
-                                         DwarfAttr::kCompDir, DwarfAttr::kAddrBase};
-  DwarfDieDecoder unit_decoder(*unit.GetBinary(), kAttrs);
-  if (!unit_decoder.Decode(unit_die))
-    return;
-
-  std::optional<const char*> dwo_name = unit_decoder.GetCString(DwarfAttr::kDwoName);
-  std::optional<const char*> gnu_dwo_name = unit_decoder.GetCString(DwarfAttr::kGnuDwoName);
-  std::optional<const char*> comp_dir = unit_decoder.GetCString(DwarfAttr::kCompDir);
-  std::optional<uint64_t> addr_base = unit_decoder.GetSectionOffset(DwarfAttr::kAddrBase);
-  if ((!dwo_name && !gnu_dwo_name) || !addr_base)
-    return;  // Need a name for the .dwo file to work, plus an address.
-
-  auto context = unit.GetBinary()->GetUnitContext(unit_die);
-  if (!context)
-    return;
-  SkeletonUnit& skeleton = dwo_refs_.emplace_back();
-  skeleton.skeleton_die_offset = unit_die.offset();
-  skeleton.dwo_id = context.value()->dwo_id();
-  skeleton.dwo_name = dwo_name ? *dwo_name : *gnu_dwo_name;
-
-  skeleton.comp_dir = comp_dir ? *comp_dir : "";
-  skeleton.addr_base = *addr_base;
-
-  // The line table of a skeleton unit is in the main binary. CreateIndex() indexes it with the
-  // other units.
 }
 
 void Index::IndexFileNames() {

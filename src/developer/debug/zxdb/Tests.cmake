@@ -466,6 +466,33 @@ add_custom_command(
   VERBATIM)
 list(APPEND line_table_fixture_outputs "${line_table_fixture_dir}/clang_split.dwo"
   "${line_table_split_dir}/clang_split.so")
+
+# GNU Debug Fission. Clang's basic block sections give the split function a DW_AT_ranges list.
+function(zxdb_add_gnu_split_fixture name compiler)
+  set(source_dir "${CMAKE_CURRENT_SOURCE_DIR}/symbols/test_data/line_table")
+  set(flags -c -gdwarf-4 -gsplit-dwarf -ffunction-sections -fPIC
+    "-fdebug-prefix-map=${line_table_split_dir}=.")
+  set(outputs "${line_table_split_dir}/${name}.so" "${line_table_split_dir}/${name}.dwo"
+    "${line_table_split_dir}/${name}_first.dwo")
+  # Link another unit first so the tested unit has nonzero GNU address and range bases.
+  add_custom_command(
+    OUTPUT ${outputs}
+    BYPRODUCTS "${line_table_split_dir}/${name}.o" "${line_table_split_dir}/${name}_first.o"
+    COMMAND "${compiler}" ${flags} ${ARGN} -O1 "-I${PROJECT_SOURCE_DIR}"
+      -o "${name}_first.o" "${source_dir}/line_table_fixture.cc"
+    COMMAND "${compiler}" ${flags} ${ARGN} -o "${name}.o" "${source_dir}/gnu_split.cc"
+    COMMAND "${compiler}" -shared -nostdlib -o "${name}.so" "${name}_first.o" "${name}.o"
+    DEPENDS "${source_dir}/gnu_split.cc" "${source_dir}/line_table_fixture.cc"
+      "${source_dir}/line_table_fixture.h"
+    WORKING_DIRECTORY "${line_table_split_dir}"
+    VERBATIM)
+  set(line_table_fixture_outputs ${line_table_fixture_outputs} ${outputs} PARENT_SCOPE)
+endfunction()
+zxdb_add_gnu_split_fixture(clang_split4 "${CMAKE_CXX_COMPILER}" -fbasic-block-sections=all
+  -fsplit-dwarf-inlining)
+if(ZXDB_GXX)
+  zxdb_add_gnu_split_fixture(gcc_split4 "${ZXDB_GXX}")
+endif()
 add_custom_target(zxdb_line_table_fixtures DEPENDS ${line_table_fixture_outputs})
 add_dependencies(zxdb_tests zxdb_line_table_fixtures)
 

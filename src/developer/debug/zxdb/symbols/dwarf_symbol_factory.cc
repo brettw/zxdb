@@ -703,15 +703,15 @@ fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeCollection(const DwarfDie& die) co
 }
 
 fxl::RefPtr<Symbol> DwarfSymbolFactory::DecodeCompileUnit(const DwarfDie& die, DwarfTag tag) const {
-  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName, DwarfAttr::kLanguage,
-                                         DwarfAttr::kAddrBase};
+  static constexpr DwarfAttr kAttrs[] = {DwarfAttr::kName, DwarfAttr::kLanguage};
   DwarfDieDecoder decoder = MakeDecoder(kAttrs);
   if (!decoder.Decode(die))
     return fxl::MakeRefCounted<Symbol>();
 
   std::optional<const char*> name = decoder.GetCString(DwarfAttr::kName);
   std::optional<uint64_t> language = decoder.GetUnsignedConstant(DwarfAttr::kLanguage);
-  std::optional<uint64_t> addr_base = decoder.GetSectionOffset(DwarfAttr::kAddrBase);
+  auto context = binary_->GetUnitContext(die, GetSkeletonUnit());
+  auto addr_base = context ? context.value()->addr_base() : std::nullopt;
 
   std::string name_str;
   if (name)

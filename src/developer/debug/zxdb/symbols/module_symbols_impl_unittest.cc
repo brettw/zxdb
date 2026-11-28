@@ -386,10 +386,8 @@ TEST(ModuleSymbols, ResolveGlobalVariable) {
   ASSERT_TRUE(var_type);
   EXPECT_EQ("int", var_type->GetFullName());
 
-  // This variable doesn't have an address because in the current checked-in file, it's expressed as
-  // a DWARF expression that the SymbolModule doesn't evaluate. In a normal expression, the
-  // symbol match will trigger the necessary logic in the expression evaluation system. This
-  // expression might change and that's OK.
+  // readelf -wi -wA shows DW_OP_addrx at index 0 for kGlobal and index 1 for kClassStatic.
+  // Both entries in this unit's address table are zero.
   EXPECT_EQ(0u, addrs[0].address());
 
   // Look up the class static.
@@ -405,7 +403,6 @@ TEST(ModuleSymbols, ResolveGlobalVariable) {
   ASSERT_TRUE(var_type);
   EXPECT_EQ("int", var_type->GetFullName());
 
-  // As above, there's no address for the current symbol file.
   EXPECT_EQ(0u, addrs[0].address());
 
   // Annotate the global variable as a register. This lookup should fail since registers can't be
@@ -417,6 +414,27 @@ TEST(ModuleSymbols, ResolveGlobalVariable) {
   addrs =
       setup.symbols()->ResolveInputLocation(symbol_context, InputLocation(register_name), options);
   ASSERT_TRUE(addrs.empty());
+}
+
+TEST(ModuleSymbols, ResolveGlobalVariableExprloc) {
+  TestSymbolModule setup(TestSymbolModule::kBuilt);
+  ASSERT_TRUE(setup.Init().ok());
+
+  // kGlobal has a DW_OP_addrx exprloc. Read its linked address from the same symbol table
+  // shown by readelf -sW because the fixture is rebuilt with the host toolchain.
+  const auto& symbols = setup.symbols()->binary()->GetELFSymbols();
+  auto global = symbols.find("_ZN5my_ns7kGlobalE");
+  ASSERT_NE(symbols.end(), global);
+  ASSERT_NE(0u, global->second.value);
+
+  auto locations = setup.symbols()->ResolveInputLocation(
+      SymbolContext::ForRelativeAddresses(),
+      InputLocation(TestSymbolModule::SplitName(TestSymbolModule::kGlobalName)));
+  ASSERT_EQ(1u, locations.size());
+  const auto* variable = locations[0].symbol().Get()->As<Variable>();
+  ASSERT_TRUE(variable);
+  EXPECT_TRUE(variable->location().default_expr());
+  EXPECT_EQ(global->second.value, locations[0].address());
 }
 
 TEST(ModuleSymbols, ResolvePLTEntry) {
@@ -719,6 +737,77 @@ TEST(ModuleSymbols, SplitCompileUnitForAddress) {
   EXPECT_EQ("LineTableSplitSum", function.Get()->GetAssignedName());
 }
 
+namespace {
+
+class GnuSplitDwarf : public testing::TestWithParam<std::string> {};
+
+TEST_P(GnuSplitDwarf, ResolveFunctionAndVariable) {
+  const std::string dir = TestSymbolModule::GetTestDataDir() + "line_table_split/";
+  const std::string path = dir + GetParam() + ".so";
+  if (GetParam() == "gcc_split4" && !std::filesystem::exists(path))
+    GTEST_SKIP() << "The GCC fixture is unavailable.";
+  TestSymbolModule setup(path, "");
+  ASSERT_TRUE(setup.Init(dir, true).ok());
+  auto& module = *setup.symbols();
+  const auto& refs = module.GetIndex().dwo_refs();
+  ASSERT_EQ(2u, refs.size());
+  EXPECT_EQ(GetParam() + ".dwo", refs[1].dwo_name);
+  EXPECT_TRUE(refs[1].dwo_id.has_value());
+
+  // With -fsplit-dwarf-inlining Clang also emits LineTableFixtureEntry in the first skeleton.
+  // Only the companion's definition belongs in the index.
+  auto definitions = module.GetIndex().FindExact(Identifier("LineTableFixtureEntry"));
+  ASSERT_EQ(1u, definitions.size());
+  EXPECT_FALSE(definitions[0].is_main_binary());
+
+  // readelf -sW gives the linked addresses. readelf -wi -wL shows split_function starts on
+  // line 7 of gnu_split.cc and split_value's location uses DW_OP_GNU_addr_index.
+  const auto& elf = module.binary()->GetELFSymbols();
+  const auto entry = elf.find("split_function");
+  ASSERT_NE(elf.end(), entry);
+  SymbolContext context(0x100000);
+  const uint64_t address = context.RelativeToAbsolute(entry->second.value);
+  auto found = module.GetDwarfUnitForAddress(context, address);
+  ASSERT_TRUE(found);
+  ASSERT_TRUE(found.details_unit->GetUnitIndex().is_dwo);
+  auto function = found.details_unit->FunctionForRelativeAddress(entry->second.value);
+  ASSERT_TRUE(function);
+  auto fn = function.Get()->As<Function>();
+  ASSERT_TRUE(fn);
+  EXPECT_EQ("split_function", fn->GetAssignedName());
+  ASSERT_EQ(1u, fn->parameters().size());
+  auto param = fn->parameters()[0].Get()->As<Variable>();
+  ASSERT_TRUE(param);
+  EXPECT_EQ("x", param->GetAssignedName());
+  EXPECT_TRUE(param->location().default_expr());
+
+  Identifier name("split_function");
+  auto indexed = module.GetIndex().FindExact(name);
+  ASSERT_EQ(1u, indexed.size());
+  EXPECT_FALSE(indexed[0].is_main_binary());
+  auto named = module.ResolveInputLocation(context, InputLocation(name));
+  ASSERT_EQ(1u, named.size());
+  EXPECT_EQ(address, named[0].address());
+  EXPECT_TRUE(named[0].symbol().Get()->As<Function>());
+  EXPECT_EQ(7, named[0].file_line().line());
+
+  auto line = module.ResolveInputLocation(context, InputLocation(FileLine("gnu_split.cc", 7)));
+  ASSERT_EQ(1u, line.size());
+  EXPECT_EQ(address, line[0].address());
+
+  auto variable = module.ResolveInputLocation(context, InputLocation(Identifier("split_value")));
+  ASSERT_EQ(1u, variable.size());
+  auto value = elf.find("split_value");
+  ASSERT_NE(elf.end(), value);
+  EXPECT_EQ(context.RelativeToAbsolute(value->second.value), variable[0].address());
+  EXPECT_TRUE(variable[0].symbol().Get()->As<Variable>());
+}
+
+INSTANTIATE_TEST_SUITE_P(ModuleSymbols, GnuSplitDwarf,
+                         testing::Values("clang_split4", "gcc_split4"));
+
+}  // namespace
+
 TEST(ModuleSymbols, MismatchedDwoForAddress) {
   const std::string dir = TestSymbolModule::GetTestDataDir();
   files::ScopedTempDir temp;
@@ -763,6 +852,11 @@ TEST(ModuleSymbols, FissionAddress) {
   // a function here, that means it matched the ELF symbol which bypasses all of the debug fission
   // stuff. That means the Fission address lookup failed.
   ASSERT_TRUE(symbol->As<Function>());
+
+  auto line =
+      setup.symbols()->ResolveInputLocation(symbol_context, InputLocation(FileLine("other.cc", 9)));
+  ASSERT_EQ(1u, line.size());
+  EXPECT_TRUE(line[0].symbol().Get()->As<Function>());
 }
 
 }  // namespace zxdb

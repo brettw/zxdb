@@ -103,6 +103,9 @@ class ModuleSymbolsImpl final : public ModuleSymbols, public DwarfSymbolFactory:
                              FunctionNameParser function_name_parser);
   ~ModuleSymbolsImpl() override;
 
+  // Returns the loaded split compile unit, or the main unit if no companion is available.
+  DwarfUnit GetDetailsUnit(const DwarfUnit& unit) const;
+
   // Helpers for ResolveInputLocation() for the different types of inputs.
   std::vector<Location> ResolveLineInputLocation(const SymbolContext& symbol_context,
                                                  const InputLocation& input_location,

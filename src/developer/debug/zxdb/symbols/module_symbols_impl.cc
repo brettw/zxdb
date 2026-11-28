@@ -288,39 +288,27 @@ ModuleSymbols::FoundUnit ModuleSymbolsImpl::GetDwarfUnitForAddress(
   result.main_binary_unit =
       binary_->UnitForRelativeAddress(symbol_context.AbsoluteToRelative(absolute_address));
 
-  // Default to assuming the units are the same (simplifying the early returns later). This will be
-  // overwritten if a different details unit is found.
-  result.details_unit = result.main_binary_unit;
-
-  // The dwos_.empty() check is an optimization to avoid checking the skeleton units when we know
-  // there are none.
-  if (!result.main_binary_unit || dwos_.empty()) {
-    return result;
-  }
-
-  // In the case of debug fission, we want to return the full unit in the .dwo file. This needs to
-  // be looked up if the unit that was matched was a skeleton.
-  DwarfDie die = result.main_binary_unit->GetUnitDie();
-  if (!die || die.tag() != DwarfTag::kSkeletonUnit) {
-    // Not a skeleton unit.
-    return result;
-  }
-
-  // Look up the DWO for this skeleton.
-  uint64_t skeleton_offset = die.offset();
-  auto found_skeleton_index = dwo_skeleton_offset_to_index_.find(skeleton_offset);
-  if (found_skeleton_index == dwo_skeleton_offset_to_index_.end()) {
-    // Some invalid DWO reference, give up and return the skeleton one.
-    return result;
-  }
-
-  FX_CHECK(found_skeleton_index->second < dwos_.size());
-  if (!dwos_[found_skeleton_index->second]) {
-    // Invalid DWO reference.
-    return result;
-  }
-  result.details_unit = dwos_[found_skeleton_index->second]->GetCompileUnit();
+  if (result.main_binary_unit)
+    result.details_unit = GetDetailsUnit(*result.main_binary_unit);
   return result;
+}
+
+DwarfUnit ModuleSymbolsImpl::GetDetailsUnit(const DwarfUnit& unit) const {
+  if (dwos_.empty())
+    return unit;
+  auto context = binary_->GetUnitContext(unit.GetUnitIndex());
+  if (!context || !context.value()->is_skeleton())
+    return unit;
+
+  auto root = unit.GetUnitDie(DwarfDie::Load::kRootOnly);
+  if (!root)
+    return unit;
+  auto found = dwo_skeleton_offset_to_index_.find(root.offset());
+  if (found == dwo_skeleton_offset_to_index_.end())
+    return unit;
+  FX_CHECK(found->second < dwos_.size());
+  const auto& dwo = dwos_[found->second];
+  return dwo ? dwo->GetCompileUnit() : unit;
 }
 
 LineDetails ModuleSymbolsImpl::LineDetailsForAddress(const SymbolContext& symbol_context,
@@ -838,14 +826,17 @@ Location ModuleSymbolsImpl::LocationForVariable(const SymbolContext& symbol_cont
   // a constant instead of an address. In these cases give up and return an "unlocated variable."
   // These can easily be evaluated by the expression system so we can still print their values.
 
-  // Need one unique location.
-  if (variable->location().locations().size() != 1)
+  // A standalone DW_AT_location expression is stored as the default location.
+  const auto& location = variable->location();
+  const DwarfExpr* expr = location.default_expr();
+  if (location.locations().size() == 1)
+    expr = &location.locations().front().expression;
+  if (!expr || location.locations().size() > 1)
     return Location(symbol_context, std::move(variable));
 
   auto global_data_provider = fxl::MakeRefCounted<GlobalSymbolDataProvider>();
   DwarfExprEval eval(UnitSymbolFactory(variable.get()), global_data_provider, symbol_context);
-  eval.Eval(variable->location().locations()[0].expression,
-            [](DwarfExprEval* eval, const Err& err) {});
+  eval.Eval(*expr, [](DwarfExprEval* eval, const Err& err) {});
 
   // Only evaluate synchronous outputs that result in a pointer.
   if (!eval.is_complete() || !eval.is_success() ||
@@ -965,8 +956,8 @@ void ModuleSymbolsImpl::ResolveLineInputLocationForFile(const SymbolContext& sym
     // Complication 1 above: find all matches for this line in the unit.
     std::vector<LineMatch> unit_matches = GetAllLineTableMatchesInUnit(
         line_table,
-        [&unit](uint64_t relative_address) {
-          return unit->FunctionForRelativeAddress(relative_address);
+        [details = GetDetailsUnit(*unit)](uint64_t relative_address) {
+          return details.FunctionForRelativeAddress(relative_address);
         },
         canonical_file, line_number);
     matches.insert(matches.end(), unit_matches.begin(), unit_matches.end());

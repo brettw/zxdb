@@ -134,6 +134,9 @@ directly from in-memory fixtures.
   unit header supplies the DWO ID. It resolves indexed forms after it reads
   the bases.
   Errors in section lookups affect only the values that use those sections.
+- In the main file, a DWARF 5 skeleton tag or unit type identifies a
+  skeleton. A GNU compile unit needs a DWO ID and a readable DWO name.
+  A split compile unit in `.debug_info.dwo` can have both attributes.
 - A split unit uses its skeleton's address table and base address. For
   DWARF 4 split units, the skeleton can supply GNU address and range bases.
   The GNU range base applies only to the split unit. A DWARF 4 split unit

@@ -59,6 +59,8 @@ class UnitContext {
     return Parse(sections, header, section, Options{});
   }
 
+  bool is_skeleton() const { return is_skeleton_; }
+  std::optional<std::string_view> dwo_name() const { return dwo_name_; }
   std::optional<uint64_t> dwo_id() const { return dwo_id_; }
   std::optional<uint64_t> str_offsets_base() const { return str_offsets_base_; }
   std::optional<uint64_t> addr_base() const { return addr_base_; }
@@ -100,11 +102,13 @@ class UnitContext {
   std::span<const uint8_t> rnglists_;
   uint64_t rnglists_section_offset_ = 0;
   bool is_dwo_ = false;
+  bool is_skeleton_ = false;
   FormParams params_;
   Endian endian_;
   uint8_t addr_entry_size_;
   Endian addr_endian_;
 
+  std::optional<std::string_view> dwo_name_;
   std::optional<uint64_t> dwo_id_;
   std::optional<uint64_t> str_offsets_base_;
   std::optional<uint64_t> addr_base_;

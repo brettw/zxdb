@@ -24,10 +24,6 @@ class CompileUnit final : public Symbol {
   // is also null in many unit testing situations where mock symbols are created.
   const fxl::WeakPtr<ModuleSymbols>& module() const { return module_; }
 
-  // Skeleton units refer a .dwo file containing the debug symbols. But they have the same basic
-  // attributes as a regular compilation unit.
-  bool is_skeleton() const { return tag() == DwarfTag::kSkeletonUnit; }
-
   // Returns null for synthetic symbols.
   const DwarfUnit* dwarf_unit() const { return dwarf_unit_ ? &*dwarf_unit_ : nullptr; }
 
@@ -36,9 +32,9 @@ class CompileUnit final : public Symbol {
   // The file name that generated this unit.
   const std::string& name() const { return name_; }
 
-  // Returns the DW_AT_addr_base attribute on the unit, if given. This attribute points to the
-  // beginning of the compilation unit's contribution to the .debug_addr section of the module. It
-  // is used for evaluating some DWARF expressions.
+  // Returns the effective address table base, including one supplied by a skeleton. It points to
+  // the beginning of the compilation unit's contribution to the .debug_addr section of the module.
+  // It is used for evaluating some DWARF expressions.
   const std::optional<uint64_t>& addr_base() const { return addr_base_; }
 
   // Compilation units have a lot of other stuff which we currently have no need for. These can be

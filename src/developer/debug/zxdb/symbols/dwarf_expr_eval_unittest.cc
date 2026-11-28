@@ -403,6 +403,11 @@ TEST_F(DwarfExprEvalTest, AddrxAndConstx) {
              DwarfExprEval::ResultType::kValue,
              "DW_OP_constx(8, with addr_base=0xc) -> 0x12345678");
 
+  DwarfExpr gnu_const({DwarfOp::kGnuConstIndex, kOffset}, UncachedLazySymbol::MakeUnsafe(var));
+  DoEvalTest(gnu_const, true, DwarfExprEval::Completion::kSync, DwarfStackEntry(kAddr),
+             DwarfExprEval::ResultType::kValue,
+             "DW_OP_GNU_const_index(8, with addr_base=0xc) -> 0x12345678");
+
   // Same test with an invalid address offset.
   DwarfExpr invalid_expr({DwarfOp::kConstx, 16}, UncachedLazySymbol::MakeUnsafe(var));
   DoEvalTest(invalid_expr, false, DwarfExprEval::Completion::kSync, DwarfStackEntry(0),
